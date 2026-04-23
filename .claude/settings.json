@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m json.tool)",
+      "Bash(psql --version)",
+      "Bash(pg_isready)",
+      "Bash(where psql *)",
+      "Read(//c/Program Files/PostgreSQL//**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash('/c/Program Files/PostgreSQL/18/bin/pg_isready' -U postgres)",
+      "Bash('/c/Program Files/PostgreSQL/18/bin/psql' -U postgres -c 'CREATE DATABASE inventory_app;')",
+      "Bash('/c/Program Files/PostgreSQL/18/bin/psql' -U postgres -d inventory_app -c ' *)",
+      "Bash(taskkill //PID 23524 //F)",
+      "Bash(curl -s http://localhost:5000/api/warehouses)",
+      "Bash(curl -s \"http://localhost:5000/api/inventory\")",
+      "Bash(taskkill //PID 14156 //F)",
+      "Bash(curl -s http://localhost:5000/api/accounts)",
+      "Bash(curl -s -X POST http://localhost:5000/api/accounts -H \"Content-Type: application/json\" -d '{\"name\":\"Kas Besar\"}')",
+      "Bash(awk '{print $5}')",
+      "Bash(taskkill //PID 11448 //F)",
+      "Bash(python -c \"import sys,json; [print\\(r['item_name'], r['quantity'], r['unit_name'], 'Rp', r['value']\\) for r in json.load\\(sys.stdin\\)]\")",
+      "Bash('/c/Program Files/PostgreSQL/18/bin/psql' -U postgres -d inventory_app -c '\\\\d inventory')",
+      "Bash('/c/Program Files/PostgreSQL/18/bin/psql' -U postgres -d inventory_app -c '\\\\d invoice_items')",
+      "Bash(taskkill //PID 16424 //F)",
+      "Bash(curl -s http://localhost:5000/api/vendors)",
+      "Bash(python -c \"import sys,json; [print\\(r['item_name'], r['vendor_name'], r['date'][:10]\\) for r in json.load\\(sys.stdin\\)]\")",
+      "Bash(taskkill //PID 7892 //F)",
+      "Bash(curl -s http://localhost:5000/api/inventory)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('inventory ok, rows:', len\\(d\\)\\); print\\(list\\(d[0].keys\\(\\)\\) if d else '\\(empty\\)'\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('history rows:', len\\(d\\)\\)\")",
+      "Bash(python -c \"import sys,json; [print\\(r['type'], r['quantity_change'], r['unit_name'], r['vendor'], r['reference']\\) for r in json.load\\(sys.stdin\\)]\")",
+      "Bash(taskkill //PID 23592 //F)",
+      "Bash(taskkill //PID 19480 //F)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}
