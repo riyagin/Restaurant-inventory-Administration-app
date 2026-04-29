@@ -94,7 +94,7 @@ export default function InventoryValueReport() {
   return (
     <>
       <div className="page-header">
-        <h1>Inventory Value Report</h1>
+        <h1>Laporan Nilai Inventaris</h1>
         {groups.length > 0 && (
           <button onClick={downloadExcel} className="btn btn-secondary">⬇ Download Excel</button>
         )}
@@ -103,15 +103,15 @@ export default function InventoryValueReport() {
       {groups.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Inventory Value</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Nilai Inventaris</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#4f8ef7' }}>{idr(grandValue)}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Items</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Barang</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{grandItems}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Warehouses</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Gudang</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{groups.length}</div>
           </div>
         </div>
@@ -119,16 +119,16 @@ export default function InventoryValueReport() {
 
       <div className="card">
         <div className="card-header">
-          <h2>{loading ? 'Loading…' : `${groups.length} warehouse${groups.length !== 1 ? 's' : ''}`}</h2>
+          <h2>{loading ? 'Memuat…' : `${groups.length} gudang`}</h2>
           <div className="filters">
             <select value={filters.warehouse_id} onChange={e => setFilters(f => ({ ...f, warehouse_id: e.target.value }))}>
-              <option value="all">All Warehouses</option>
+              <option value="all">Semua Gudang</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
-            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="From date" />
-            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="To date" />
+            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="Dari tanggal" />
+            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="Sampai tanggal" />
             {(filters.date_from || filters.date_to) && (
-              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Clear dates</button>
+              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
           </div>
         </div>
@@ -137,16 +137,16 @@ export default function InventoryValueReport() {
           <thead>
             <tr>
               <th></th>
-              <th>Warehouse</th>
-              <th style={{ textAlign: 'right' }}>Items</th>
-              <th style={{ textAlign: 'right' }}>Total Value</th>
-              <th style={{ textAlign: 'right' }}>% of Total</th>
+              <th>Gudang</th>
+              <th style={{ textAlign: 'right' }}>Barang</th>
+              <th style={{ textAlign: 'right' }}>Total Nilai</th>
+              <th style={{ textAlign: 'right' }}>% Total</th>
             </tr>
           </thead>
           <tbody>
             {groups.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-                {loading ? 'Loading…' : 'No inventory records found'}
+                {loading ? 'Memuat…' : 'Tidak ada catatan inventaris ditemukan'}
               </td></tr>
             ) : groups.map(g => {
               const pct = grandValue ? ((Number(g.total_value) / grandValue) * 100).toFixed(1) : '0';
@@ -185,9 +185,9 @@ export default function InventoryValueReport() {
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                           <thead>
                             <tr>
-                              {['Code', 'Item', 'Quantity', 'Unit', 'Value', 'Date', '% of Warehouse'].map((h, i) => (
+                              {['Kode', 'Barang', 'Jumlah', 'Satuan', 'Nilai', 'Tanggal', '% Gudang'].map((h, i) => (
                                 <th key={h} style={{
-                                  textAlign: ['Value', '% of Warehouse', 'Quantity'].includes(h) ? 'right' : 'left',
+                                  textAlign: ['Nilai', '% Gudang', 'Jumlah'].includes(h) ? 'right' : 'left',
                                   padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8',
                                 }}>{h}</th>
                               ))}
@@ -222,7 +222,7 @@ export default function InventoryValueReport() {
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td colSpan={4} style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 600, color: '#555' }}>Warehouse Total:</td>
+                              <td colSpan={4} style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 600, color: '#555' }}>Total Gudang:</td>
                               <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 700, color: '#4f8ef7' }}>{idr(g.total_value)}</td>
                               <td colSpan={2}></td>
                             </tr>
@@ -238,7 +238,7 @@ export default function InventoryValueReport() {
           {groups.length > 1 && (
             <tfoot>
               <tr>
-                <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Grand Total:</td>
+                <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Keseluruhan:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#4f8ef7', fontSize: '1.05rem' }}>{idr(grandValue)}</td>
                 <td></td>
               </tr>

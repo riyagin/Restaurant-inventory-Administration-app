@@ -66,40 +66,40 @@ export default function StockHistoryPage() {
       <div className="page-header">
         <div>
           <h1 style={{ marginBottom: '0.2rem' }}>
-            {item ? `${item.name}` : 'Stock History'}
+            {item ? `${item.name}` : 'Riwayat Stok'}
           </h1>
           {item && (
             <div style={{ fontSize: '0.85rem', color: '#888' }}>
-              Code: {item.code} &nbsp;·&nbsp; Units: {item.units.map(u => u.name).join(' → ')}
+              Kode: {item.code} &nbsp;·&nbsp; Satuan: {item.units.map(u => u.name).join(' → ')}
             </div>
           )}
         </div>
-        <Link to="/inventory" className="btn btn-secondary">← Back to Inventory</Link>
+        <Link to="/inventory" className="btn btn-secondary">← Kembali ke Inventaris</Link>
       </div>
 
       <div className="card">
         <div className="card-header">
           <h2>
-            {loading ? 'Loading…' : `${rows.length} movement${rows.length !== 1 ? 's' : ''}`}
+            {loading ? 'Memuat…' : `${rows.length} pergerakan`}
             {!loading && rows.length > 0 && (
               <span style={{ marginLeft: '0.75rem', fontSize: '0.85rem', fontWeight: 400, color: netChange >= 0 ? '#27ae60' : '#e74c3c' }}>
-                Net: {netChange > 0 ? '+' : ''}{netChange.toLocaleString('id-ID')}
+                Netto: {netChange > 0 ? '+' : ''}{netChange.toLocaleString('id-ID')}
               </span>
             )}
           </h2>
           <div className="filters">
             <select value={filters.warehouse_id} onChange={set('warehouse_id')}>
-              <option value="">All Warehouses</option>
+              <option value="">Semua Gudang</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
             <select value={filters.type} onChange={set('type')}>
-              <option value="">All Types</option>
+              <option value="">Semua Tipe</option>
               {Object.entries(TYPE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
-            <input type="date" value={filters.date_from} onChange={set('date_from')} title="From date" />
-            <input type="date" value={filters.date_to}   onChange={set('date_to')}   title="To date" />
+            <input type="date" value={filters.date_from} onChange={set('date_from')} title="Dari tanggal" />
+            <input type="date" value={filters.date_to}   onChange={set('date_to')}   title="Sampai tanggal" />
             {(filters.date_from || filters.date_to) && (
-              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Clear dates</button>
+              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
           </div>
         </div>
@@ -107,21 +107,21 @@ export default function StockHistoryPage() {
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Type</th>
-              <th>Change</th>
-              <th>Unit</th>
-              <th style={{ textAlign: 'right' }}>Value</th>
-              <th>Warehouse</th>
+              <th>Waktu</th>
+              <th>Tipe</th>
+              <th>Perubahan</th>
+              <th>Satuan</th>
+              <th style={{ textAlign: 'right' }}>Nilai</th>
+              <th>Gudang</th>
               <th>Vendor</th>
-              <th>Reference</th>
+              <th>Referensi</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Loading…</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat…</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>No movements found</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Tidak ada pergerakan ditemukan</td></tr>
             ) : rows.map(r => {
               const isPos = Number(r.quantity_change) > 0;
               const style = TYPE_STYLE[r.type] ?? { background: '#eee', color: '#555' };
@@ -147,7 +147,7 @@ export default function StockHistoryPage() {
                   <td style={{ fontSize: '0.85rem' }}>
                     {refPath ? (
                       <Link to={refPath} style={{ color: '#4f8ef7', textDecoration: 'none', fontWeight: 500 }}>
-                        {r.reference ?? 'View'}
+                        {r.reference ?? 'Lihat'}
                       </Link>
                     ) : (
                       <span style={{ color: r.reference ? '#888' : '#ccc', fontStyle: r.reference ? 'normal' : 'italic' }}>

@@ -9,8 +9,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS warehouses (
-  id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name                 TEXT NOT NULL,
+  inventory_account_id UUID REFERENCES accounts(id)
 );
 
 CREATE TABLE IF NOT EXISTS vendors (
@@ -19,20 +20,28 @@ CREATE TABLE IF NOT EXISTS vendors (
 );
 
 CREATE TABLE IF NOT EXISTS accounts (
-  id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name    TEXT NOT NULL,
-  balance BIGINT NOT NULL DEFAULT 0
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name           TEXT NOT NULL,
+  balance        BIGINT NOT NULL DEFAULT 0,
+  account_number INT UNIQUE,
+  account_type   TEXT NOT NULL DEFAULT 'asset',
+  parent_id      UUID REFERENCES accounts(id),
+  is_system      BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS branches (
-  id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name               TEXT NOT NULL,
+  revenue_account_id UUID REFERENCES accounts(id),
+  expense_account_id UUID REFERENCES accounts(id)
 );
 
 CREATE TABLE IF NOT EXISTS divisions (
-  id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  branch_id UUID REFERENCES branches(id),
-  name      TEXT NOT NULL
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  branch_id          UUID REFERENCES branches(id),
+  name               TEXT NOT NULL,
+  revenue_account_id UUID REFERENCES accounts(id),
+  expense_account_id UUID REFERENCES accounts(id)
 );
 
 CREATE TABLE IF NOT EXISTS items (
@@ -178,3 +187,21 @@ CREATE TABLE IF NOT EXISTS activity_log (
 
 INSERT INTO users (username, password_hash, role)
 VALUES ('admin', crypt('admin', gen_salt('bf')), 'admin');
+
+-- Chart of Accounts root categories
+INSERT INTO accounts (account_number, name, account_type, balance, is_system) VALUES
+  (10000, 'Aset',       'asset',     0, true),
+  (20000, 'Kewajiban',  'liability', 0, true),
+  (30000, 'Ekuitas',    'equity',    0, true),
+  (40000, 'Pendapatan', 'revenue',   0, true),
+  (50000, 'Beban',      'expense',   0, true);
+
+-- Cash & Cash Equivalents sub-group under Assets
+INSERT INTO accounts (account_number, name, account_type, balance, parent_id, is_system)
+SELECT 12000, 'Kas dan Setara Kas', 'asset', 0, id, true
+FROM accounts WHERE account_number = 10000;
+
+-- Default Accounts Payable under Liabilities
+INSERT INTO accounts (account_number, name, account_type, balance, parent_id, is_system)
+SELECT 20100, 'Utang Usaha', 'liability', 0, id, true
+FROM accounts WHERE account_number = 20000;

@@ -86,7 +86,7 @@ export default function ExpenseSummary() {
   return (
     <>
       <div className="page-header">
-        <h1>Expense Summary</h1>
+        <h1>Ringkasan Pengeluaran</h1>
         {groups.length > 0 && (
           <button onClick={downloadExcel} className="btn btn-secondary">⬇ Download Excel</button>
         )}
@@ -95,20 +95,20 @@ export default function ExpenseSummary() {
       {groups.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Expenses</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Pengeluaran</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e74c3c' }}>{idr(grandTotal)}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Invoices</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Invoice</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{grandCount}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Branches</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Cabang</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{groups.length}</div>
           </div>
           {grandCount > 0 && (
             <div className="card" style={{ padding: '1.25rem' }}>
-              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Avg per Invoice</div>
+              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Rata-rata/Invoice</div>
               <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e67e22' }}>{idr(Math.round(grandTotal / grandCount))}</div>
             </div>
           )}
@@ -117,12 +117,12 @@ export default function ExpenseSummary() {
 
       <div className="card">
         <div className="card-header">
-          <h2>{loading ? 'Loading…' : `${groups.length} branch${groups.length !== 1 ? 'es' : ''}`}</h2>
+          <h2>{loading ? 'Memuat…' : `${groups.length} cabang`}</h2>
           <div className="filters">
-            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="From date" />
-            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="To date" />
+            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="Dari tanggal" />
+            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="Sampai tanggal" />
             {(filters.date_from || filters.date_to) && (
-              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Clear dates</button>
+              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
           </div>
         </div>
@@ -131,16 +131,16 @@ export default function ExpenseSummary() {
           <thead>
             <tr>
               <th></th>
-              <th>Branch</th>
-              <th style={{ textAlign: 'right' }}>Invoices</th>
-              <th style={{ textAlign: 'right' }}>Total Amount</th>
-              <th style={{ textAlign: 'right' }}>% of Total</th>
+              <th>Cabang</th>
+              <th style={{ textAlign: 'right' }}>Invoice</th>
+              <th style={{ textAlign: 'right' }}>Total</th>
+              <th style={{ textAlign: 'right' }}>% Total</th>
             </tr>
           </thead>
           <tbody>
             {groups.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-                {loading ? 'Loading…' : 'No expense invoices found'}
+                {loading ? 'Memuat…' : 'Tidak ada invoice pengeluaran ditemukan'}
               </td></tr>
             ) : groups.map(g => {
               const pct = grandTotal ? ((Number(g.total_amount) / grandTotal) * 100).toFixed(1) : '0';
@@ -179,7 +179,7 @@ export default function ExpenseSummary() {
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                           <thead>
                             <tr>
-                              {['Division', 'Invoices', 'Amount', '% of Branch'].map((h, i) => (
+                              {['Divisi', 'Invoice', 'Jumlah', '% Cabang'].map((h, i) => (
                                 <th key={h} style={{
                                   textAlign: i > 0 ? 'right' : 'left',
                                   padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8',
@@ -213,7 +213,7 @@ export default function ExpenseSummary() {
                           </tbody>
                           <tfoot>
                             <tr>
-                              <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600, color: '#555' }}>Branch Total</td>
+                              <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600, color: '#555' }}>Total Cabang</td>
                               <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right' }}>
                                 <span className="badge">{g.invoice_count}</span>
                               </td>
@@ -234,7 +234,7 @@ export default function ExpenseSummary() {
           {groups.length > 1 && (
             <tfoot>
               <tr>
-                <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Grand Total:</td>
+                <td colSpan={3} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Keseluruhan:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c', fontSize: '1.05rem' }}>{idr(grandTotal)}</td>
                 <td></td>
               </tr>

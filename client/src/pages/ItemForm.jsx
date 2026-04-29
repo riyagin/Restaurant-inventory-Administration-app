@@ -40,7 +40,7 @@ export default function ItemForm() {
     setError('');
     for (let i = 1; i < form.units.length; i++) {
       if (!form.units[i].perPrev || Number(form.units[i].perPrev) <= 0) {
-        setError(`Conversion for Unit ${i + 1} must be a positive number`);
+        setError(`Konversi untuk Satuan ${i + 1} harus berupa angka positif`);
         return;
       }
     }
@@ -58,7 +58,7 @@ export default function ItemForm() {
       else await createItem(payload);
       navigate('/items');
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     }
   };
 
@@ -67,26 +67,26 @@ export default function ItemForm() {
 
   return (
     <div className="card form-card" style={{maxWidth:'620px'}}>
-      <h2>{isEdit ? 'Edit Item' : 'Add New Item'}</h2>
+      <h2>{isEdit ? 'Edit Barang' : 'Tambah Barang Baru'}</h2>
       {error && <div className="error-msg">{error}</div>}
       <form onSubmit={handleSubmit}>
         <div className="form-row">
           <div className="form-group">
-            <label>Name</label>
-            <input value={form.name} onChange={setField('name')} required placeholder="Product name" />
+            <label>Nama</label>
+            <input value={form.name} onChange={setField('name')} required placeholder="Nama produk" />
           </div>
           <div className="form-group">
-            <label>Code</label>
-            <input value={form.code} onChange={setField('code')} required placeholder="e.g. PRD-001" />
+            <label>Kode</label>
+            <input value={form.code} onChange={setField('code')} required placeholder="mis. PRD-001" />
           </div>
         </div>
 
         <div className="form-group">
-          <label>Item Type</label>
+          <label>Tipe Barang</label>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             {[
-              { value: true,  label: 'Stock Item',     desc: 'tracked in inventory' },
-              { value: false, label: 'Non-Stock Item',  desc: 'expenses / consumables' },
+              { value: true,  label: 'Barang Stok',     desc: 'dicatat di inventaris' },
+              { value: false, label: 'Barang Non-Stok',  desc: 'pengeluaran / habis pakai' },
             ].map(opt => (
               <button
                 key={String(opt.value)}
@@ -111,13 +111,13 @@ export default function ItemForm() {
 
         <div style={{marginBottom:'1.1rem'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.6rem'}}>
-            <span style={{fontSize:'0.85rem',fontWeight:500,color:'#444'}}>Units &amp; Conversions</span>
+            <span style={{fontSize:'0.85rem',fontWeight:500,color:'#444'}}>Satuan &amp; Konversi</span>
             <div style={{display:'flex',gap:'0.5rem'}}>
               {canRemove && (
-                <button type="button" onClick={removeUnit} className="btn btn-secondary btn-sm">− Remove Unit</button>
+                <button type="button" onClick={removeUnit} className="btn btn-secondary btn-sm">− Hapus Satuan</button>
               )}
               {canAdd && (
-                <button type="button" onClick={addUnit} className="btn btn-secondary btn-sm">+ Add Unit</button>
+                <button type="button" onClick={addUnit} className="btn btn-secondary btn-sm">+ Tambah Satuan</button>
               )}
             </div>
           </div>
@@ -127,21 +127,21 @@ export default function ItemForm() {
               <div key={i} style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'0.75rem',alignItems:'end'}}>
                 <div className="form-group" style={{margin:0}}>
                   <label>
-                    Unit {i + 1}
-                    {i === 0 && form.units.length > 1 ? ' — largest' : ''}
-                    {i === form.units.length - 1 && form.units.length > 1 ? ' — smallest' : ''}
+                    Satuan {i + 1}
+                    {i === 0 && form.units.length > 1 ? ' — terbesar' : ''}
+                    {i === form.units.length - 1 && form.units.length > 1 ? ' — terkecil' : ''}
                   </label>
                   <input
                     value={unit.name}
                     onChange={setUnit(i, 'name')}
                     required
-                    placeholder={i === 0 ? 'e.g. Box' : i === 1 ? 'e.g. Pack' : 'e.g. Piece'}
+                    placeholder={i === 0 ? 'mis. Karton' : i === 1 ? 'mis. Pak' : 'mis. Pcs'}
                   />
                 </div>
                 {i > 0 ? (
                   <div className="form-group" style={{margin:0}}>
                     <label>
-                      {unit.name || `Unit ${i + 1}`} per {form.units[i - 1].name || `Unit ${i}`}
+                      {unit.name || `Satuan ${i + 1}`} per {form.units[i - 1].name || `Satuan ${i}`}
                     </label>
                     <input
                       type="number"
@@ -161,8 +161,8 @@ export default function ItemForm() {
         </div>
 
         <div className="form-actions">
-          <button type="submit" className="btn btn-primary">{isEdit ? 'Save Changes' : 'Add Item'}</button>
-          <Link to="/items" className="btn btn-secondary">Cancel</Link>
+          <button type="submit" className="btn btn-primary">{isEdit ? 'Simpan Perubahan' : 'Tambah Barang'}</button>
+          <Link to="/items" className="btn btn-secondary">Batal</Link>
         </div>
       </form>
     </div>

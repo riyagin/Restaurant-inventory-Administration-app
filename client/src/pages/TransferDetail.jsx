@@ -13,8 +13,8 @@ export default function TransferDetail() {
     getStockTransferGroup(id).then(r => { setItems(r.data); setLoading(false); });
   }, [id]);
 
-  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Loading…</div>;
-  if (!items) return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Transfer not found.</div>;
+  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat…</div>;
+  if (!items) return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Transfer tidak ditemukan.</div>;
 
   const first = items[0];
 
@@ -22,44 +22,44 @@ export default function TransferDetail() {
     <>
       <div className="page-header">
         <div>
-          <h1 style={{ marginBottom: '0.2rem' }}>Stock Transfer</h1>
+          <h1 style={{ marginBottom: '0.2rem' }}>Transfer Stok</h1>
           <div style={{ fontSize: '0.85rem', color: '#888' }}>
             {first.from_warehouse_name} → {first.to_warehouse_name} &nbsp;·&nbsp; {fmt(first.transferred_at)}
           </div>
         </div>
-        <Link to="/transfers" className="btn btn-secondary">← Back</Link>
+        <Link to="/transfers" className="btn btn-secondary">← Kembali</Link>
       </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.5rem', padding: '0.5rem 0 1rem' }}>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>From</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Dari</div>
             <span className="badge">{first.from_warehouse_name}</span>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>To</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Ke</div>
             <span className="badge">{first.to_warehouse_name}</span>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Transferred By</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Ditransfer Oleh</div>
             <div style={{ fontWeight: 500 }}>{first.transferred_by_name ?? '—'}</div>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Notes</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Catatan</div>
             <div style={{ color: first.notes ? '#333' : '#aaa', fontStyle: first.notes ? 'normal' : 'italic' }}>{first.notes ?? '—'}</div>
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header"><h2>{items.length} item{items.length !== 1 ? 's' : ''}</h2></div>
+        <div className="card-header"><h2>{items.length} barang</h2></div>
         <table>
           <thead>
             <tr>
-              <th>Item</th>
-              <th>Code</th>
-              <th style={{ textAlign: 'right' }}>Quantity</th>
-              <th>Unit</th>
+              <th>Barang</th>
+              <th>Kode</th>
+              <th style={{ textAlign: 'right' }}>Jumlah</th>
+              <th>Satuan</th>
             </tr>
           </thead>
           <tbody>

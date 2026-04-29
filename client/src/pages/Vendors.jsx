@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getVendors, createVendor, updateVendor, deleteVendor } from '../api';
 
 export default function Vendors() {
@@ -19,7 +20,7 @@ export default function Vendors() {
       setNewName('');
       load();
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     }
   };
 
@@ -30,18 +31,18 @@ export default function Vendors() {
       setEditId(null);
       load();
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this vendor?')) return;
+    if (!confirm('Yakin hapus vendor ini?')) return;
     setError('');
     try {
       await deleteVendor(id);
       load();
     } catch (err) {
-      setError(err.response?.data?.error || 'Cannot delete: vendor is referenced by existing records');
+      setError(err.response?.data?.error || 'Tidak bisa dihapus: vendor sedang digunakan');
     }
   };
 
@@ -50,7 +51,7 @@ export default function Vendors() {
   return (
     <>
       <div className="page-header">
-        <h1>Vendors</h1>
+        <h1>Vendor</h1>
       </div>
 
       <div className="card" style={{maxWidth:'560px'}}>
@@ -59,21 +60,21 @@ export default function Vendors() {
         <form onSubmit={handleAdd} style={{display:'flex',gap:'0.75rem',marginBottom:'1.5rem'}}>
           <input
             style={{flex:1,padding:'0.55rem 0.75rem',border:'1px solid #ddd',borderRadius:'6px',fontSize:'0.95rem'}}
-            placeholder="New vendor name..."
+            placeholder="Nama vendor baru..."
             value={newName}
             onChange={e => setNewName(e.target.value)}
             required
           />
-          <button type="submit" className="btn btn-primary">Add</button>
+          <button type="submit" className="btn btn-primary">Tambah</button>
         </form>
 
         <table>
           <thead>
-            <tr><th>Vendor Name</th><th></th></tr>
+            <tr><th>Nama Vendor</th><th></th></tr>
           </thead>
           <tbody>
             {vendors.length === 0 ? (
-              <tr><td colSpan={2} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No vendors yet</td></tr>
+              <tr><td colSpan={2} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Belum ada vendor</td></tr>
             ) : vendors.map(v => (
               <tr key={v.id}>
                 <td>
@@ -90,13 +91,14 @@ export default function Vendors() {
                   <div className="actions">
                     {editId === v.id ? (
                       <>
-                        <button onClick={() => handleEdit(v.id)} className="btn btn-primary btn-sm">Save</button>
-                        <button onClick={() => setEditId(null)} className="btn btn-secondary btn-sm">Cancel</button>
+                        <button onClick={() => handleEdit(v.id)} className="btn btn-primary btn-sm">Simpan</button>
+                        <button onClick={() => setEditId(null)} className="btn btn-secondary btn-sm">Batal</button>
                       </>
                     ) : (
                       <>
+                        <Link to={`/vendors/${v.id}/history`} className="btn btn-secondary btn-sm">Riwayat</Link>
                         <button onClick={() => startEdit(v)} className="btn btn-secondary btn-sm">Edit</button>
-                        <button onClick={() => handleDelete(v.id)} className="btn btn-danger btn-sm">Delete</button>
+                        <button onClick={() => handleDelete(v.id)} className="btn btn-danger btn-sm">Hapus</button>
                       </>
                     )}
                   </div>

@@ -10,7 +10,7 @@ const today = new Date().toISOString().split('T')[0];
 const emptyPurchaseRow = () => ({ item_id: '', quantity: '', unit_index: '0', price: '' });
 const emptyExpenseRow  = () => ({ item_id: '', quantity: '', unit_index: '0', price: '' });
 
-const emptyHeader = { date: today, warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', vendor_id: '', reference_number: '' };
+const emptyHeader = { date: today, due_date: '', warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', vendor_id: '', reference_number: '' };
 
 export default function InvoiceForm() {
   const { id } = useParams();
@@ -50,6 +50,7 @@ export default function InvoiceForm() {
         if (inv.branch_id) getDivisions({ branch_id: inv.branch_id }).then(r => setDivisions(r.data));
         setHeader({
           date: inv.date?.split('T')[0] ?? today,
+          due_date: inv.due_date?.split('T')[0] ?? '',
           warehouse_id: inv.warehouse_id ?? '',
           payment_status: inv.payment_status,
           account_id: inv.account_id ?? '',
@@ -90,7 +91,13 @@ export default function InvoiceForm() {
 
   const setHeaderField = (field) => (e) => {
     const val = e.target.value;
-    setHeader(h => ({ ...h, [field]: val, ...(field === 'branch_id' ? { division_id: '' } : {}) }));
+    setHeader(h => {
+      const updated = { ...h, [field]: val };
+      if (field === 'branch_id') updated.division_id = '';
+      if (field === 'payment_status' && val === 'paid') updated.due_date = h.date;
+      if (field === 'date' && h.payment_status === 'paid') updated.due_date = val;
+      return updated;
+    });
     if (field === 'branch_id') {
       setDivisions([]);
       if (val) getDivisions({ branch_id: val }).then(r => setDivisions(r.data));
@@ -168,18 +175,18 @@ export default function InvoiceForm() {
     if (invoiceType === 'purchase') {
       for (const [i, row] of rows.entries()) {
         if (!row.item_id || !row.quantity || !row.price) {
-          setError(`Row ${i + 1}: item, quantity, and price are required`);
+          setError(`Baris ${i + 1}: item, kuantitas, dan harga wajib diisi`);
           return;
         }
       }
     } else {
       for (const [i, row] of rows.entries()) {
         if (!row.item_id && !row.description) {
-          setError(`Row ${i + 1}: item selection is required`);
+          setError(`Baris ${i + 1}: item harus dipilih`);
           return;
         }
         if (!row.quantity || !row.price) {
-          setError(`Row ${i + 1}: quantity and price are required`);
+          setError(`Baris ${i + 1}: kuantitas dan harga wajib diisi`);
           return;
         }
       }
@@ -196,6 +203,7 @@ export default function InvoiceForm() {
       division_id: invoiceType === 'expense' ? header.division_id || null : undefined,
       vendor_id:   invoiceType === 'purchase' ? header.vendor_id  || null : undefined,
       reference_number: header.reference_number || null,
+      due_date: header.payment_status === 'paid' ? header.date : (header.due_date || null),
       items: invoiceType === 'expense'
         ? rows.map(r => r.item_id
             ? { item_id: r.item_id, unit_index: Number(r.unit_index), quantity: Number(r.quantity), price: Number(r.price) }
@@ -217,7 +225,7 @@ export default function InvoiceForm() {
       }
       navigate('/invoices');
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     } finally {
       setSaving(false);
     }
@@ -227,7 +235,7 @@ export default function InvoiceForm() {
 
   return (
     <div className="card" style={{ maxWidth: '960px' }}>
-      <h2 style={{ marginBottom: '1.5rem' }}>{isEdit ? 'Edit Invoice' : 'New Invoice'}</h2>
+      <h2 style={{ marginBottom: '1.5rem' }}>{isEdit ? 'Edit Invoice' : 'Invoice Baru'}</h2>
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
 
       {/* Type toggle */}
@@ -245,7 +253,7 @@ export default function InvoiceForm() {
                 color: invoiceType === type ? '#4f8ef7' : '#666',
               }}
             >
-              {type === 'purchase' ? 'Purchase (adds stock)' : 'Expense (no stock)'}
+              {type === 'purchase' ? 'Pembelian (tambah stok)' : 'Pengeluaran (tanpa stok)'}
             </button>
           ))}
         </div>
@@ -257,6 +265,21 @@ export default function InvoiceForm() {
           <div className="form-group" style={{ margin: 0 }}>
             <label>Tanggal</label>
             <input type="date" value={header.date} onChange={setHeaderField('date')} required />
+          </div>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label>
+              Jatuh Tempo
+              {header.payment_status === 'paid' && (
+                <span style={{ marginLeft: '0.4rem', fontSize: '0.75rem', color: '#aaa', fontWeight: 400 }}>(otomatis = tgl. masuk)</span>
+              )}
+            </label>
+            <input
+              type="date"
+              value={header.payment_status === 'paid' ? header.date : header.due_date}
+              onChange={setHeaderField('due_date')}
+              disabled={header.payment_status === 'paid'}
+              style={header.payment_status === 'paid' ? { background: '#f5f5f5', color: '#aaa' } : {}}
+            />
           </div>
           {invoiceType === 'purchase' && (
             <div className="form-group" style={{ margin: 0 }}>
@@ -282,8 +305,8 @@ export default function InvoiceForm() {
             <div className="form-group" style={{ margin: 0 }}>
               <label>Akun Pembayaran</label>
               <select value={header.account_id} onChange={setHeaderField('account_id')} required>
-                <option value="">Pilih akun...</option>
-                {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                <option value="">Pilih akun kas...</option>
+                {accounts.filter(a => a.parent_number === 11000).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
           )}
@@ -299,16 +322,16 @@ export default function InvoiceForm() {
           {invoiceType === 'expense' && (
             <>
               <div className="form-group" style={{ margin: 0 }}>
-                <label>Branch</label>
+                <label>Cabang</label>
                 <select value={header.branch_id} onChange={setHeaderField('branch_id')}>
-                  <option value="">Pilih branch...</option>
+                  <option value="">Pilih cabang...</option>
                   {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </select>
               </div>
               <div className="form-group" style={{ margin: 0 }}>
-                <label>Division</label>
+                <label>Divisi</label>
                 <select value={header.division_id} onChange={setHeaderField('division_id')} disabled={!header.branch_id}>
-                  <option value="">Pilih division...</option>
+                  <option value="">Pilih divisi...</option>
                   {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </div>
@@ -394,7 +417,7 @@ export default function InvoiceForm() {
                           <input type="number" min="0" value={row.price} onChange={setExpenseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
                           {lp != null && (
                             <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.2rem' }}>
-                              Last: {idr(lp)}
+                              Harga terakhir: {idr(lp)}
                             </div>
                           )}
                         </>
@@ -436,7 +459,7 @@ export default function InvoiceForm() {
                           <input type="number" min="0" value={row.price} onChange={setPurchaseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
                           {lp != null && (
                             <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.2rem' }}>
-                              Last: {idr(lp)}
+                              Harga terakhir: {idr(lp)}
                             </div>
                           )}
                         </>
@@ -468,7 +491,7 @@ export default function InvoiceForm() {
                 alt="Current receipt"
                 style={{ maxHeight: '120px', maxWidth: '200px', borderRadius: '6px', border: '1px solid #e0e0e0', objectFit: 'contain' }}
               />
-              <div style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.25rem' }}>Current photo — upload a new one to replace it</div>
+              <div style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.25rem' }}>Foto saat ini — unggah foto baru untuk menggantinya</div>
             </div>
           )}
           <input
@@ -479,7 +502,7 @@ export default function InvoiceForm() {
           />
           {photoFile && (
             <div style={{ fontSize: '0.82rem', color: '#555', marginTop: '0.25rem' }}>
-              Selected: {photoFile.name}
+              Dipilih: {photoFile.name}
             </div>
           )}
         </div>

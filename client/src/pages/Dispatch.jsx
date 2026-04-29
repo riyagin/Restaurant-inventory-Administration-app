@@ -72,17 +72,17 @@ export default function Dispatch() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!header.warehouse_id) { setError('Please select a source warehouse'); return; }
-    if (!header.branch_id)    { setError('Please select a branch'); return; }
-    if (!header.division_id)  { setError('Please select a division'); return; }
+    if (!header.warehouse_id) { setError('Pilih gudang asal'); return; }
+    if (!header.branch_id)    { setError('Pilih cabang'); return; }
+    if (!header.division_id)  { setError('Pilih divisi'); return; }
     for (const [i, row] of rows.entries()) {
-      if (!row.item_id) { setError(`Row ${i + 1}: please select an item`); return; }
-      if (!row.quantity || Number(row.quantity) <= 0) { setError(`Row ${i + 1}: quantity must be greater than 0`); return; }
+      if (!row.item_id) { setError(`Baris ${i + 1}: pilih barang`); return; }
+      if (!row.quantity || Number(row.quantity) <= 0) { setError(`Baris ${i + 1}: jumlah harus lebih dari 0`); return; }
       const available = getItemStock(row.item_id, row.unit_index);
       if (Number(row.quantity) > available) {
         const item = allItems.find(it => it.id === row.item_id);
         const unitName = item?.units[Number(row.unit_index)]?.name ?? '';
-        setError(`Row ${i + 1}: insufficient stock for "${item?.name}" (available: ${available.toLocaleString('id-ID')} ${unitName})`);
+        setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${available.toLocaleString('id-ID')} ${unitName})`);
         return;
       }
     }
@@ -101,7 +101,7 @@ export default function Dispatch() {
       setDivisions([]);
       loadDispatches();
     } catch (err) {
-      setError(err.response?.data?.error || 'Dispatch failed');
+      setError(err.response?.data?.error || 'Pengiriman gagal');
     } finally {
       setLoading(false);
     }
@@ -112,50 +112,50 @@ export default function Dispatch() {
   return (
     <>
       <div className="page-header">
-        <h1>Dispatch to Branch</h1>
+        <h1>Pengiriman ke Cabang</h1>
       </div>
 
       {/* Dispatch form */}
       <div className="card" style={{ maxWidth: '900px', marginBottom: '1.5rem' }}>
-        <h2 style={{ marginBottom: '1.25rem' }}>New Dispatch</h2>
+        <h2 style={{ marginBottom: '1.25rem' }}>Pengiriman Baru</h2>
         {error && <div className="error-msg">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-row" style={{ marginBottom: '1rem' }}>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>From Warehouse</label>
+              <label>Dari Gudang</label>
               <select value={header.warehouse_id} onChange={setHeaderField('warehouse_id')}>
-                <option value="">Select warehouse...</option>
+                <option value="">Pilih gudang...</option>
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>Branch</label>
+              <label>Cabang</label>
               <select value={header.branch_id} onChange={setHeaderField('branch_id')}>
-                <option value="">Select branch...</option>
+                <option value="">Pilih cabang...</option>
                 {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>Division</label>
+              <label>Divisi</label>
               <select value={header.division_id} onChange={setHeaderField('division_id')} disabled={!header.branch_id}>
-                <option value="">{header.branch_id ? 'Select division...' : 'Select branch first'}</option>
+                <option value="">{header.branch_id ? 'Pilih divisi...' : 'Pilih cabang terlebih dahulu'}</option>
                 {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             </div>
           </div>
 
           <div className="form-group" style={{ marginBottom: '1rem' }}>
-            <label>Notes <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span></label>
-            <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Reason or description..." />
+            <label>Catatan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+            <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Alasan atau deskripsi..." />
           </div>
 
           <div style={{ overflowX: 'auto', marginBottom: '0.5rem' }}>
             <table className="invoice-items-table">
               <thead>
                 <tr>
-                  <th>Item</th>
-                  <th>Unit</th>
-                  <th>Quantity</th>
+                  <th>Barang</th>
+                  <th>Satuan</th>
+                  <th>Jumlah</th>
                   <th></th>
                 </tr>
               </thead>
@@ -191,7 +191,7 @@ export default function Dispatch() {
                         />
                         {available !== null && (
                           <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
-                            Available: {available.toLocaleString('id-ID')}
+                            Tersedia: {available.toLocaleString('id-ID')}
                           </div>
                         )}
                       </td>
@@ -208,9 +208,9 @@ export default function Dispatch() {
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem' }}>
-            <button type="button" onClick={addRow} className="btn btn-secondary" disabled={!header.warehouse_id}>+ Add Row</button>
+            <button type="button" onClick={addRow} className="btn btn-secondary" disabled={!header.warehouse_id}>+ Tambah Baris</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Dispatching...' : 'Dispatch Stock'}
+              {loading ? 'Memproses...' : 'Kirim Stok'}
             </button>
           </div>
         </form>
@@ -218,23 +218,23 @@ export default function Dispatch() {
 
       {/* Dispatch history */}
       <div className="card">
-        <div className="card-header"><h2>Dispatch History</h2></div>
+        <div className="card-header"><h2>Riwayat Pengiriman</h2></div>
         <table>
           <thead>
             <tr>
               <th></th>
-              <th>Time</th>
-              <th>From</th>
-              <th>Branch</th>
-              <th>Division</th>
-              <th>Items</th>
-              <th>By</th>
-              <th>Notes</th>
+              <th>Waktu</th>
+              <th>Dari</th>
+              <th>Cabang</th>
+              <th>Divisi</th>
+              <th>Barang</th>
+              <th>Oleh</th>
+              <th>Catatan</th>
             </tr>
           </thead>
           <tbody>
             {dispatches.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>No dispatches yet</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada pengiriman</td></tr>
             ) : dispatches.map(d => (
               <>
                 <tr
@@ -258,12 +258,12 @@ export default function Dispatch() {
                   <tr key={`${d.id}-items`}>
                     <td colSpan={8} style={{ padding: '0.75rem 1.5rem 1rem', background: '#f8f9ff' }}>
                       <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                        Dispatched Items
+                        Barang Terkirim
                       </div>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                         <thead>
                           <tr>
-                            {['Item', 'Code', 'Quantity', 'Unit'].map(h => (
+                            {['Barang', 'Kode', 'Jumlah', 'Satuan'].map(h => (
                               <th key={h} style={{ textAlign: 'left', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
                             ))}
                           </tr>

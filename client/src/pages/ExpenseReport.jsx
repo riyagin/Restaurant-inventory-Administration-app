@@ -129,7 +129,7 @@ export default function ExpenseReport() {
   return (
     <>
       <div className="page-header">
-        <h1>Expense Report</h1>
+        <h1>Laporan Pengeluaran</h1>
         {groups.length > 0 && (
           <button onClick={downloadExcel} className="btn btn-secondary">
             ⬇ Download Excel
@@ -141,15 +141,15 @@ export default function ExpenseReport() {
       {groups.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Expenses</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Pengeluaran</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e74c3c' }}>{idr(grandTotal)}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Invoices</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Invoice</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{grandCount}</div>
           </div>
           <div className="card" style={{ padding: '1.25rem' }}>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Branches / Divisions</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Cabang / Divisi</div>
             <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{groups.length}</div>
           </div>
         </div>
@@ -157,20 +157,20 @@ export default function ExpenseReport() {
 
       <div className="card">
         <div className="card-header">
-          <h2>{loading ? 'Loading…' : `${groups.length} group${groups.length !== 1 ? 's' : ''}`}</h2>
+          <h2>{loading ? 'Memuat…' : `${groups.length} grup`}</h2>
           <div className="filters">
             <select value={filters.branch_id} onChange={onBranchChange}>
-              <option value="">All Branches</option>
+              <option value="">Semua Cabang</option>
               {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
             <select value={filters.division_id} onChange={e => setFilters(f => ({ ...f, division_id: e.target.value }))} disabled={!filters.branch_id}>
-              <option value="">All Divisions</option>
+              <option value="">Semua Divisi</option>
               {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
-            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="From date" />
-            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="To date" />
+            <input type="date" value={filters.date_from} onChange={e => setFilters(f => ({ ...f, date_from: e.target.value }))} title="Dari tanggal" />
+            <input type="date" value={filters.date_to}   onChange={e => setFilters(f => ({ ...f, date_to: e.target.value }))}   title="Sampai tanggal" />
             {(filters.date_from || filters.date_to) && (
-              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Clear dates</button>
+              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
           </div>
         </div>
@@ -179,16 +179,16 @@ export default function ExpenseReport() {
           <thead>
             <tr>
               <th></th>
-              <th>Branch</th>
-              <th>Division</th>
-              <th style={{ textAlign: 'right' }}>Invoices</th>
-              <th style={{ textAlign: 'right' }}>Total Amount</th>
+              <th>Cabang</th>
+              <th>Divisi</th>
+              <th style={{ textAlign: 'right' }}>Invoice</th>
+              <th style={{ textAlign: 'right' }}>Total</th>
             </tr>
           </thead>
           <tbody>
             {groups.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-                {loading ? 'Loading…' : 'No expense invoices found for the selected filters'}
+                {loading ? 'Memuat…' : 'Tidak ada invoice pengeluaran ditemukan'}
               </td></tr>
             ) : groups.map(g => {
               const key = `${g.branch_id}::${g.division_id}`;
@@ -222,8 +222,8 @@ export default function ExpenseReport() {
                         {/* Tab bar */}
                         <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem', background: '#f0f0f0', borderRadius: '7px', padding: '0.25rem', width: 'fit-content' }}
                              onClick={e => e.stopPropagation()}>
-                          <button style={TAB_STYLE(tab === 'items')}   onClick={() => setTab(key, 'items')}>Item Usage</button>
-                          <button style={TAB_STYLE(tab === 'invoices')} onClick={() => setTab(key, 'invoices')}>Invoices</button>
+                          <button style={TAB_STYLE(tab === 'items')}   onClick={() => setTab(key, 'items')}>Pemakaian Barang</button>
+                          <button style={TAB_STYLE(tab === 'invoices')} onClick={() => setTab(key, 'invoices')}>Invoice</button>
                         </div>
 
                         {/* ── Item Usage tab ── */}
@@ -231,14 +231,14 @@ export default function ExpenseReport() {
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                             <thead>
                               <tr>
-                                {['Item / Description', 'Total Qty', 'Total Value'].map((h, i) => (
+                                {['Barang / Deskripsi', 'Total Qty', 'Total Nilai'].map((h, i) => (
                                   <th key={h} style={{ textAlign: i > 0 ? 'right' : 'left', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
                               {g.item_usage.length === 0 ? (
-                                <tr><td colSpan={3} style={{ padding: '0.75rem 0.6rem', color: '#bbb', fontStyle: 'italic' }}>No items</td></tr>
+                                <tr><td colSpan={3} style={{ padding: '0.75rem 0.6rem', color: '#bbb', fontStyle: 'italic' }}>Tidak ada barang</td></tr>
                               ) : g.item_usage.map((it, idx) => (
                                 <tr key={idx}>
                                   <td style={{ padding: '0.3rem 0.6rem', fontWeight: 500 }}>{it.description ?? '—'}</td>
@@ -265,7 +265,7 @@ export default function ExpenseReport() {
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                             <thead>
                               <tr>
-                                {['No. Invoice', 'Date', 'Source', 'Status', 'Total', ''].map((h, i) => (
+                                {['No. Invoice', 'Tanggal', 'Sumber', 'Status', 'Total', ''].map((h, i) => (
                                   <th key={h} style={{ textAlign: h === 'Total' ? 'right' : 'left', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
                                 ))}
                               </tr>
@@ -293,7 +293,7 @@ export default function ExpenseReport() {
                                   </td>
                                   <td style={{ padding: '0.3rem 0.6rem', textAlign: 'right', fontWeight: 600 }}>{idr(inv.total)}</td>
                                   <td style={{ padding: '0.3rem 0.6rem' }}>
-                                    <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">View</Link>
+                                    <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
                                   </td>
                                 </tr>
                               ))}
@@ -318,7 +318,7 @@ export default function ExpenseReport() {
           {groups.length > 1 && (
             <tfoot>
               <tr>
-                <td colSpan={4} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Grand Total:</td>
+                <td colSpan={4} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Keseluruhan:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c', fontSize: '1.05rem' }}>{idr(grandTotal)}</td>
               </tr>
             </tfoot>

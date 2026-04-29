@@ -20,7 +20,7 @@ export default function Login() {
       localStorage.setItem('user', JSON.stringify(res.data.user));
       navigate('/');
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed');
+      setError(err.response?.data?.error || 'Login gagal');
     } finally {
       setLoading(false);
     }
@@ -31,32 +31,32 @@ export default function Login() {
       <div className="card" style={{width:'100%',maxWidth:'380px'}}>
         <div style={{textAlign:'center',marginBottom:'1.75rem'}}>
           <div style={{fontSize:'1.4rem',fontWeight:700,color:'#1a1a2e',marginBottom:'0.25rem'}}>InventoryPro</div>
-          <div style={{fontSize:'0.9rem',color:'#888'}}>Sign in to your account</div>
+          <div style={{fontSize:'0.9rem',color:'#888'}}>Masuk ke akun Anda</div>
         </div>
         {error && <div className="error-msg">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label>Username</label>
+            <label>Nama Pengguna</label>
             <input
               autoFocus
               value={form.username}
               onChange={set('username')}
               required
-              placeholder="Enter username"
+              placeholder="Masukkan nama pengguna"
             />
           </div>
           <div className="form-group">
-            <label>Password</label>
+            <label>Kata Sandi</label>
             <input
               type="password"
               value={form.password}
               onChange={set('password')}
               required
-              placeholder="Enter password"
+              placeholder="Masukkan kata sandi"
             />
           </div>
           <button type="submit" className="btn btn-primary" style={{width:'100%',justifyContent:'center',marginTop:'0.5rem'}} disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Masuk...' : 'Masuk'}
           </button>
         </form>
       </div>

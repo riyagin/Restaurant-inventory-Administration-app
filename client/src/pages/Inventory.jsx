@@ -41,25 +41,25 @@ function HistoryPanel({ itemId, warehouseId }) {
 
   if (!rows) return (
     <td colSpan={8} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
-      <span style={{color:'#999',fontSize:'0.85rem'}}>Loading history...</span>
+      <span style={{color:'#999',fontSize:'0.85rem'}}>Memuat riwayat...</span>
     </td>
   );
 
   if (!rows.length) return (
     <td colSpan={8} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
-      <span style={{color:'#999',fontSize:'0.85rem'}}>No history yet</span>
+      <span style={{color:'#999',fontSize:'0.85rem'}}>Belum ada riwayat</span>
     </td>
   );
 
   return (
     <td colSpan={8} style={{padding:'0.75rem 1.5rem 1rem',background:'#f8f9ff',borderTop:'none'}}>
       <div style={{fontSize:'0.78rem',fontWeight:600,color:'#666',marginBottom:'0.5rem',textTransform:'uppercase',letterSpacing:'0.4px'}}>
-        Last {rows.length} interactions
+        {rows.length} interaksi terakhir
       </div>
       <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
         <thead>
           <tr>
-            {['Date','Type','Change','Unit','Value','Vendor','Warehouse','Reference'].map(h => (
+            {['Tanggal','Tipe','Perubahan','Satuan','Nilai','Vendor','Gudang','Referensi'].map(h => (
               <th key={h} style={{textAlign: h === 'Value' ? 'right' : 'left',padding:'0.3rem 0.6rem',color:'#888',fontWeight:600,borderBottom:'1px solid #e8e8e8',whiteSpace:'nowrap'}}>
                 {h}
               </th>
@@ -94,7 +94,7 @@ function HistoryPanel({ itemId, warehouseId }) {
                 <td style={{padding:'0.3rem 0.6rem'}}>
                   {refPath ? (
                     <Link to={refPath} style={{color:'#4f8ef7',textDecoration:'none',fontWeight:500,fontSize:'0.82rem'}}>
-                      {r.reference ?? 'View'}
+                      {r.reference ?? 'Lihat'}
                     </Link>
                   ) : (
                     <span style={{color: r.reference ? '#888' : '#ccc', fontStyle: r.reference ? 'normal' : 'italic'}}>
@@ -133,9 +133,12 @@ export default function Inventory() {
 
   const clearDates = () => { setDateFrom(''); setDateTo(''); };
 
+  const totalValue = records.reduce((s, r) => s + Number(r.value), 0);
+  const isFiltered = !!(search || warehouseId !== 'all' || dateFrom || dateTo);
+
   const handleDelete = async (e, id) => {
     e.stopPropagation();
-    if (!confirm('Delete this inventory record?')) return;
+    if (!confirm('Yakin hapus catatan inventaris ini?')) return;
     await deleteInventoryRecord(id);
     setExpandedId(null);
     load();
@@ -146,27 +149,45 @@ export default function Inventory() {
   return (
     <>
       <div className="page-header">
-        <h1>Inventory</h1>
-        <Link to="/inventory/new" className="btn btn-primary">+ Add Record</Link>
+        <h1>Inventaris</h1>
+        <Link to="/inventory/new" className="btn btn-primary">+ Tambah Catatan</Link>
       </div>
 
       <div className="card">
         <div className="card-header">
-          <h2>{records.length} record{records.length !== 1 ? 's' : ''}</h2>
+          <div>
+            <h2 style={{ marginBottom: '0.2rem' }}>
+              {records.length} lot{isFiltered ? ' (difilter)' : ''}
+              <span style={{ marginLeft: '1rem', color: '#27ae60', fontWeight: 700 }}>{idr(totalValue)}</span>
+            </h2>
+            {(dateFrom || dateTo) && (
+              <div style={{ fontSize: '0.8rem', color: '#888' }}>
+                Menampilkan lot inventaris
+                {dateFrom && <> dari <strong>{new Date(dateFrom).toLocaleDateString('id-ID')}</strong></>}
+                {dateTo   && <> s/d <strong>{new Date(dateTo).toLocaleDateString('id-ID')}</strong></>}
+              </div>
+            )}
+          </div>
           <div className="filters">
             <input
-              placeholder="Search item..."
+              placeholder="Cari barang..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
             <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>
-              <option value="all">All Warehouses</option>
+              <option value="all">Semua Gudang</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="Date from" />
-            <input type="date" value={dateTo}   onChange={e => setDateTo(e.target.value)}   title="Date to" />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <label style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap' }}>Dari</label>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <label style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap' }}>s/d</label>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </div>
             {(dateFrom || dateTo) && (
-              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Clear dates</button>
+              <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
           </div>
         </div>
@@ -175,18 +196,18 @@ export default function Inventory() {
           <thead>
             <tr>
               <th></th>
-              <th>Item</th>
-              <th>Code</th>
-              <th>Quantity</th>
-              <th>Warehouse</th>
-              <th>Value (IDR)</th>
-              <th>Date</th>
+              <th>Barang</th>
+              <th>Kode</th>
+              <th>Jumlah</th>
+              <th>Gudang</th>
+              <th>Nilai (IDR)</th>
+              <th>Tanggal</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {records.length === 0 ? (
-              <tr><td colSpan={8} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No records found</td></tr>
+              <tr><td colSpan={8} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Tidak ada data</td></tr>
             ) : records.map(rec => (
               <>
                 <tr
@@ -206,9 +227,9 @@ export default function Inventory() {
                   <td style={{color:'#888',fontSize:'0.85rem'}}>{fmt(rec.date)}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <div className="actions">
-                      <Link to={`/inventory/history/${rec.item_id}`} className="btn btn-secondary btn-sm">History</Link>
+                      <Link to={`/inventory/history/${rec.item_id}`} className="btn btn-secondary btn-sm">Riwayat</Link>
                       <Link to={`/inventory/edit/${rec.id}`} className="btn btn-secondary btn-sm">Edit</Link>
-                      <button onClick={(e) => handleDelete(e, rec.id)} className="btn btn-danger btn-sm">Delete</button>
+                      <button onClick={(e) => handleDelete(e, rec.id)} className="btn btn-danger btn-sm">Hapus</button>
                     </div>
                   </td>
                 </tr>

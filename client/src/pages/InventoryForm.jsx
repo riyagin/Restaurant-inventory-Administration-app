@@ -56,19 +56,19 @@ export default function InventoryForm() {
       else await createInventoryRecord(payload);
       navigate('/inventory');
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     }
   };
 
   return (
     <div className="card form-card">
-      <h2>{isEdit ? 'Edit Inventory Record' : 'Add Inventory Record'}</h2>
+      <h2>{isEdit ? 'Edit Catatan Inventaris' : 'Tambah Catatan Inventaris'}</h2>
       {error && <div className="error-msg">{error}</div>}
       <form onSubmit={handleSubmit}>
         <div className="form-group">
-          <label>Item</label>
+          <label>Barang</label>
           <select value={form.item_id} onChange={set('item_id')} required>
-            <option value="">Select an item...</option>
+            <option value="">Pilih barang...</option>
             {items.map(item => (
               <option key={item.id} value={item.id}>{item.name} ({item.code})</option>
             ))}
@@ -77,31 +77,31 @@ export default function InventoryForm() {
 
         <div className="form-row">
           <div className="form-group">
-            <label>Quantity</label>
+            <label>Jumlah</label>
             <input type="number" min="0" value={form.quantity} onChange={set('quantity')} required placeholder="0" />
           </div>
           <div className="form-group">
-            <label>Unit</label>
+            <label>Satuan</label>
             <select value={form.unit_index} onChange={set('unit_index')} disabled={!selectedItem}>
               {selectedItem
                 ? selectedItem.units.map((u, i) => <option key={i} value={String(i)}>{u.name}</option>)
-                : <option value="0">Select item first</option>
+                : <option value="0">Pilih barang terlebih dahulu</option>
               }
             </select>
           </div>
         </div>
 
         <div className="form-group">
-          <label>Warehouse</label>
+          <label>Gudang</label>
           <select value={form.warehouse_id} onChange={set('warehouse_id')} required>
-            <option value="">Select a warehouse...</option>
+            <option value="">Pilih gudang...</option>
             {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         </div>
 
         <div className="form-row">
           <div className="form-group">
-            <label>Value (Rp)</label>
+            <label>Nilai (Rp)</label>
             <input type="number" min="0" value={form.value} onChange={set('value')} required placeholder="0" />
             {form.value > 0 && (
               <small style={{color:'#888',marginTop:'0.25rem',display:'block'}}>
@@ -110,14 +110,14 @@ export default function InventoryForm() {
             )}
           </div>
           <div className="form-group">
-            <label>Date</label>
+            <label>Tanggal</label>
             <input type="date" value={form.date} onChange={set('date')} required />
           </div>
         </div>
 
         <div className="form-actions">
-          <button type="submit" className="btn btn-primary">{isEdit ? 'Save Changes' : 'Add Record'}</button>
-          <Link to="/inventory" className="btn btn-secondary">Cancel</Link>
+          <button type="submit" className="btn btn-primary">{isEdit ? 'Simpan Perubahan' : 'Tambah Catatan'}</button>
+          <Link to="/inventory" className="btn btn-secondary">Batal</Link>
         </div>
       </form>
     </div>

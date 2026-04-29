@@ -139,7 +139,7 @@ export default function StockOpname() {
         actual_quantity: Number(actuals[rec.id]),
       }));
 
-    if (!changedItems.length) { setError('No changes detected — all actuals match the recorded quantities.'); return; }
+    if (!changedItems.length) { setError('Tidak ada perubahan — semua aktual sesuai dengan catatan.'); return; }
 
     setLoading(true);
     try {
@@ -152,7 +152,7 @@ export default function StockOpname() {
       getInventory({ warehouse_id: warehouseId }).then(r => setInventory(r.data));
       getStockOpname().then(r => setHistory(r.data));
     } catch (err) {
-      setError(err.response?.data?.error || 'Something went wrong');
+      setError(err.response?.data?.error || 'Terjadi kesalahan');
     } finally {
       setLoading(false);
     }
@@ -167,10 +167,10 @@ export default function StockOpname() {
       {/* Opname form */}
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <div className="card-header" style={{ marginBottom: '1rem' }}>
-          <h2>New Opname</h2>
+          <h2>Opname Baru</h2>
           <div className="filters">
             <select value={warehouseId} onChange={handleWarehouseChange}>
-              <option value="">Select warehouse...</option>
+              <option value="">Pilih gudang...</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
             {inventory.length > 0 && (
@@ -182,9 +182,9 @@ export default function StockOpname() {
         </div>
 
         {!warehouseId ? (
-          <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Select a warehouse to begin stock opname.</p>
+          <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Pilih gudang untuk memulai stock opname.</p>
         ) : inventory.length === 0 ? (
-          <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>No inventory records in this warehouse.</p>
+          <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Tidak ada catatan inventaris di gudang ini.</p>
         ) : (
           <form onSubmit={handleSubmit}>
             {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -192,14 +192,14 @@ export default function StockOpname() {
             <table>
               <thead>
                 <tr>
-                  <th>Item</th>
-                  <th>Code</th>
-                  <th>Unit</th>
-                  <th style={{ textAlign: 'right' }}>System Qty</th>
-                  <th style={{ textAlign: 'right' }}>System Value</th>
-                  <th style={{ textAlign: 'center' }}>Actual Qty</th>
-                  <th style={{ textAlign: 'right' }}>Difference</th>
-                  <th style={{ textAlign: 'right' }}>Waste Value</th>
+                  <th>Barang</th>
+                  <th>Kode</th>
+                  <th>Satuan</th>
+                  <th style={{ textAlign: 'right' }}>Qty Sistem</th>
+                  <th style={{ textAlign: 'right' }}>Nilai Sistem</th>
+                  <th style={{ textAlign: 'center' }}>Qty Aktual</th>
+                  <th style={{ textAlign: 'right' }}>Selisih</th>
+                  <th style={{ textAlign: 'right' }}>Nilai Susut</th>
                 </tr>
               </thead>
               <tbody>
@@ -243,7 +243,7 @@ export default function StockOpname() {
                 <tfoot>
                   <tr>
                     <td colSpan={7} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>
-                      Total Waste Value:
+                      Total Nilai Susut:
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c' }}>
                       {idr(totalWaste)}
@@ -255,16 +255,16 @@ export default function StockOpname() {
 
             <div style={{ marginTop: '1.25rem', display: 'flex', gap: '1rem', alignItems: 'flex-end' }}>
               <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                <label>Person in Charge <span style={{ color: '#aaa', fontWeight: 400 }}>(supervisor)</span></label>
-                <input value={picName} onChange={e => setPicName(e.target.value)} placeholder="e.g. Ahmad Fauzi..." />
+                <label>Penanggung Jawab <span style={{ color: '#aaa', fontWeight: 400 }}>(supervisor)</span></label>
+                <input value={picName} onChange={e => setPicName(e.target.value)} placeholder="mis. Ahmad Fauzi..." />
               </div>
               <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                <label>Executor <span style={{ color: '#aaa', fontWeight: 400 }}>(person who counted)</span></label>
-                <input value={operatorName} onChange={e => setOperatorName(e.target.value)} placeholder="e.g. Budi Santoso..." />
+                <label>Pelaksana <span style={{ color: '#aaa', fontWeight: 400 }}>(penghitung)</span></label>
+                <input value={operatorName} onChange={e => setOperatorName(e.target.value)} placeholder="mis. Budi Santoso..." />
               </div>
               <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                <label>Notes <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span></label>
-                <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Monthly stock count..." />
+                <label>Catatan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+                <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="mis. Penghitungan stok bulanan..." />
               </div>
               <button
                 type="submit"
@@ -272,7 +272,7 @@ export default function StockOpname() {
                 disabled={loading || !hasChanges}
                 style={{ whiteSpace: 'nowrap' }}
               >
-                {loading ? 'Saving…' : 'Confirm Opname'}
+                {loading ? 'Menyimpan…' : 'Konfirmasi Opname'}
               </button>
             </div>
           </form>
@@ -281,24 +281,24 @@ export default function StockOpname() {
 
       {/* Opname history */}
       <div className="card">
-        <div className="card-header"><h2>Opname History</h2></div>
+        <div className="card-header"><h2>Riwayat Opname</h2></div>
         <table>
           <thead>
             <tr>
               <th></th>
-              <th>Time</th>
-              <th>Warehouse</th>
-              <th>Items adjusted</th>
+              <th>Waktu</th>
+              <th>Gudang</th>
+              <th>Barang disesuaikan</th>
               <th>PIC</th>
-              <th>Executor</th>
-              <th>Recorded by</th>
-              <th>Notes</th>
+              <th>Pelaksana</th>
+              <th>Dicatat oleh</th>
+              <th>Catatan</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {history.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>No opnames yet</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada opname</td></tr>
             ) : history.map(op => (
               <>
                 <tr
@@ -317,7 +317,7 @@ export default function StockOpname() {
                   <td style={{ fontSize: '0.85rem', color: '#555' }}>{op.operator_name ?? <span style={{color:'#bbb',fontStyle:'italic'}}>—</span>}</td>
                   <td style={{ fontSize: '0.85rem', color: '#666' }}>{op.performed_by_name ?? '—'}</td>
                   <td style={{ fontSize: '0.85rem', color: '#888', fontStyle: op.notes ? 'normal' : 'italic' }}>{op.notes ?? '—'}</td>
-                  <td><Link to={`/stock-opname/detail/${op.id}`} className="btn btn-secondary btn-sm">View</Link></td>
+                  <td><Link to={`/stock-opname/detail/${op.id}`} className="btn btn-secondary btn-sm">Lihat</Link></td>
                 </tr>
                 {expandedId === op.id && (
                   <tr key={`${op.id}-items`}>
@@ -325,8 +325,8 @@ export default function StockOpname() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                         <thead>
                           <tr>
-                            {['Item', 'Unit', 'Recorded', 'Actual', 'Difference', 'Waste Value'].map(h => (
-                              <th key={h} style={{ textAlign: h === 'Item' || h === 'Unit' ? 'left' : 'right', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
+                            {['Barang', 'Satuan', 'Tercatat', 'Aktual', 'Selisih', 'Nilai Susut'].map(h => (
+                              <th key={h} style={{ textAlign: h === 'Barang' || h === 'Satuan' ? 'left' : 'right', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
                             ))}
                           </tr>
                         </thead>

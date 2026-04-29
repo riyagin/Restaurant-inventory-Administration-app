@@ -71,16 +71,16 @@ export default function StockTransfers() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!header.from_warehouse_id) { setError('Please select a source warehouse'); return; }
-    if (!header.to_warehouse_id)   { setError('Please select a destination warehouse'); return; }
+    if (!header.from_warehouse_id) { setError('Pilih gudang asal'); return; }
+    if (!header.to_warehouse_id)   { setError('Pilih gudang tujuan'); return; }
     for (const [i, row] of rows.entries()) {
-      if (!row.item_id) { setError(`Row ${i + 1}: please select an item`); return; }
-      if (!row.quantity || Number(row.quantity) <= 0) { setError(`Row ${i + 1}: quantity must be greater than 0`); return; }
+      if (!row.item_id) { setError(`Baris ${i + 1}: pilih barang`); return; }
+      if (!row.quantity || Number(row.quantity) <= 0) { setError(`Baris ${i + 1}: jumlah harus lebih dari 0`); return; }
       const available = getItemStock(row.item_id, row.unit_index);
       if (Number(row.quantity) > available) {
         const item = allItems.find(it => it.id === row.item_id);
         const unitName = item?.units[Number(row.unit_index)]?.name ?? '';
-        setError(`Row ${i + 1}: insufficient stock for "${item?.name}" (available: ${available.toLocaleString('id-ID')} ${unitName})`);
+        setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${available.toLocaleString('id-ID')} ${unitName})`);
         return;
       }
     }
@@ -101,7 +101,7 @@ export default function StockTransfers() {
       setSrcInventory([]);
       loadTransfers();
     } catch (err) {
-      setError(err.response?.data?.error || 'Transfer failed');
+      setError(err.response?.data?.error || 'Transfer gagal');
     } finally {
       setLoading(false);
     }
@@ -112,33 +112,33 @@ export default function StockTransfers() {
   return (
     <>
       <div className="page-header">
-        <h1>Stock Transfers</h1>
+        <h1>Transfer Stok</h1>
       </div>
 
       <div className="card" style={{ maxWidth: '860px', marginBottom: '1.5rem' }}>
-        <h2 style={{ marginBottom: '1.25rem' }}>New Transfer</h2>
+        <h2 style={{ marginBottom: '1.25rem' }}>Transfer Baru</h2>
         {error && <div className="error-msg">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-row" style={{ marginBottom: '1rem' }}>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>From Warehouse</label>
+              <label>Dari Gudang</label>
               <select value={header.from_warehouse_id} onChange={setHeaderField('from_warehouse_id')}>
-                <option value="">Select warehouse...</option>
+                <option value="">Pilih gudang...</option>
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>To Warehouse</label>
+              <label>Ke Gudang</label>
               <select value={header.to_warehouse_id} onChange={setHeaderField('to_warehouse_id')}>
-                <option value="">Select warehouse...</option>
+                <option value="">Pilih gudang...</option>
                 {warehouses.filter(w => w.id !== header.from_warehouse_id).map(w => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
             </div>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>Notes <span style={{ color: '#aaa', fontWeight: 400 }}>(optional)</span></label>
-              <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Reason for transfer..." />
+              <label>Catatan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+              <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Alasan transfer..." />
             </div>
           </div>
 
@@ -146,9 +146,9 @@ export default function StockTransfers() {
             <table className="invoice-items-table">
               <thead>
                 <tr>
-                  <th>Item</th>
-                  <th>Unit</th>
-                  <th>Quantity</th>
+                  <th>Barang</th>
+                  <th>Satuan</th>
+                  <th>Jumlah</th>
                   <th></th>
                 </tr>
               </thead>
@@ -173,7 +173,7 @@ export default function StockTransfers() {
                           disabled={!header.from_warehouse_id}
                         >
                           <option value="">
-                            {header.from_warehouse_id ? 'Select item...' : 'Select source warehouse first'}
+                            {header.from_warehouse_id ? 'Pilih barang...' : 'Pilih gudang asal terlebih dahulu'}
                           </option>
                           {availableItems.map(it => (
                             <option key={it.id} value={it.id}>{it.name}</option>
@@ -208,7 +208,7 @@ export default function StockTransfers() {
                         />
                         {available !== null && (
                           <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
-                            Available: {available.toLocaleString('id-ID')}
+                            Tersedia: {available.toLocaleString('id-ID')}
                           </div>
                         )}
                       </td>
@@ -226,10 +226,10 @@ export default function StockTransfers() {
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem' }}>
             <button type="button" onClick={addRow} className="btn btn-secondary" disabled={!header.from_warehouse_id}>
-              + Add Row
+              + Tambah Baris
             </button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Transferring...' : 'Transfer Stock'}
+              {loading ? 'Memproses...' : 'Transfer Stok'}
             </button>
           </div>
         </form>
@@ -237,23 +237,23 @@ export default function StockTransfers() {
 
       <div className="card">
         <div className="card-header">
-          <h2>Transfer History</h2>
+          <h2>Riwayat Transfer</h2>
         </div>
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Item</th>
-              <th>Quantity</th>
-              <th>From</th>
-              <th>To</th>
-              <th>By</th>
-              <th>Notes</th>
+              <th>Waktu</th>
+              <th>Barang</th>
+              <th>Jumlah</th>
+              <th>Dari</th>
+              <th>Ke</th>
+              <th>Oleh</th>
+              <th>Catatan</th>
             </tr>
           </thead>
           <tbody>
             {transfers.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>No transfers yet</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada transfer</td></tr>
             ) : transfers.map(t => (
               <tr key={t.id}>
                 <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmt(t.transferred_at)}</td>

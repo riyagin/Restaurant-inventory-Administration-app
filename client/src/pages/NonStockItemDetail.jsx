@@ -20,8 +20,8 @@ export default function NonStockItemDetail() {
     });
   }, [id]);
 
-  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Loading…</div>;
-  if (!item)   return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Item not found.</div>;
+  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat…</div>;
+  if (!item)   return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Barang tidak ditemukan.</div>;
 
   const totalSpend    = history.reduce((s, r) => s + Number(r.line_total), 0);
   const totalQtyMap   = {};
@@ -38,21 +38,21 @@ export default function NonStockItemDetail() {
           <div style={{ fontSize: '0.85rem', color: '#888' }}>
             {item.code} &nbsp;·&nbsp;
             <span style={{ background: '#fff3e0', color: '#f57c00', fontWeight: 600, fontSize: '0.78rem', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
-              Non-Stock Item
+              Non-Stok
             </span>
           </div>
         </div>
-        <Link to="/items" className="btn btn-secondary">← Back to Items</Link>
+        <Link to="/items" className="btn btn-secondary">← Kembali ke Barang</Link>
       </div>
 
       {/* Summary cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <div className="card" style={{ padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Spend</div>
+          <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Total Pengeluaran</div>
           <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#e74c3c' }}>{idr(totalSpend)}</div>
         </div>
         <div className="card" style={{ padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Transactions</div>
+          <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.4rem' }}>Transaksi</div>
           <div style={{ fontSize: '1.3rem', fontWeight: 700 }}>{history.length}</div>
         </div>
         {Object.entries(totalQtyMap).map(([unit, qty]) => (
@@ -64,20 +64,20 @@ export default function NonStockItemDetail() {
       </div>
 
       <div className="card">
-        <div className="card-header"><h2>Purchase &amp; Usage History</h2></div>
+        <div className="card-header"><h2>Riwayat Pembelian &amp; Pemakaian</h2></div>
         {history.length === 0 ? (
-          <p style={{ padding: '1.5rem', color: '#999', textAlign: 'center' }}>No transactions recorded yet.</p>
+          <p style={{ padding: '1.5rem', color: '#999', textAlign: 'center' }}>Belum ada transaksi tercatat.</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Date</th>
+                <th>Tanggal</th>
                 <th>Invoice</th>
-                <th>Branch</th>
-                <th>Division</th>
+                <th>Cabang</th>
+                <th>Divisi</th>
                 <th style={{ textAlign: 'right' }}>Qty</th>
-                <th>Unit</th>
-                <th style={{ textAlign: 'right' }}>Price / Unit</th>
+                <th>Satuan</th>
+                <th style={{ textAlign: 'right' }}>Harga / Satuan</th>
                 <th style={{ textAlign: 'right' }}>Total</th>
                 <th></th>
               </tr>
@@ -94,14 +94,14 @@ export default function NonStockItemDetail() {
                   <td style={{ textAlign: 'right', color: '#555' }}>{idr(row.price)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(row.line_total)}</td>
                   <td>
-                    <Link to={`/invoices/view/${row.invoice_id}`} className="btn btn-secondary btn-sm">View</Link>
+                    <Link to={`/invoices/view/${row.invoice_id}`} className="btn btn-secondary btn-sm">Lihat</Link>
                   </td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Spend:</td>
+                <td colSpan={7} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Pengeluaran:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c' }}>{idr(totalSpend)}</td>
                 <td></td>
               </tr>

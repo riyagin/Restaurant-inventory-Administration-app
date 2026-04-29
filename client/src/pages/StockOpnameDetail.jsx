@@ -15,8 +15,8 @@ export default function StockOpnameDetail() {
     getStockOpnameById(id).then(r => { setOpname(r.data); setLoading(false); });
   }, [id]);
 
-  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Loading…</div>;
-  if (!opname) return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Opname not found.</div>;
+  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat…</div>;
+  if (!opname) return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>Opname tidak ditemukan.</div>;
 
   const totalWaste = opname.items.reduce((s, it) => s + Number(it.waste_value), 0);
 
@@ -29,56 +29,56 @@ export default function StockOpnameDetail() {
             {opname.warehouse_name} &nbsp;·&nbsp; {fmt(opname.performed_at)}
           </div>
         </div>
-        <Link to="/stock-opname" className="btn btn-secondary">← Back</Link>
+        <Link to="/stock-opname" className="btn btn-secondary">← Kembali</Link>
       </div>
 
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.5rem', padding: '0.5rem 0 1rem' }}>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Warehouse</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Gudang</div>
             <span className="badge">{opname.warehouse_name}</span>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Person in Charge</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Penanggung Jawab</div>
             <div style={{ fontWeight: 500 }}>{opname.pic_name ?? <span style={{color:'#aaa',fontStyle:'italic'}}>—</span>}</div>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Executor</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Pelaksana</div>
             <div style={{ fontWeight: 500 }}>{opname.operator_name ?? <span style={{color:'#aaa',fontStyle:'italic'}}>—</span>}</div>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Recorded By</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Dicatat Oleh</div>
             <div style={{ fontWeight: 500 }}>{opname.performed_by_name ?? '—'}</div>
           </div>
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Items Adjusted</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Barang Disesuaikan</div>
             <span className="badge">{opname.items.length}</span>
           </div>
           {totalWaste > 0 && (
             <div>
-              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Total Waste</div>
+              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Total Susut</div>
               <div style={{ fontWeight: 700, color: '#e74c3c' }}>{idr(totalWaste)}</div>
             </div>
           )}
           <div>
-            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Notes</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Catatan</div>
             <div style={{ color: opname.notes ? '#333' : '#aaa', fontStyle: opname.notes ? 'normal' : 'italic' }}>{opname.notes ?? '—'}</div>
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div className="card-header"><h2>{opname.items.length} item{opname.items.length !== 1 ? 's' : ''} adjusted</h2></div>
+        <div className="card-header"><h2>{opname.items.length} barang disesuaikan</h2></div>
         <table>
           <thead>
             <tr>
-              <th>Item</th>
-              <th>Code</th>
-              <th>Unit</th>
-              <th style={{ textAlign: 'right' }}>Recorded</th>
-              <th style={{ textAlign: 'right' }}>Actual</th>
-              <th style={{ textAlign: 'right' }}>Difference</th>
-              <th style={{ textAlign: 'right' }}>Waste Value</th>
+              <th>Barang</th>
+              <th>Kode</th>
+              <th>Satuan</th>
+              <th style={{ textAlign: 'right' }}>Tercatat</th>
+              <th style={{ textAlign: 'right' }}>Aktual</th>
+              <th style={{ textAlign: 'right' }}>Selisih</th>
+              <th style={{ textAlign: 'right' }}>Nilai Susut</th>
             </tr>
           </thead>
           <tbody>
@@ -104,7 +104,7 @@ export default function StockOpnameDetail() {
           {totalWaste > 0 && (
             <tfoot>
               <tr>
-                <td colSpan={6} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Waste:</td>
+                <td colSpan={6} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Susut:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c' }}>{idr(totalWaste)}</td>
               </tr>
             </tfoot>

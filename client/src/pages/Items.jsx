@@ -33,16 +33,20 @@ export default function Items() {
   useEffect(() => { load(); }, [load]);
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this item? All inventory records for it will also be removed.')) return;
-    await deleteItem(id);
-    load();
+    if (!confirm('Yakin hapus barang ini? Semua catatan inventaris terkait juga akan dihapus.')) return;
+    try {
+      await deleteItem(id);
+      load();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Gagal menghapus barang.');
+    }
   };
 
   return (
     <>
       <div className="page-header">
-        <h1>Items</h1>
-        <Link to="/items/new" className="btn btn-primary">+ Add Item</Link>
+        <h1>Barang</h1>
+        <Link to="/items/new" className="btn btn-primary">+ Tambah Barang</Link>
       </div>
 
       <div className="card">
@@ -50,14 +54,14 @@ export default function Items() {
           <h2>{items.length} item{items.length !== 1 ? 's' : ''}</h2>
           <div className="filters">
             <input
-              placeholder="Search name or code..."
+              placeholder="Cari nama atau kode..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
             <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
-              <option value="">All Types</option>
-              <option value="true">Stock Items</option>
-              <option value="false">Non-Stock Items</option>
+              <option value="">Semua Tipe</option>
+              <option value="true">Barang Stok</option>
+              <option value="false">Barang Non-Stok</option>
             </select>
           </div>
         </div>
@@ -65,16 +69,16 @@ export default function Items() {
         <table>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Code</th>
-              <th>Type</th>
-              <th>Units</th>
+              <th>Nama</th>
+              <th>Kode</th>
+              <th>Tipe</th>
+              <th>Satuan</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
-              <tr><td colSpan={5} style={{textAlign:'center',color:'#999',padding:'2rem'}}>No items found</td></tr>
+              <tr><td colSpan={5} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Tidak ada data</td></tr>
             ) : items.map(item => (
               <tr key={item.id}>
                 <td style={{fontWeight: 500}}>
@@ -85,19 +89,19 @@ export default function Items() {
                 <td style={{color:'#888',fontSize:'0.85rem'}}>{item.code}</td>
                 <td>
                   {item.is_stock === false ? (
-                    <span className="badge" style={{background:'#fff3e0',color:'#f57c00'}}>Non-Stock</span>
+                    <span className="badge" style={{background:'#fff3e0',color:'#f57c00'}}>Non-Stok</span>
                   ) : (
-                    <span className="badge" style={{background:'#e8f5e9',color:'#388e3c'}}>Stock</span>
+                    <span className="badge" style={{background:'#e8f5e9',color:'#388e3c'}}>Stok</span>
                   )}
                 </td>
                 <td><UnitChain units={item.units} /></td>
                 <td>
                   <div className="actions">
                     {item.is_stock === false && (
-                      <Link to={`/items/history/${item.id}`} className="btn btn-secondary btn-sm">History</Link>
+                      <Link to={`/items/history/${item.id}`} className="btn btn-secondary btn-sm">Riwayat</Link>
                     )}
                     <Link to={`/items/edit/${item.id}`} className="btn btn-secondary btn-sm">Edit</Link>
-                    <button onClick={() => handleDelete(item.id)} className="btn btn-danger btn-sm">Delete</button>
+                    <button onClick={() => handleDelete(item.id)} className="btn btn-danger btn-sm">Hapus</button>
                   </div>
                 </td>
               </tr>

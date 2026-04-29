@@ -8,19 +8,63 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let isRefreshing = false;
+let refreshQueue = [];
+
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
-    if (err.response?.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+  async (err) => {
+    const original = err.config;
+    if (err.response?.status === 401 && !original._retry) {
+      // Don't try to refresh if the failing request was itself a refresh/logout
+      if (original.url?.includes('/auth/')) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+        return Promise.reject(err);
+      }
+
+      if (isRefreshing) {
+        // Queue this request to retry once refresh completes
+        return new Promise((resolve, reject) => {
+          refreshQueue.push({ resolve, reject });
+        }).then(token => {
+          original.headers.Authorization = `Bearer ${token}`;
+          return api(original);
+        });
+      }
+
+      original._retry = true;
+      isRefreshing = true;
+
+      try {
+        const res = await api.post('/auth/refresh');
+        const { token, user } = res.data;
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        api.defaults.headers.common.Authorization = `Bearer ${token}`;
+        refreshQueue.forEach(q => q.resolve(token));
+        refreshQueue = [];
+        original.headers.Authorization = `Bearer ${token}`;
+        return api(original);
+      } catch {
+        refreshQueue.forEach(q => q.reject(err));
+        refreshQueue = [];
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+        return Promise.reject(err);
+      } finally {
+        isRefreshing = false;
+      }
     }
     return Promise.reject(err);
   }
 );
 
-export const login = (data) => api.post('/auth/login', data);
+export const login   = (data) => api.post('/auth/login', data);
+export const logout  = ()     => api.post('/auth/logout');
+export const refresh = ()     => api.post('/auth/refresh');
 
 export const getUsers = () => api.get('/users');
 export const createUser = (data) => api.post('/users', data);
@@ -50,6 +94,7 @@ export const getVendors = () => api.get('/vendors');
 export const createVendor = (data) => api.post('/vendors', data);
 export const updateVendor = (id, data) => api.put(`/vendors/${id}`, data);
 export const deleteVendor = (id) => api.delete(`/vendors/${id}`);
+export const getVendorHistory = (id) => api.get(`/vendors/${id}/history`);
 
 export const getAccounts = () => api.get('/accounts');
 export const createAccount = (data) => api.post('/accounts', data);
@@ -73,6 +118,7 @@ export const uploadInvoicePhoto = (id, file) => {
   return api.post(`/invoices/${id}/photo`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 export const deleteInvoicePhoto = (id) => api.delete(`/invoices/${id}/photo`);
+export const payInvoice = (id, data) => api.post(`/invoices/${id}/pay`, data);
 
 export const getStockTransfers = () => api.get('/stock-transfers');
 export const getStockTransferGroup = (id) => api.get(`/stock-transfers/group/${id}`);
@@ -88,6 +134,10 @@ export const createDivision = (data) => api.post('/divisions', data);
 export const updateDivision = (id, data) => api.put(`/divisions/${id}`, data);
 export const deleteDivision = (id) => api.delete(`/divisions/${id}`);
 
+export const getDivisionCategories = (params) => api.get('/division-categories', { params });
+export const createDivisionCategory = (data) => api.post('/division-categories', data);
+export const deleteDivisionCategory = (id) => api.delete(`/division-categories/${id}`);
+
 export const getDispatches = () => api.get('/dispatches');
 export const getDispatch = (id) => api.get(`/dispatches/${id}`);
 export const createDispatch = (data) => api.post('/dispatches', data);
@@ -96,7 +146,22 @@ export const getSales = (params) => api.get('/sales', { params });
 export const createSale = (data) => api.post('/sales', data);
 export const deleteSale = (id) => api.delete(`/sales/${id}`);
 
-export const getActivityLog = () => api.get('/activity-log');
+export const parsePosXlsx    = (formData) => api.post('/pos-import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const confirmPosImport = (data) => api.post('/pos-import/confirm', data);
+export const getPosImports    = () => api.get('/pos-import');
+
+export const getRecipes = () => api.get('/recipes');
+export const getRecipe = (id) => api.get(`/recipes/${id}`);
+export const createRecipe = (data) => api.post('/recipes', data);
+export const updateRecipe = (id, data) => api.put(`/recipes/${id}`, data);
+export const deleteRecipe = (id) => api.delete(`/recipes/${id}`);
+
+export const getProductions = () => api.get('/productions');
+export const createProduction = (data) => api.post('/productions', data);
+
+export const getActivityLog = (params) => api.get('/activity-log', { params });
+export const exportActivityLog = (params) => api.get('/activity-log/export', { params, responseType: 'blob' });
+export const deleteActivityLog = (before_date) => api.delete('/activity-log', { data: { before_date } });
 
 export const getStats = () => api.get('/stats');
 
@@ -104,3 +169,7 @@ export const getExpenseReport = (params) => api.get('/expense-report', { params 
 
 export const getInventoryValueReport = (params) => api.get('/reports/inventory-value', { params });
 export const getExpenseSummaryReport  = (params) => api.get('/reports/expense-summary', { params });
+export const getFinancialReport       = (params)  => api.get('/reports/financial', { params });
+
+export const getAccountAdjustments    = (params) => api.get('/account-adjustments', { params });
+export const createAccountAdjustment  = (data)   => api.post('/account-adjustments', data);
