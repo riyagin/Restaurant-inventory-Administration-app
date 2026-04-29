@@ -185,12 +185,20 @@ app.post('/api/users', requireAdmin, async (req, res) => {
 });
 
 app.put('/api/users/:id', requireAdmin, async (req, res) => {
-  const { username, password, role } = req.body;
+  const { username, password, old_password, role } = req.body;
   const fields = [];
   const vals = [];
   if (username) { fields.push(`username=$${fields.length+1}`); vals.push(username); }
   if (role)     { fields.push(`role=$${fields.length+1}`);     vals.push(role); }
-  if (password) { fields.push(`password_hash=$${fields.length+1}`); vals.push(await bcrypt.hash(password, 10)); }
+  if (password) {
+    if (!old_password) return res.status(400).json({ error: 'Password lama wajib diisi untuk mengubah password' });
+    const { rows: [u] } = await pool.query('SELECT password_hash FROM users WHERE id=$1', [req.params.id]);
+    if (!u) return res.status(404).json({ error: 'Not found' });
+    const match = await bcrypt.compare(old_password, u.password_hash);
+    if (!match) return res.status(400).json({ error: 'Password lama tidak sesuai' });
+    fields.push(`password_hash=$${fields.length+1}`);
+    vals.push(await bcrypt.hash(password, 10));
+  }
   if (!fields.length) return res.status(400).json({ error: 'Nothing to update' });
   vals.push(req.params.id);
   try {

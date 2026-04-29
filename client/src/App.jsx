@@ -32,6 +32,7 @@ import SalesImport from './pages/SalesImport';
 import FinancialReport from './pages/FinancialReport';
 import AccountAdjustments from './pages/AccountAdjustments';
 import VendorHistory from './pages/VendorHistory';
+import Profile from './pages/Profile';
 import './App.css';
 
 function getUser() {
@@ -152,7 +153,9 @@ function Nav() {
 
       {user && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.55)' }}>{user.username}</span>
+          <Link to="/profile" style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.75)', textDecoration: 'none' }}>
+            {user.username}
+          </Link>
           <button onClick={logout} className="btn btn-secondary btn-sm">Keluar</button>
         </div>
       )}
@@ -212,6 +215,7 @@ export default function App() {
                 <Route path="/branches" element={<RequireAdmin><Branches /></RequireAdmin>} />
                 <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
                 <Route path="/activity" element={<RequireAdmin><ActivityLog /></RequireAdmin>} />
+                <Route path="/profile" element={<Profile />} />
               </Routes>
             </Layout>
           </RequireAuth>
