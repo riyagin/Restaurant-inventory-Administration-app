@@ -8,11 +8,83 @@ const idr = (v) =>
 
 const fmt = (d) => d ? new Date(d).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 
+// Group inventory lots by item+unit, ordered oldest-first within each group (FIFO)
+function groupInventory(inventory) {
+  const map = new Map();
+  // inventory comes newest-first from API; reverse to oldest-first for FIFO
+  const sorted = [...inventory].reverse();
+  for (const rec of sorted) {
+    const key = `${rec.item_id}__${rec.unit_index}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        item_id: rec.item_id,
+        item_name: rec.item_name,
+        item_code: rec.item_code,
+        unit_name: rec.unit_name,
+        unit_index: rec.unit_index,
+        totalQty: 0,
+        totalValue: 0,
+        lots: [],   // oldest first
+      });
+    }
+    const g = map.get(key);
+    g.totalQty   += Number(rec.quantity);
+    g.totalValue += Number(rec.value);
+    g.lots.push(rec);
+  }
+  return Array.from(map.values()).sort((a, b) => a.item_name.localeCompare(b.item_name));
+}
+
+// Distribute actualQty across lots FIFO (oldest first).
+// Returns array of { inventory_id, item_id, unit_index, actual_quantity }
+function fifoDistribute(group, actualQty) {
+  const result = [];
+  let remaining = actualQty;
+  for (const lot of group.lots) {  // oldest first
+    const lotQty = Number(lot.quantity);
+    if (remaining <= 0) {
+      // This entire lot is consumed — set to 0 (backend will delete)
+      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: 0 });
+    } else if (remaining >= lotQty) {
+      // Lot fully remains unchanged or partially consumed
+      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: lotQty });
+      remaining -= lotQty;
+    } else {
+      // Lot partially consumed
+      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: remaining });
+      remaining = 0;
+    }
+  }
+  return result;
+}
+
+// Compute waste value for a group given an actual qty (FIFO deduction from oldest lots)
+function computeGroupWaste(group, actualQty) {
+  let waste = 0;
+  let remaining = actualQty;
+  for (const lot of group.lots) {
+    const lotQty = Number(lot.quantity);
+    const lotVal = Number(lot.value);
+    if (remaining <= 0) {
+      waste += lotVal;
+    } else if (remaining >= lotQty) {
+      remaining -= lotQty;
+    } else {
+      const used = remaining;
+      remaining = 0;
+      const consumed = lotQty - used;
+      waste += Math.round(lotVal * consumed / lotQty);
+    }
+  }
+  return waste;
+}
+
 export default function StockOpname() {
   const [warehouses, setWarehouses]   = useState([]);
   const [warehouseId, setWarehouseId] = useState('');
   const [inventory, setInventory]     = useState([]);
-  const [actuals, setActuals]         = useState({});   // inventory_id → actual qty string
+  const [actuals, setActuals]         = useState({});   // groupKey → actual qty string
   const [notes, setNotes]             = useState('');
   const [operatorName, setOperatorName] = useState('');
   const [picName, setPicName]         = useState('');
@@ -20,6 +92,8 @@ export default function StockOpname() {
   const [expandedId, setExpandedId]   = useState(null);
   const [error, setError]             = useState('');
   const [loading, setLoading]         = useState(false);
+
+  const groups = groupInventory(inventory);
 
   useEffect(() => {
     getWarehouses().then(r => setWarehouses(r.data));
@@ -35,24 +109,23 @@ export default function StockOpname() {
     else setInventory([]);
   };
 
-  const setActual = (id, val) => setActuals(a => ({ ...a, [id]: val }));
+  const setActual = (key, val) => setActuals(a => ({ ...a, [key]: val }));
 
-  const diff = (rec) => {
-    const actual = actuals[rec.id];
+  const diff = (group) => {
+    const actual = actuals[group.key];
     if (actual === '' || actual === undefined) return null;
-    return Number(actual) - Number(rec.quantity);
+    return Number(actual) - group.totalQty;
   };
 
-  const hasChanges = inventory.some(rec => {
-    const d = diff(rec);
+  const hasChanges = groups.some(g => {
+    const d = diff(g);
     return d !== null && d !== 0;
   });
 
-  const totalWaste = inventory.reduce((sum, rec) => {
-    const d = diff(rec);
+  const totalWaste = groups.reduce((sum, g) => {
+    const d = diff(g);
     if (d === null || d >= 0) return sum;
-    const wasteVal = Math.round(Math.abs(Number(rec.value)) * Math.abs(d) / Number(rec.quantity));
-    return sum + wasteVal;
+    return sum + computeGroupWaste(g, Number(actuals[g.key]));
   }, 0);
 
   const downloadTemplate = () => {
@@ -61,7 +134,7 @@ export default function StockOpname() {
 
     // Columns: No. | Item Name | Unit | Actual Qty
     const headerRow  = ['No.', 'Item Name', 'Unit', 'Actual Qty'];
-    const dataRows   = inventory.map((rec, i) => [i + 1, rec.item_name, rec.unit_name, '']);
+    const dataRows   = groups.map((g, i) => [i + 1, g.item_name, g.unit_name, '']);
 
     const aoa = [
       [`Stock Opname — ${warehouseName}`],
@@ -127,17 +200,20 @@ export default function StockOpname() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    const changedItems = inventory
-      .filter(rec => {
-        const d = diff(rec);
+    // For each group with a change, distribute the actual qty FIFO across its lots
+    const changedItems = groups
+      .filter(g => {
+        const d = diff(g);
         return d !== null && d !== 0;
       })
-      .map(rec => ({
-        inventory_id: rec.id,
-        item_id: rec.item_id,
-        unit_index: rec.unit_index,
-        actual_quantity: Number(actuals[rec.id]),
-      }));
+      .flatMap(g => {
+        const actualQty = Number(actuals[g.key]);
+        const distributed = fifoDistribute(g, actualQty);
+        return distributed.filter(d => {
+          const originalLot = g.lots.find(l => l.id === d.inventory_id);
+          return originalLot && d.actual_quantity !== Number(originalLot.quantity);
+        });
+      });
 
     if (!changedItems.length) { setError('Tidak ada perubahan — semua aktual sesuai dengan catatan.'); return; }
 
@@ -183,7 +259,7 @@ export default function StockOpname() {
 
         {!warehouseId ? (
           <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Pilih gudang untuk memulai stock opname.</p>
-        ) : inventory.length === 0 ? (
+        ) : groups.length === 0 ? (
           <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Tidak ada catatan inventaris di gudang ini.</p>
         ) : (
           <form onSubmit={handleSubmit}>
@@ -203,29 +279,29 @@ export default function StockOpname() {
                 </tr>
               </thead>
               <tbody>
-                {inventory.map(rec => {
-                  const d = diff(rec);
-                  const hasInput = actuals[rec.id] !== undefined && actuals[rec.id] !== '';
+                {groups.map(g => {
+                  const d = diff(g);
+                  const hasInput = actuals[g.key] !== undefined && actuals[g.key] !== '';
                   const wasteVal = (hasInput && d !== null && d < 0)
-                    ? Math.round(Math.abs(Number(rec.value)) * Math.abs(d) / Number(rec.quantity))
+                    ? computeGroupWaste(g, Number(actuals[g.key]))
                     : 0;
                   return (
-                    <tr key={rec.id}>
-                      <td style={{ fontWeight: 500 }}>{rec.item_name}</td>
-                      <td style={{ color: '#aaa', fontSize: '0.82rem' }}>{rec.item_code}</td>
-                      <td style={{ color: '#555' }}>{rec.unit_name}</td>
+                    <tr key={g.key}>
+                      <td style={{ fontWeight: 500 }}>{g.item_name}</td>
+                      <td style={{ color: '#aaa', fontSize: '0.82rem' }}>{g.item_code}</td>
+                      <td style={{ color: '#555' }}>{g.unit_name}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                        {Number(rec.quantity).toLocaleString('id-ID')}
+                        {g.totalQty.toLocaleString('id-ID')}
                       </td>
-                      <td style={{ textAlign: 'right', color: '#666' }}>{idr(rec.value)}</td>
+                      <td style={{ textAlign: 'right', color: '#666' }}>{idr(g.totalValue)}</td>
                       <td style={{ textAlign: 'center', width: '120px' }}>
                         <input
                           type="number"
                           min="0"
                           step="any"
-                          value={actuals[rec.id] ?? ''}
-                          onChange={e => setActual(rec.id, e.target.value)}
-                          placeholder={Number(rec.quantity).toLocaleString('id-ID')}
+                          value={actuals[g.key] ?? ''}
+                          onChange={e => setActual(g.key, e.target.value)}
+                          placeholder={g.totalQty.toLocaleString('id-ID')}
                           style={{ width: '100%', padding: '0.35rem 0.5rem', border: '1px solid #ddd', borderRadius: '5px', fontSize: '0.9rem', textAlign: 'right' }}
                         />
                       </td>
