@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ' *)",
+      "Read(//c/Users/USER/Documents/AA/Data penjualan 8-12 mei/**)"
+    ]
+  }
+}

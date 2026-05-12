@@ -90,21 +90,25 @@ export default function SalesImport() {
     });
     setRevMappings(updatedRevMappings);
 
-    // Build per-division discount rows from updated revenue mappings
+    // Build cat name → disc amount map from the parsed source of truth
+    const catDiscMap = {};
+    (parsed?.categories || []).forEach(c => {
+      catDiscMap[c.name.toLowerCase()] = c.disc || 0;
+    });
+
+    // Build per-division discount rows
     const discRows = [];
     let totalAssigned = 0;
     branchDivs.forEach((div, i) => {
       const catNamesSet = new Set(catResults[i].data.map(c => c.name.toLowerCase()));
-      const divDiscAmount = updatedRevMappings
-        .filter(m => catNamesSet.has(m.label.toLowerCase()))
-        .reduce((s, m) => s + m.disc, 0);
+      const divDiscAmount = Math.round([...catNamesSet].reduce((s, name) => s + (catDiscMap[name] || 0), 0));
       if (divDiscAmount > 0) {
         discRows.push({ division_id: div.id, label: div.name, amount: divDiscAmount, account_id: div.discount_account_id || '' });
         totalAssigned += divDiscAmount;
       }
     });
 
-    const unassigned = (parsed?.totalDisc || 0) - totalAssigned;
+    const unassigned = Math.round((parsed?.totalDisc || 0)) - totalAssigned;
     const finalDiscRows = [];
     if (unassigned > 0) {
       finalDiscRows.push({ division_id: null, label: 'Diskon (tidak terpetakan)', amount: unassigned, account_id: '' });
