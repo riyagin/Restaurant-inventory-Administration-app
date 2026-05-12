@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getAccounts, getBranches, getDivisions, getDivisionCategories, parsePosXlsx, confirmPosImport, getPosImports } from '../api';
+import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -271,7 +272,6 @@ export default function SalesImport() {
 
   const handleSubmit = async () => {
     setError('');
-    if (!balanced) { setError('Total pendapatan (net) harus sama dengan kas + biaya tambahan'); return; }
     if (revMappings.some(m => !m.account_id))   { setError('Pilih akun pendapatan untuk semua kategori'); return; }
     if (cashMappings.some(m => !m.account_id))  { setError('Pilih akun kas untuk semua metode pembayaran'); return; }
     if (discMappings.some(m => !m.account_id))  { setError('Pilih akun pendapatan untuk semua baris diskon'); return; }
@@ -450,11 +450,10 @@ export default function SalesImport() {
                       {m.disc > 0 ? `-${idr(m.disc)}` : '—'}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <input
-                        type="number"
+                      <CurrencyInput
                         value={m.amount}
                         onChange={e => updateCash(i, 'amount', e.target.value)}
-                        style={{ width: '110px', textAlign: 'right', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
+                        style={{ width: '110px', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
                       />
                     </td>
                     <td>
@@ -540,8 +539,7 @@ export default function SalesImport() {
                           {posAmt > 0 ? idr(posAmt) : <span style={{ color: '#ccc' }}>—</span>}
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          <input
-                            type="number"
+                          <CurrencyInput
                             value={cm.real_amount}
                             onChange={e => updateCommission(i, 'real_amount', e.target.value)}
                             disabled={cm.applied_commission != null}
@@ -641,11 +639,10 @@ export default function SalesImport() {
                         </td>
                       )}
                       <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                        <input
-                          type="number"
+                        <CurrencyInput
                           value={m.amount}
                           onChange={e => updateRev(i, 'amount', e.target.value)}
-                          style={{ width: '110px', textAlign: 'right', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
+                          style={{ width: '110px', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
                         />
                       </td>
                       <td onClick={e => e.stopPropagation()}>
@@ -796,11 +793,10 @@ export default function SalesImport() {
                         )}
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <input
-                          type="number"
+                        <CurrencyInput
                           value={m.amount}
                           onChange={e => updateDisc(i, 'amount', e.target.value)}
-                          style={{ width: '110px', textAlign: 'right', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
+                          style={{ width: '110px', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
                         />
                       </td>
                       <td>
@@ -852,11 +848,10 @@ export default function SalesImport() {
                     <tr key={i}>
                       <td style={{ fontWeight: 500, fontSize: '0.88rem' }}>{m.label}</td>
                       <td style={{ textAlign: 'right' }}>
-                        <input
-                          type="number"
+                        <CurrencyInput
                           value={m.amount}
                           onChange={e => updateBiaya(i, 'amount', e.target.value)}
-                          style={{ width: '110px', textAlign: 'right', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
+                          style={{ width: '110px', padding: '0.25rem 0.4rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.88rem' }}
                         />
                       </td>
                       <td>
@@ -951,7 +946,7 @@ export default function SalesImport() {
               {error && <div style={{ color: '#e74c3c', fontWeight: 500, fontSize: '0.88rem' }}>{error}</div>}
               <button
                 onClick={handleSubmit}
-                disabled={submitting || !balanced}
+                disabled={submitting}
                 className="btn btn-primary"
                 style={{ marginLeft: 'auto' }}
               >

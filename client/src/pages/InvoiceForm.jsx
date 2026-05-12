@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice } from '../api';
+import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -8,7 +9,7 @@ const idr = (v) =>
 const today = new Date().toISOString().split('T')[0];
 
 const emptyPurchaseRow = () => ({ item_id: '', quantity: '', unit_index: '0', price: '' });
-const emptyExpenseRow  = () => ({ item_id: '', quantity: '', unit_index: '0', price: '' });
+const emptyExpenseRow  = () => ({ item_id: '', description: '', quantity: '', unit_index: '0', price: '', useDescription: false });
 
 const emptyHeader = { date: today, due_date: '', warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', vendor_id: '', reference_number: '' };
 
@@ -62,15 +63,18 @@ export default function InvoiceForm() {
         if (type === 'expense') {
           setRows(inv.items.map(i => i.item_id ? ({
             item_id: i.item_id,
+            description: '',
             quantity: String(i.quantity),
             unit_index: String(i.unit_index ?? 0),
             price: String(i.price),
+            useDescription: false,
           }) : ({
             item_id: '',
             description: i.description ?? '',
             quantity: String(i.quantity),
             unit_index: '0',
             price: String(i.price),
+            useDescription: true,
           })));
         } else {
           setRows(inv.items.map(i => ({
@@ -158,6 +162,17 @@ export default function InvoiceForm() {
     }));
   };
 
+  const toggleExpenseRowMode = (index, useDescription) => {
+    setRows(rs => rs.map((r, i) => i !== index ? r : {
+      ...r,
+      useDescription,
+      item_id: '',
+      description: '',
+      unit_index: '0',
+      price: '',
+    }));
+  };
+
   const addRow = () => setRows(rs => [...rs, invoiceType === 'expense' ? emptyExpenseRow() : emptyPurchaseRow()]);
   const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index));
 
@@ -181,7 +196,11 @@ export default function InvoiceForm() {
       }
     } else {
       for (const [i, row] of rows.entries()) {
-        if (!row.item_id && !row.description) {
+        if (row.useDescription && !row.description?.trim()) {
+          setError(`Baris ${i + 1}: nama item wajib diisi`);
+          return;
+        }
+        if (!row.useDescription && !row.item_id) {
           setError(`Baris ${i + 1}: item harus dipilih`);
           return;
         }
@@ -205,9 +224,9 @@ export default function InvoiceForm() {
       reference_number: header.reference_number || null,
       due_date: header.payment_status === 'paid' ? header.date : (header.due_date || null),
       items: invoiceType === 'expense'
-        ? rows.map(r => r.item_id
-            ? { item_id: r.item_id, unit_index: Number(r.unit_index), quantity: Number(r.quantity), price: Number(r.price) }
-            : { description: r.description, quantity: Number(r.quantity), price: Number(r.price) })
+        ? rows.map(r => r.useDescription
+            ? { description: r.description.trim(), quantity: Number(r.quantity), price: Number(r.price) }
+            : { item_id: r.item_id, unit_index: Number(r.unit_index), quantity: Number(r.quantity), price: Number(r.price) })
         : rows.map(r => ({ item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index), price: Number(r.price), vendor_id: header.vendor_id || null })),
     };
 
@@ -381,11 +400,40 @@ export default function InvoiceForm() {
             </thead>
             <tbody>
               {rows.map((row, i) => invoiceType === 'expense' ? (
-                <tr key={i}>
-                  <td style={{ minWidth: '200px' }}>
-                    {row.description && !row.item_id ? (
-                      /* legacy row from dispatch-auto-generated invoice */
-                      <input value={row.description} onChange={setExpenseRow(i, 'description')} style={{ width: '100%', color: '#888' }} />
+                <tr key={i} style={{ verticalAlign: 'top' }}>
+                  <td style={{ minWidth: '220px', paddingTop: '0.3rem' }}>
+                    <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.3rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpenseRowMode(i, false)}
+                        style={{
+                          fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
+                          border: !row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
+                          background: !row.useDescription ? '#e8f0fe' : '#f5f5f5',
+                          color: !row.useDescription ? '#4f8ef7' : '#888',
+                          fontWeight: 600,
+                        }}
+                      >Daftar</button>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpenseRowMode(i, true)}
+                        style={{
+                          fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
+                          border: row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
+                          background: row.useDescription ? '#e8f0fe' : '#f5f5f5',
+                          color: row.useDescription ? '#4f8ef7' : '#888',
+                          fontWeight: 600,
+                        }}
+                      >Manual</button>
+                    </div>
+                    {row.useDescription ? (
+                      <input
+                        value={row.description}
+                        onChange={setExpenseRow(i, 'description')}
+                        placeholder="Nama item..."
+                        style={{ width: '100%' }}
+                        required
+                      />
                     ) : (
                       <select value={row.item_id} onChange={setExpenseRow(i, 'item_id')} required style={{ width: '100%' }}>
                         <option value="">Pilih item...</option>
@@ -393,12 +441,14 @@ export default function InvoiceForm() {
                       </select>
                     )}
                   </td>
-                  <td style={{ minWidth: '80px' }}>
+                  <td style={{ minWidth: '80px', paddingTop: '0.3rem' }}>
+                    <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
                     <input type="number" min="0" step="any" value={row.quantity} onChange={setExpenseRow(i, 'quantity')} required placeholder="0" style={{ width: '100%' }} />
                   </td>
-                  <td style={{ minWidth: '100px' }}>
+                  <td style={{ minWidth: '100px', paddingTop: '0.3rem' }}>
+                    <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
                     {(() => {
-                      const selectedItem = nonStockItems.find(it => it.id === row.item_id);
+                      const selectedItem = !row.useDescription ? nonStockItems.find(it => it.id === row.item_id) : null;
                       return (
                         <select value={row.unit_index} onChange={setExpenseRow(i, 'unit_index')} disabled={!selectedItem} style={{ width: '100%' }}>
                           {selectedItem
@@ -408,13 +458,14 @@ export default function InvoiceForm() {
                       );
                     })()}
                   </td>
-                  <td style={{ minWidth: '140px' }}>
+                  <td style={{ minWidth: '140px', paddingTop: '0.3rem' }}>
+                    <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
                     {(() => {
                       const key = `${row.item_id}:${row.unit_index}`;
-                      const lp = row.item_id ? lastPrices[key] : undefined;
+                      const lp = !row.useDescription && row.item_id ? lastPrices[key] : undefined;
                       return (
                         <>
-                          <input type="number" min="0" value={row.price} onChange={setExpenseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
+                          <CurrencyInput value={row.price} onChange={setExpenseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
                           {lp != null && (
                             <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.2rem' }}>
                               Harga terakhir: {idr(lp)}
@@ -424,8 +475,14 @@ export default function InvoiceForm() {
                       );
                     })()}
                   </td>
-                  <td style={{ minWidth: '120px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{idr(rowTotal(row))}</td>
-                  <td>{rows.length > 1 && <button type="button" onClick={() => removeRow(i)} className="btn btn-danger btn-sm">✕</button>}</td>
+                  <td style={{ minWidth: '120px', paddingTop: '0.3rem', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
+                    {idr(rowTotal(row))}
+                  </td>
+                  <td style={{ paddingTop: '0.3rem' }}>
+                    <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
+                    {rows.length > 1 && <button type="button" onClick={() => removeRow(i)} className="btn btn-danger btn-sm">✕</button>}
+                  </td>
                 </tr>
               ) : (
                 <tr key={i}>
@@ -456,7 +513,7 @@ export default function InvoiceForm() {
                       const lp = row.item_id ? lastPrices[key] : undefined;
                       return (
                         <>
-                          <input type="number" min="0" value={row.price} onChange={setPurchaseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
+                          <CurrencyInput value={row.price} onChange={setPurchaseRow(i, 'price')} required placeholder="0" style={{ width: '100%' }} />
                           {lp != null && (
                             <div style={{ fontSize: '0.72rem', color: '#888', marginTop: '0.2rem' }}>
                               Harga terakhir: {idr(lp)}

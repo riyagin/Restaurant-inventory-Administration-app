@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { getAccounts, createAccount, updateAccount, deleteAccount } from '../api';
+import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -174,11 +175,10 @@ export default function Accounts() {
         {/* Balance */}
         <td style={{ textAlign: 'right', fontWeight: isParent ? 700 : 500, color: bal < 0 ? '#e74c3c' : bal > 0 ? '#1a1a2e' : '#bbb' }}>
           {isEditing ? (
-            <input
-              type="number"
+            <CurrencyInput
               value={editForm.balance}
               onChange={e => setEditForm(f => ({ ...f, balance: e.target.value }))}
-              style={{ padding: '0.25rem 0.4rem', border: '1px solid #4f8ef7', borderRadius: '4px', fontSize: '0.85rem', width: '130px', textAlign: 'right' }}
+              style={{ padding: '0.25rem 0.4rem', border: '1px solid #4f8ef7', borderRadius: '4px', fontSize: '0.85rem', width: '130px' }}
             />
           ) : bal !== 0 ? idr(bal) : <span style={{ color: '#ddd' }}>—</span>}
         </td>
@@ -482,15 +482,11 @@ export default function Accounts() {
             </div>
             <div className="form-group">
               <label>Saldo Awal (Rp)</label>
-              <input
-                type="number"
+              <CurrencyInput
                 value={form.balance}
                 onChange={e => setForm(f => ({ ...f, balance: e.target.value }))}
                 placeholder="0"
               />
-              {Number(form.balance) !== 0 && (
-                <small style={{ color: '#888', marginTop: '0.25rem', display: 'block' }}>{idr(Number(form.balance))}</small>
-              )}
             </div>
             <button type="submit" className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }}>
               Tambah Akun

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getAccounts, getBranches, getDivisions, getSales, createSale, deleteSale } from '../api';
+import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -188,19 +189,12 @@ export default function Sales() {
             </div>
             <div className="form-group">
               <label>Jumlah (Rp)</label>
-              <input
-                type="number"
-                min="1"
+              <CurrencyInput
                 value={form.amount}
                 onChange={set('amount')}
                 required
                 placeholder="0"
               />
-              {form.amount > 0 && (
-                <small style={{ color: '#888', marginTop: '0.25rem', display: 'block' }}>
-                  {idr(Number(form.amount))}
-                </small>
-              )}
             </div>
             <div className="form-group">
               <label>Cabang <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>

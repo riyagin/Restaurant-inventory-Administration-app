@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { getAccounts, getAccountAdjustments, createAccountAdjustment } from '../api';
+import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -129,8 +130,7 @@ export default function AccountAdjustments() {
                   <option value="+">+ Tambah</option>
                   <option value="-">− Kurangi</option>
                 </select>
-                <input
-                  type="number"
+                <CurrencyInput
                   value={form.amount}
                   onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
                   placeholder="0"
