@@ -2493,9 +2493,6 @@ app.post('/api/pos-import/confirm', async (req, res) => {
   const totalCash     = cash_mappings.reduce((s, m) => s + Number(m.amount), 0);
   const totalDiscount = discount_mappings.reduce((s, m) => s + Number(m.amount), 0);
   const totalExpense  = expense_mappings.reduce((s, m) => s + Number(m.amount), 0);
-  if (totalRevenue !== totalCash + totalExpense) {
-    return res.status(400).json({ error: `Total tidak seimbang: pendapatan ${totalRevenue} ≠ kas ${totalCash} + biaya ${totalExpense}` });
-  }
   for (const m of [...revenue_mappings, ...cash_mappings]) {
     if (!m.account_id) return res.status(400).json({ error: `Akun belum dipilih untuk "${m.label}"` });
     if (!m.amount || Number(m.amount) <= 0) return res.status(400).json({ error: `Jumlah tidak valid untuk "${m.label}"` });
