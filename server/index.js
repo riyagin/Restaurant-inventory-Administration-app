@@ -2512,10 +2512,8 @@ app.post('/api/pos-import/confirm', async (req, res) => {
     for (const m of revenue_mappings) {
       await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
     }
-    // Discount amounts are negative — adding them reduces the revenue account balance
-    for (const m of discount_mappings) {
-      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
-    }
+    // Discounts are informational only — revenue_mappings already use net amounts (gross - disc),
+    // so touching the revenue account again here would double-count the deduction.
     // Debit biaya tambahan expense accounts
     for (const m of expense_mappings) {
       await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
