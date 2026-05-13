@@ -12,9 +12,11 @@ export default function CurrencyInput({ value, onChange, placeholder = '0', styl
       setDisplay('');
       return;
     }
-    const num = Number(String(value).replace(/\./g, '').replace(',', '.'));
+    // value is always a plain JS number or numeric string (dot = decimal separator).
+    // Do NOT strip dots before parsing — they are decimal points, not thousands separators.
+    const num = Number(value);
     if (!isNaN(num)) {
-      setDisplay(num.toLocaleString('id-ID'));
+      setDisplay(Math.round(num).toLocaleString('id-ID'));
     }
   }, [value]);
 
@@ -49,8 +51,8 @@ export default function CurrencyInput({ value, onChange, placeholder = '0', styl
 
   const handleBlur = () => {
     if (value === '' || value === undefined) return;
-    const num = Number(String(value).replace(',', '.'));
-    if (!isNaN(num)) setDisplay(num.toLocaleString('id-ID'));
+    const num = Number(value);
+    if (!isNaN(num)) setDisplay(Math.round(num).toLocaleString('id-ID'));
   };
 
   return (

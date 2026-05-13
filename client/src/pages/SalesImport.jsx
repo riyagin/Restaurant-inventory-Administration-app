@@ -139,19 +139,19 @@ export default function SalesImport() {
       setDescription(`POS Import ${data.date || file.name}`);
 
       setCashMappings(data.payments.map(p => ({
-        label: p.name, gross: p.gross, disc: p.disc, net: p.net,
-        amount: p.net, account_id: '',
+        label: p.name, gross: Math.round(p.gross), disc: Math.round(p.disc), net: Math.round(p.net),
+        amount: Math.round(p.net), account_id: '',
       })));
 
       setRevMappings(data.categories.map(c => ({
-        label: c.name, gross: c.gross, disc: c.disc, net: c.net,
-        amount: c.net, account_id: '',
+        label: c.name, gross: Math.round(c.gross), disc: Math.round(c.disc), net: Math.round(c.net),
+        amount: Math.round(c.net), account_id: '',
         byPayment: c.byPayment || [],
         expanded: false,
       })));
 
-      const totalDisc  = data.totalDisc  || 0;
-      const totalBiaya = data.totalBiaya || 0;
+      const totalDisc  = Math.round(data.totalDisc  || 0);
+      const totalBiaya = Math.round(data.totalBiaya || 0);
       setDiscMappings(totalDisc > 0 ? [{ division_id: null, label: 'Diskon', amount: totalDisc, account_id: '' }] : []);
       setBiayaMappings(totalBiaya > 0 ? [{ label: 'Biaya Tambahan', amount: totalBiaya, account_id: '' }] : []);
       setBiayaRows(data.biayaRows || []);
@@ -216,7 +216,7 @@ export default function SalesImport() {
     // Update cash amounts to real received amounts
     setCashMappings(ms => ms.map(m => {
       const c = commByLabel[m.label];
-      return c ? { ...m, amount: c.realAmt } : m;
+      return c ? { ...m, amount: Math.round(c.realAmt) } : m;
     }));
 
     // Reduce each revenue category by commission proportional to its net contribution per payment.
