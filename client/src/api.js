@@ -171,5 +171,7 @@ export const getInventoryValueReport = (params) => api.get('/reports/inventory-v
 export const getExpenseSummaryReport  = (params) => api.get('/reports/expense-summary', { params });
 export const getFinancialReport       = (params)  => api.get('/reports/financial', { params });
 
+export const getDailyReport           = (params) => api.get('/reports/daily', { params });
 export const getAccountAdjustments    = (params) => api.get('/account-adjustments', { params });
 export const createAccountAdjustment  = (data)   => api.post('/account-adjustments', data);
+export const createAccountTransfer    = (data)   => api.post('/account-adjustments/transfer', data);

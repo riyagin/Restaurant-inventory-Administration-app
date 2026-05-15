@@ -31,6 +31,7 @@ import Productions from './pages/Productions';
 import SalesImport from './pages/SalesImport';
 import FinancialReport from './pages/FinancialReport';
 import AccountAdjustments from './pages/AccountAdjustments';
+import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
 import Profile from './pages/Profile';
 import './App.css';
@@ -129,6 +130,7 @@ function Nav() {
 
         {isAdmin && (
           <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
+            {menuLink('/reports/daily', 'Laporan Harian')}
             {menuLink('/reports/financial', 'Laporan Keuangan')}
             {menuLink('/expense-report', 'Laporan Pengeluaran')}
             {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
@@ -199,6 +201,7 @@ export default function App() {
                 <Route path="/expense-report" element={<RequireAdmin><ExpenseReport /></RequireAdmin>} />
                 <Route path="/reports/inventory-value" element={<RequireAdmin><InventoryValueReport /></RequireAdmin>} />
                 <Route path="/reports/financial" element={<RequireAdmin><FinancialReport /></RequireAdmin>} />
+                <Route path="/reports/daily" element={<RequireAdmin><DailyReport /></RequireAdmin>} />
                 <Route path="/account-adjustments" element={<RequireAdmin><AccountAdjustments /></RequireAdmin>} />
                 <Route path="/transfers" element={<StockTransfers />} />
                 <Route path="/transfers/group/:id" element={<TransferDetail />} />

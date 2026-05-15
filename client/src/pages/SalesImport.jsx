@@ -362,7 +362,13 @@ export default function SalesImport() {
               </div>
               <div>
                 <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Tanggal Transaksi</div>
-                <div style={{ fontWeight: 600 }}>{fmt(parsed.date)}</div>
+                <input
+                  type="date"
+                  value={parsed.date || ''}
+                  onChange={e => setParsed(p => ({ ...p, date: e.target.value }))}
+                  style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 600 }}
+                  required
+                />
               </div>
               <div>
                 <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Total Penjualan Kotor</div>
@@ -941,11 +947,11 @@ export default function SalesImport() {
               <div style={{
                 display: 'flex', alignItems: 'center', gap: '0.5rem',
                 padding: '0.5rem 0.9rem', borderRadius: '6px',
-                background: balanced ? '#e6f9f0' : '#fdecea',
-                color: balanced ? '#1b5e45' : '#c0392b',
+                background: balanced ? '#e6f9f0' : '#fff8e1',
+                color: balanced ? '#1b5e45' : '#b45309',
                 fontWeight: 600, fontSize: '0.9rem',
               }}>
-                {balanced ? '✓ Seimbang' : '✗ Tidak seimbang'}
+                {balanced ? '✓ Seimbang' : '⚠ Tidak seimbang'}
               </div>
               {error && <div style={{ color: '#e74c3c', fontWeight: 500, fontSize: '0.88rem' }}>{error}</div>}
               <button

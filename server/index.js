@@ -648,6 +648,9 @@ pool.query(`
   );
   CREATE INDEX IF NOT EXISTS account_adjustments_account_idx ON account_adjustments (account_id);
   CREATE INDEX IF NOT EXISTS account_adjustments_created_idx ON account_adjustments (created_at DESC);
+`)).then(() => pool.query(`
+  ALTER TABLE account_adjustments ADD COLUMN IF NOT EXISTS transfer_id UUID;
+  ALTER TABLE account_adjustments ADD COLUMN IF NOT EXISTS transfer_counterpart_id UUID REFERENCES accounts(id);
 `)).then(() => seedCoa())
 .catch(e => console.error('Migration error:', e.message));
 
@@ -2655,9 +2658,11 @@ app.get('/api/account-adjustments', async (req, res) => {
   let where = '';
   if (account_id) { params.push(account_id); where = 'WHERE aj.account_id = $1'; }
   const { rows } = await pool.query(
-    `SELECT aj.*, a.name AS account_name, a.account_number, a.account_type
+    `SELECT aj.*, a.name AS account_name, a.account_number, a.account_type,
+            ca.name AS counterpart_name, ca.account_number AS counterpart_number, ca.account_type AS counterpart_type
      FROM account_adjustments aj
      JOIN accounts a ON a.id = aj.account_id
+     LEFT JOIN accounts ca ON ca.id = aj.transfer_counterpart_id
      ${where}
      ORDER BY aj.created_at DESC
      LIMIT 500`,
@@ -2693,6 +2698,60 @@ app.post('/api/account-adjustments', requireAdmin, async (req, res) => {
     });
     await client.query('COMMIT');
     res.status(201).json({ ...adj, account_name: acct.name, account_number: acct.account_number, account_type: acct.account_type });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/account-adjustments/transfer', requireAdmin, async (req, res) => {
+  const { from_account_id, to_account_id, amount, description } = req.body;
+  if (!from_account_id || !to_account_id || amount == null || !description?.trim()) {
+    return res.status(400).json({ error: 'from_account_id, to_account_id, amount, and description are required' });
+  }
+  if (from_account_id === to_account_id) {
+    return res.status(400).json({ error: 'Source and destination accounts must be different' });
+  }
+  const amt = Math.round(Number(amount));
+  if (!Number.isFinite(amt) || amt <= 0) {
+    return res.status(400).json({ error: 'amount must be a positive number' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [fromAcct] } = await client.query('SELECT * FROM accounts WHERE id=$1', [from_account_id]);
+    const { rows: [toAcct] }   = await client.query('SELECT * FROM accounts WHERE id=$1', [to_account_id]);
+    if (!fromAcct) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Source account not found' }); }
+    if (!toAcct)   { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Destination account not found' }); }
+
+    const transferId = randomUUID();
+
+    // Debit source (subtract)
+    const { rows: [adjFrom] } = await client.query(
+      `INSERT INTO account_adjustments (account_id, amount, description, created_by, created_by_name, transfer_id, transfer_counterpart_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [from_account_id, -amt, description.trim(), req.user.id, req.user.username, transferId, to_account_id]
+    );
+    await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [amt, from_account_id]);
+
+    // Credit destination (add)
+    const { rows: [adjTo] } = await client.query(
+      `INSERT INTO account_adjustments (account_id, amount, description, created_by, created_by_name, transfer_id, transfer_counterpart_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [to_account_id, amt, description.trim(), req.user.id, req.user.username, transferId, from_account_id]
+    );
+    await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [amt, to_account_id]);
+
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'create', entity_type: 'account_transfer', entity_id: transferId,
+      description: `Transfer ${amt} from "${fromAcct.name}" to "${toAcct.name}". Reason: ${description.trim()}`,
+    });
+
+    await client.query('COMMIT');
+    res.status(201).json({ transfer_id: transferId, from: adjFrom, to: adjTo });
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -2804,6 +2863,118 @@ app.get('/api/reports/financial', async (req, res) => {
       : Number(a.balance);
     return { ...a, balance, total_adjustments: adjMap[a.id] || 0 };
   }));
+});
+
+// ── DAILY REPORT ─────────────────────────────────────────────────────────────
+
+app.get('/api/reports/daily', async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+
+  const [posRes, invoicesRes, dispatchesRes, opnameRes, transfersRes, salesRes] = await Promise.all([
+    // POS imports on this date
+    pool.query(`
+      SELECT pi.id, pi.description, pi.date, pi.total_amount, pi.source_file,
+             u.username AS created_by_name,
+             json_agg(json_build_object(
+               'label', pil.label, 'amount', pil.amount, 'line_type', pil.line_type,
+               'account_name', a.name, 'account_number', a.account_number
+             ) ORDER BY pil.line_type DESC, pil.amount DESC) AS lines
+      FROM pos_imports pi
+      LEFT JOIN users u ON u.id = pi.created_by
+      LEFT JOIN pos_import_lines pil ON pil.import_id = pi.id
+      LEFT JOIN accounts a ON a.id = pil.account_id
+      WHERE pi.date = $1
+      GROUP BY pi.id, u.username
+      ORDER BY pi.created_at`, [date]),
+
+    // Purchase invoices on this date
+    pool.query(`
+      SELECT inv.id, inv.invoice_number, inv.date, inv.invoice_type, inv.payment_status,
+             inv.amount_paid, v.name AS vendor_name, b.name AS branch_name, dv.name AS division_name,
+             COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
+      FROM invoices inv
+      LEFT JOIN vendors v ON v.id = inv.vendor_id
+      LEFT JOIN branches b ON b.id = inv.branch_id
+      LEFT JOIN divisions dv ON dv.id = inv.division_id
+      LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
+      WHERE inv.date = $1
+      GROUP BY inv.id, v.name, b.name, dv.name
+      ORDER BY inv.date`, [date]),
+
+    // Dispatches on this date
+    pool.query(`
+      SELECT d.id, d.dispatched_at, d.notes, b.name AS branch_name, dv.name AS division_name,
+             w.name AS warehouse_name, u.username AS dispatched_by_name,
+             COUNT(di.id)::INT AS item_count,
+             COUNT(DISTINCT di.item_id)::INT AS distinct_items
+      FROM dispatches d
+      JOIN branches b ON b.id = d.branch_id
+      JOIN divisions dv ON dv.id = d.division_id
+      JOIN warehouses w ON w.id = d.warehouse_id
+      LEFT JOIN users u ON u.id = d.dispatched_by
+      LEFT JOIN dispatch_items di ON di.dispatch_id = d.id
+      WHERE d.dispatched_at::date = $1
+      GROUP BY d.id, b.name, dv.name, w.name, u.username
+      ORDER BY d.dispatched_at`, [date]),
+
+    // Stock opname on this date
+    pool.query(`
+      SELECT so.id, so.created_at, so.notes, so.operator_name, so.pic_name,
+             w.name AS warehouse_name, u.username AS performed_by_name,
+             COUNT(soi.id)::INT AS item_count,
+             COALESCE(SUM(ABS(soi.difference)), 0)::BIGINT AS total_diff
+      FROM stock_opname so
+      JOIN warehouses w ON w.id = so.warehouse_id
+      LEFT JOIN users u ON u.id = so.performed_by
+      LEFT JOIN stock_opname_items soi ON soi.opname_id = so.id
+      WHERE so.created_at::date = $1
+      GROUP BY so.id, w.name, u.username
+      ORDER BY so.created_at`, [date]),
+
+    // Stock transfers on this date
+    pool.query(`
+      SELECT st.group_id, MIN(st.transferred_at) AS transferred_at,
+             fw.name AS from_warehouse, tw.name AS to_warehouse,
+             u.username AS transferred_by_name,
+             COUNT(st.id)::INT AS item_count,
+             COUNT(DISTINCT st.item_id)::INT AS distinct_items
+      FROM stock_transfers st
+      JOIN warehouses fw ON fw.id = st.from_warehouse_id
+      JOIN warehouses tw ON tw.id = st.to_warehouse_id
+      LEFT JOIN users u ON u.id = st.transferred_by
+      WHERE st.transferred_at::date = $1
+      GROUP BY st.group_id, fw.name, tw.name, u.username
+      ORDER BY transferred_at`, [date]),
+
+    // Manual sales on this date
+    pool.query(`
+      SELECT s.id, s.date, s.amount, s.description,
+             b.name AS branch_name, dv.name AS division_name, u.username AS created_by_name
+      FROM sales s
+      LEFT JOIN branches b ON b.id = s.branch_id
+      LEFT JOIN divisions dv ON dv.id = s.division_id
+      LEFT JOIN users u ON u.id = s.created_by
+      WHERE s.date = $1
+      ORDER BY s.created_at`, [date]),
+  ]);
+
+  res.json({
+    date,
+    pos_imports:     posRes.rows,
+    invoices:        invoicesRes.rows,
+    dispatches:      dispatchesRes.rows,
+    opnames:         opnameRes.rows,
+    transfers:       transfersRes.rows,
+    sales:           salesRes.rows,
+    summary: {
+      pos_revenue:       posRes.rows.reduce((s, r) => s + Number(r.total_amount), 0),
+      manual_sales:      salesRes.rows.reduce((s, r) => s + Number(r.amount), 0),
+      purchases:         invoicesRes.rows.filter(i => i.invoice_type === 'purchase').reduce((s, i) => s + Number(i.total), 0),
+      expenses:          invoicesRes.rows.filter(i => i.invoice_type === 'expense').reduce((s, i) => s + Number(i.total), 0),
+      dispatch_count:    dispatchesRes.rows.length,
+    },
+  });
 });
 
 // ── STATS ─────────────────────────────────────────────────────────────────────
