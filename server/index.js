@@ -3013,35 +3013,42 @@ app.get('/api/stats/daily-sales', async (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
   try {
-    const [salesRes, posRes] = await Promise.all([
-      pool.query(`
-        SELECT b.id AS branch_id, b.name AS branch_name,
-               COALESCE(SUM(s.amount), 0)::BIGINT AS manual_sales,
-               COUNT(s.id)::INT AS sale_count
-        FROM branches b
-        LEFT JOIN sales s ON s.branch_id = b.id AND s.date = $1
-        GROUP BY b.id, b.name
-        ORDER BY b.name
-      `, [date]),
-      pool.query(`
-        SELECT COALESCE(SUM(total_amount), 0)::BIGINT AS pos_revenue,
-               COUNT(id)::INT AS import_count
-        FROM pos_imports
-        WHERE date = $1
-      `, [date]),
-    ]);
+    const { rows } = await pool.query(`
+      SELECT b.id AS branch_id, b.name AS branch_name,
+             COALESCE(s.manual_sales, 0)  AS manual_sales,
+             COALESCE(s.sale_count, 0)    AS sale_count,
+             COALESCE(pi.pos_revenue, 0)  AS pos_revenue,
+             COALESCE(pi.import_count, 0) AS pos_import_count
+      FROM branches b
+      LEFT JOIN (
+        SELECT branch_id, SUM(amount)::BIGINT AS manual_sales, COUNT(*)::INT AS sale_count
+        FROM sales WHERE date = $1 GROUP BY branch_id
+      ) s ON s.branch_id = b.id
+      LEFT JOIN (
+        -- Infer branch from which division revenue accounts the import lines map to
+        SELECT d.branch_id,
+               SUM(pi.total_amount)::BIGINT AS pos_revenue,
+               COUNT(DISTINCT pi.id)::INT   AS import_count
+        FROM pos_imports pi
+        JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
+        JOIN divisions d ON d.revenue_account_id = pil.account_id
+        WHERE pi.date = $1
+        GROUP BY d.branch_id
+      ) pi ON pi.branch_id = b.id
+      ORDER BY b.name
+    `, [date]);
 
-    const posRevenue   = Number(posRes.rows[0]?.pos_revenue || 0);
-    const posImports   = Number(posRes.rows[0]?.import_count || 0);
-
-    const branches = salesRes.rows.map(r => ({
-      branch_id:    r.branch_id,
-      branch_name:  r.branch_name,
-      manual_sales: Number(r.manual_sales),
-      sale_count:   Number(r.sale_count),
+    const branches = rows.map(r => ({
+      branch_id:        r.branch_id,
+      branch_name:      r.branch_name,
+      manual_sales:     Number(r.manual_sales),
+      sale_count:       Number(r.sale_count),
+      pos_revenue:      Number(r.pos_revenue),
+      pos_import_count: Number(r.pos_import_count),
+      total:            Number(r.manual_sales) + Number(r.pos_revenue),
     }));
 
-    res.json({ date, branches, pos_revenue: posRevenue, pos_import_count: posImports });
+    res.json({ date, branches });
   } catch (err) {
     console.error('Daily sales error:', err);
     res.status(500).json({ error: err.message });

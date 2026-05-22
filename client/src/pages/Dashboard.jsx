@@ -28,8 +28,7 @@ function DailySalesCard() {
   }, [date]);
 
   const isToday = date === todayStr;
-  const totalManual = data ? data.branches.reduce((s, b) => s + b.manual_sales, 0) : 0;
-  const grandTotal  = data ? totalManual + (data.pos_revenue || 0) : 0;
+  const grandTotal = data ? data.branches.reduce((s, b) => s + b.total, 0) : 0;
 
   return (
     <div className="card" style={{ marginBottom: '1.5rem' }}>
@@ -65,34 +64,34 @@ function DailySalesCard() {
             <thead>
               <tr>
                 <th>Cabang</th>
-                <th style={{ textAlign: 'right' }}>Penjualan Manual</th>
-                <th style={{ textAlign: 'right' }}>Transaksi</th>
+                <th style={{ textAlign: 'right' }}>POS Import</th>
+                <th style={{ textAlign: 'right' }}>Manual</th>
+                <th style={{ textAlign: 'right' }}>Total</th>
               </tr>
             </thead>
             <tbody>
               {data.branches.map(b => (
                 <tr key={b.branch_id}>
                   <td style={{ fontWeight: 500 }}>{b.branch_name}</td>
-                  <td style={{ textAlign: 'right', fontWeight: b.manual_sales > 0 ? 600 : 'normal', color: b.manual_sales > 0 ? '#1a6632' : '#bbb' }}>
-                    {idr(b.manual_sales)}
+                  <td style={{ textAlign: 'right', color: b.pos_revenue > 0 ? '#2c6fc2' : '#bbb', fontWeight: b.pos_revenue > 0 ? 600 : 'normal', fontSize: '0.88rem' }}>
+                    {b.pos_revenue > 0 ? idr(b.pos_revenue) : '—'}
+                    {b.pos_import_count > 0 && <span style={{ marginLeft: '0.3rem', fontSize: '0.75rem', color: '#888' }}>({b.pos_import_count}x)</span>}
                   </td>
-                  <td style={{ textAlign: 'right', color: '#888', fontSize: '0.85rem' }}>
-                    {b.sale_count > 0 ? `${b.sale_count}x` : '—'}
+                  <td style={{ textAlign: 'right', color: b.manual_sales > 0 ? '#555' : '#bbb', fontSize: '0.88rem' }}>
+                    {b.manual_sales > 0 ? idr(b.manual_sales) : '—'}
+                    {b.sale_count > 0 && <span style={{ marginLeft: '0.3rem', fontSize: '0.75rem', color: '#888' }}>({b.sale_count}x)</span>}
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: b.total > 0 ? 700 : 'normal', color: b.total > 0 ? '#1a6632' : '#bbb' }}>
+                    {idr(b.total)}
                   </td>
                 </tr>
               ))}
-              {data.pos_revenue > 0 && (
-                <tr style={{ borderTop: '1px dashed #e0e0e0' }}>
-                  <td style={{ color: '#555', fontStyle: 'italic' }}>POS Import ({data.pos_import_count}x)</td>
-                  <td style={{ textAlign: 'right', fontWeight: 600, color: '#2c6fc2' }}>{idr(data.pos_revenue)}</td>
-                  <td></td>
-                </tr>
-              )}
               {data.branches.length > 0 && (
                 <tr style={{ borderTop: '2px solid #e0e0e0', fontWeight: 700 }}>
                   <td>Total</td>
+                  <td style={{ textAlign: 'right', color: '#2c6fc2' }}>{idr(data.branches.reduce((s, b) => s + b.pos_revenue, 0))}</td>
+                  <td style={{ textAlign: 'right', color: '#555' }}>{idr(data.branches.reduce((s, b) => s + b.manual_sales, 0))}</td>
                   <td style={{ textAlign: 'right', color: grandTotal > 0 ? '#1a6632' : '#bbb' }}>{idr(grandTotal)}</td>
-                  <td></td>
                 </tr>
               )}
             </tbody>
