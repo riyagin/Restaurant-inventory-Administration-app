@@ -340,3 +340,23 @@ CREATE INDEX activity_log_created_idx ON activity_log (created_at DESC);
 CREATE INDEX invoice_items_invoice_idx ON invoice_items (invoice_id);
 CREATE INDEX invoices_payment_status_idx ON invoices (payment_status);
 CREATE INDEX invoices_date_idx ON invoices (date);
+
+-- ============================================================
+--  INVOICE TEMPLATES (custom purchase/expense categories)
+-- ============================================================
+
+CREATE TABLE invoice_templates (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name         TEXT        NOT NULL UNIQUE,
+  invoice_type TEXT        NOT NULL DEFAULT 'expense',  -- 'purchase' | 'expense'
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE invoice_template_items (
+  id          UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+  template_id UUID    NOT NULL REFERENCES invoice_templates(id) ON DELETE CASCADE,
+  item_id     UUID    REFERENCES items(id) ON DELETE SET NULL,
+  description TEXT,
+  unit_index  INT     NOT NULL DEFAULT 0,
+  sort_order  INT     NOT NULL DEFAULT 0
+);

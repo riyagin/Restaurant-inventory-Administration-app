@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice } from '../api';
+import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
@@ -30,6 +30,7 @@ export default function InvoiceForm() {
   const [branches, setBranches] = useState([]);
   const [divisions, setDivisions] = useState([]);
   const [lastPrices, setLastPrices] = useState({});  // key: `${item_id}:${unit_index}` → price
+  const [templates, setTemplates] = useState([]);
   const [photoFile, setPhotoFile] = useState(null);
   const [existingPhoto, setExistingPhoto] = useState(null);
   const [error, setError] = useState('');
@@ -42,6 +43,7 @@ export default function InvoiceForm() {
     getVendors().then(r => setVendors(r.data));
     getAccounts().then(r => setAccounts(r.data));
     getBranches().then(r => setBranches(r.data));
+    if (!id) getInvoiceTemplates().then(r => setTemplates(r.data));
     if (id) {
       getInvoice(id).then(r => {
         const inv = r.data;
@@ -91,6 +93,38 @@ export default function InvoiceForm() {
   const switchType = (type) => {
     setInvoiceType(type);
     setRows(type === 'expense' ? [emptyExpenseRow()] : [emptyPurchaseRow()]);
+  };
+
+  const applyTemplate = (tpl) => {
+    setInvoiceType(tpl.invoice_type);
+    if (!tpl.items?.length) {
+      setRows(tpl.invoice_type === 'expense' ? [emptyExpenseRow()] : [emptyPurchaseRow()]);
+      return;
+    }
+    if (tpl.invoice_type === 'expense') {
+      setRows(tpl.items.map(ti => ti.item_id ? ({
+        item_id: ti.item_id,
+        description: '',
+        quantity: '',
+        unit_index: String(ti.unit_index ?? 0),
+        price: '',
+        useDescription: false,
+      }) : ({
+        item_id: '',
+        description: ti.description ?? '',
+        quantity: '',
+        unit_index: '0',
+        price: '',
+        useDescription: true,
+      })));
+    } else {
+      setRows(tpl.items.map(ti => ({
+        item_id: ti.item_id ?? '',
+        quantity: '',
+        unit_index: String(ti.unit_index ?? 0),
+        price: '',
+      })));
+    }
   };
 
   const setHeaderField = (field) => (e) => {
@@ -259,22 +293,44 @@ export default function InvoiceForm() {
 
       {/* Type toggle */}
       {!isEdit && (
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-          {['purchase', 'expense'].map(type => (
-            <button
-              key={type}
-              type="button"
-              onClick={() => switchType(type)}
-              style={{
-                padding: '0.45rem 1.1rem', borderRadius: '6px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
-                border: invoiceType === type ? '2px solid #4f8ef7' : '2px solid #e0e0e0',
-                background: invoiceType === type ? '#e8f0fe' : '#f9f9f9',
-                color: invoiceType === type ? '#4f8ef7' : '#666',
-              }}
-            >
-              {type === 'purchase' ? 'Pembelian (tambah stok)' : 'Pengeluaran (tanpa stok)'}
-            </button>
-          ))}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            {['purchase', 'expense'].map(type => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => switchType(type)}
+                style={{
+                  padding: '0.45rem 1.1rem', borderRadius: '6px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
+                  border: invoiceType === type ? '2px solid #4f8ef7' : '2px solid #e0e0e0',
+                  background: invoiceType === type ? '#e8f0fe' : '#f9f9f9',
+                  color: invoiceType === type ? '#4f8ef7' : '#666',
+                }}
+              >
+                {type === 'purchase' ? 'Pembelian (tambah stok)' : 'Pengeluaran (tanpa stok)'}
+              </button>
+            ))}
+            {templates.length > 0 && (
+              <>
+                <span style={{ display: 'flex', alignItems: 'center', color: '#ccc', fontWeight: 400, fontSize: '0.85rem', margin: '0 0.15rem' }}>|</span>
+                {templates.map(tpl => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => applyTemplate(tpl)}
+                    style={{
+                      padding: '0.45rem 1.1rem', borderRadius: '6px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
+                      border: '2px solid #e0e0e0',
+                      background: '#f9f9f9',
+                      color: '#666',
+                    }}
+                  >
+                    {tpl.name}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
         </div>
       )}
 

@@ -161,6 +161,11 @@ export const deleteRecipe = (id) => api.delete(`/recipes/${id}`);
 export const getProductions = () => api.get('/productions');
 export const createProduction = (data) => api.post('/productions', data);
 
+export const getInvoiceTemplates = () => api.get('/invoice-templates');
+export const createInvoiceTemplate = (data) => api.post('/invoice-templates', data);
+export const updateInvoiceTemplate = (id, data) => api.put(`/invoice-templates/${id}`, data);
+export const deleteInvoiceTemplate = (id) => api.delete(`/invoice-templates/${id}`);
+
 export const getActivityLog = (params) => api.get('/activity-log', { params });
 export const exportActivityLog = (params) => api.get('/activity-log/export', { params, responseType: 'blob' });
 export const deleteActivityLog = (before_date) => api.delete('/activity-log', { data: { before_date } });
@@ -178,3 +183,7 @@ export const getDailyReport           = (params) => api.get('/reports/daily', { 
 export const getAccountAdjustments    = (params) => api.get('/account-adjustments', { params });
 export const createAccountAdjustment  = (data)   => api.post('/account-adjustments', data);
 export const createAccountTransfer    = (data)   => api.post('/account-adjustments/transfer', data);
+
+export const getEnumerations    = ()     => api.get('/enumerations');
+export const createEnumeration  = (data) => api.post('/enumerations', data);
+export const deleteEnumeration  = (id)   => api.delete(`/enumerations/${id}`);

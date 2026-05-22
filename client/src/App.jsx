@@ -28,9 +28,11 @@ import NonStockItemDetail from './pages/NonStockItemDetail';
 import InventoryValueReport from './pages/InventoryValueReport';
 import Recipes from './pages/Recipes';
 import Productions from './pages/Productions';
+import Enumerations from './pages/Enumerations';
 import SalesImport from './pages/SalesImport';
 import FinancialReport from './pages/FinancialReport';
 import AccountAdjustments from './pages/AccountAdjustments';
+import InvoiceTemplates from './pages/InvoiceTemplates';
 import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
 import Profile from './pages/Profile';
@@ -78,12 +80,40 @@ function NavDropdown({ label, paths, children }) {
   );
 }
 
+// Mobile: collapsible section inside the burger drawer
+function MobileSection({ label, paths, children }) {
+  const { pathname } = useLocation();
+  const [open, setOpen] = useState(paths.some(p => pathname.startsWith(p)));
+  return (
+    <div className="mobile-section">
+      <button className="mobile-section-btn" onClick={() => setOpen(o => !o)}>
+        {label} <span className="caret">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && <div className="mobile-section-links">{children}</div>}
+    </div>
+  );
+}
+
 function Nav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const user = getUser();
   const isAdmin = user?.role === 'admin';
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const isActive = (to) => to === '/' ? pathname === '/' : pathname.startsWith(to);
+
+  // Close drawer on navigation
+  useEffect(() => { setDrawerOpen(false); }, [pathname]);
+
+  // Close drawer on outside click
+  const drawerRef = useRef(null);
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const handler = (e) => { if (drawerRef.current && !drawerRef.current.contains(e.target)) setDrawerOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [drawerOpen]);
+
   const link = (to, label) => (
     <Link to={to} className={isActive(to) ? 'active' : ''}>{label}</Link>
   );
@@ -107,16 +137,19 @@ function Nav() {
   };
 
   return (
-    <nav className="navbar">
+    <nav className="navbar" ref={drawerRef}>
       <span className="brand">InventoryPro</span>
-      <div className="nav-links">
+
+      {/* Desktop nav */}
+      <div className="nav-links nav-links-desktop">
         {link('/', 'Dasbor')}
 
-        <NavDropdown label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/recipes', '/productions']}>
+        <NavDropdown label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
           {menuLink('/inventory', 'Inventaris')}
           {menuLink('/transfers', 'Transfer Stok')}
           {menuLink('/dispatch', 'Pengiriman ke Cabang')}
           {menuLink('/stock-opname', 'Stok Opname')}
+          {menuLink('/enumerations', 'Pencacahan')}
           <div className="nav-dropdown-divider" />
           {menuLink('/recipes', 'Resep Produksi')}
           {menuLink('/productions', 'Produksi')}
@@ -138,13 +171,14 @@ function Nav() {
         )}
 
         {isAdmin && (
-          <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments']}>
+          <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
             {menuLink('/items', 'Barang')}
             {menuLink('/warehouses', 'Gudang')}
             {menuLink('/vendors', 'Vendor')}
             {menuLink('/accounts', 'Akun')}
             <div className="nav-dropdown-divider" />
             {menuLink('/branches', 'Cabang & Divisi')}
+            {menuLink('/invoice-templates', 'Template Invoice')}
             {menuLink('/account-adjustments', 'Jurnal Manual')}
             <div className="nav-dropdown-divider" />
             {menuLink('/users', 'Pengguna')}
@@ -154,11 +188,72 @@ function Nav() {
       </div>
 
       {user && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div className="nav-user nav-user-desktop">
           <Link to="/profile" style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.75)', textDecoration: 'none' }}>
             {user.username}
           </Link>
           <button onClick={logout} className="btn btn-secondary btn-sm">Keluar</button>
+        </div>
+      )}
+
+      {/* Burger button (mobile only) */}
+      <button className="burger-btn" onClick={() => setDrawerOpen(o => !o)} aria-label="Menu">
+        <span className={`burger-icon${drawerOpen ? ' open' : ''}`}>
+          <span /><span /><span />
+        </span>
+      </button>
+
+      {/* Mobile drawer */}
+      {drawerOpen && (
+        <div className="mobile-drawer">
+          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>Dasbor</Link>
+
+          <MobileSection label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
+            <Link to="/inventory" className={isActive('/inventory') ? 'active' : ''}>Inventaris</Link>
+            <Link to="/transfers" className={isActive('/transfers') ? 'active' : ''}>Transfer Stok</Link>
+            <Link to="/dispatch" className={isActive('/dispatch') ? 'active' : ''}>Pengiriman ke Cabang</Link>
+            <Link to="/stock-opname" className={isActive('/stock-opname') ? 'active' : ''}>Stok Opname</Link>
+            <Link to="/enumerations" className={isActive('/enumerations') ? 'active' : ''}>Pencacahan</Link>
+            <Link to="/recipes" className={isActive('/recipes') ? 'active' : ''}>Resep Produksi</Link>
+            <Link to="/productions" className={isActive('/productions') ? 'active' : ''}>Produksi</Link>
+          </MobileSection>
+
+          <Link to="/invoices" className={`mobile-link${isActive('/invoices') ? ' active' : ''}`}>Invoice</Link>
+
+          <MobileSection label="Penjualan" paths={['/sales']}>
+            <Link to="/sales" className={isActive('/sales') && !isActive('/sales/import') ? 'active' : ''}>Catatan Penjualan</Link>
+            <Link to="/sales/import" className={isActive('/sales/import') ? 'active' : ''}>Import dari POS</Link>
+          </MobileSection>
+
+          {isAdmin && (
+            <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
+              <Link to="/reports/daily" className={isActive('/reports/daily') ? 'active' : ''}>Laporan Harian</Link>
+              <Link to="/reports/financial" className={isActive('/reports/financial') ? 'active' : ''}>Laporan Keuangan</Link>
+              <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
+              <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
+            </MobileSection>
+          )}
+
+          {isAdmin && (
+            <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
+              <Link to="/items" className={isActive('/items') ? 'active' : ''}>Barang</Link>
+              <Link to="/warehouses" className={isActive('/warehouses') ? 'active' : ''}>Gudang</Link>
+              <Link to="/vendors" className={isActive('/vendors') ? 'active' : ''}>Vendor</Link>
+              <Link to="/accounts" className={isActive('/accounts') ? 'active' : ''}>Akun</Link>
+              <Link to="/branches" className={isActive('/branches') ? 'active' : ''}>Cabang & Divisi</Link>
+              <Link to="/invoice-templates" className={isActive('/invoice-templates') ? 'active' : ''}>Template Invoice</Link>
+              <Link to="/account-adjustments" className={isActive('/account-adjustments') ? 'active' : ''}>Jurnal Manual</Link>
+              <Link to="/users" className={isActive('/users') ? 'active' : ''}>Pengguna</Link>
+              <Link to="/activity" className={isActive('/activity') ? 'active' : ''}>Log Aktivitas</Link>
+            </MobileSection>
+          )}
+
+          {user && (
+            <div className="mobile-drawer-footer">
+              <Link to="/profile" className="mobile-link">Profil: {user.username}</Link>
+              <button onClick={logout} className="btn btn-danger btn-sm" style={{ width: '100%' }}>Keluar</button>
+            </div>
+          )}
         </div>
       )}
     </nav>
@@ -211,11 +306,13 @@ export default function App() {
                 <Route path="/stock-opname/detail/:id" element={<StockOpnameDetail />} />
                 <Route path="/recipes" element={<Recipes />} />
                 <Route path="/productions" element={<Productions />} />
+                <Route path="/enumerations" element={<Enumerations />} />
                 <Route path="/warehouses" element={<RequireAdmin><Warehouses /></RequireAdmin>} />
                 <Route path="/vendors" element={<RequireAdmin><Vendors /></RequireAdmin>} />
                 <Route path="/vendors/:id/history" element={<VendorHistory />} />
                 <Route path="/accounts" element={<RequireAdmin><Accounts /></RequireAdmin>} />
                 <Route path="/branches" element={<RequireAdmin><Branches /></RequireAdmin>} />
+                <Route path="/invoice-templates" element={<RequireAdmin><InvoiceTemplates /></RequireAdmin>} />
                 <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
                 <Route path="/activity" element={<RequireAdmin><ActivityLog /></RequireAdmin>} />
                 <Route path="/profile" element={<Profile />} />

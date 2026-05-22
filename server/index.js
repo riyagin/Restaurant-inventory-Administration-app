@@ -1936,6 +1936,116 @@ app.delete('/api/division-categories/:id', requireAdmin, async (req, res) => {
   res.status(204).end();
 });
 
+// ── INVOICE TEMPLATES ────────────────────────────────────────────────────────
+
+app.get('/api/invoice-templates', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT t.*,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', ti.id,
+                  'item_id', ti.item_id,
+                  'item_name', i.name,
+                  'item_code', i.code,
+                  'units', i.units,
+                  'is_stock', i.is_stock,
+                  'description', ti.description,
+                  'unit_index', ti.unit_index,
+                  'sort_order', ti.sort_order
+                ) ORDER BY ti.sort_order
+              ) FILTER (WHERE ti.id IS NOT NULL),
+              '[]'
+            ) AS items
+     FROM invoice_templates t
+     LEFT JOIN invoice_template_items ti ON ti.template_id = t.id
+     LEFT JOIN items i ON i.id = ti.item_id
+     GROUP BY t.id
+     ORDER BY t.name`
+  );
+  res.json(rows);
+});
+
+app.post('/api/invoice-templates', requireAdmin, async (req, res) => {
+  const { name, invoice_type = 'expense', items = [] } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  if (!['purchase', 'expense'].includes(invoice_type)) {
+    return res.status(400).json({ error: 'invoice_type must be purchase or expense' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: [tpl] } = await client.query(
+      `INSERT INTO invoice_templates (name, invoice_type) VALUES ($1, $2) RETURNING *`,
+      [name.trim(), invoice_type]
+    );
+    for (const [idx, item] of items.entries()) {
+      await client.query(
+        `INSERT INTO invoice_template_items (template_id, item_id, description, unit_index, sort_order)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [tpl.id, item.item_id || null, item.description || null, item.unit_index ?? 0, idx]
+      );
+    }
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'create', entity_type: 'invoice_template', entity_id: tpl.id,
+      description: `Created invoice template "${name}"`,
+    });
+    await client.query('COMMIT');
+    res.status(201).json(tpl);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.code === '23505') return res.status(409).json({ error: 'Template name already exists' });
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+app.put('/api/invoice-templates/:id', requireAdmin, async (req, res) => {
+  const { name, invoice_type, items = [] } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const fields = ['name=$2'];
+    const vals = [req.params.id, name.trim()];
+    if (invoice_type) { fields.push(`invoice_type=$${vals.length + 1}`); vals.push(invoice_type); }
+    const { rows } = await client.query(
+      `UPDATE invoice_templates SET ${fields.join(', ')} WHERE id=$1 RETURNING *`, vals
+    );
+    if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Template not found' }); }
+    await client.query('DELETE FROM invoice_template_items WHERE template_id=$1', [req.params.id]);
+    for (const [idx, item] of items.entries()) {
+      await client.query(
+        `INSERT INTO invoice_template_items (template_id, item_id, description, unit_index, sort_order)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.params.id, item.item_id || null, item.description || null, item.unit_index ?? 0, idx]
+      );
+    }
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'update', entity_type: 'invoice_template', entity_id: req.params.id,
+      description: `Updated invoice template "${name}"`,
+    });
+    await client.query('COMMIT');
+    res.json(rows[0]);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.code === '23505') return res.status(409).json({ error: 'Template name already exists' });
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/invoice-templates/:id', requireAdmin, async (req, res) => {
+  const { rows: [tpl] } = await pool.query('SELECT name FROM invoice_templates WHERE id=$1', [req.params.id]);
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  await pool.query('DELETE FROM invoice_templates WHERE id=$1', [req.params.id]);
+  res.status(204).end();
+});
+
 // ── DISPATCHES ────────────────────────────────────────────────────────────────
 
 app.get('/api/dispatches', async (req, res) => {
@@ -3043,8 +3153,8 @@ app.get('/api/stats/daily-sales', async (req, res) => {
       LEFT JOIN (
         -- Infer branch from which division revenue accounts the import lines map to
         SELECT d.branch_id,
-               SUM(pi.total_amount)::BIGINT AS pos_revenue,
-               COUNT(DISTINCT pi.id)::INT   AS import_count
+               SUM(pil.amount)::BIGINT    AS pos_revenue,
+               COUNT(DISTINCT pi.id)::INT AS import_count
         FROM pos_imports pi
         JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
         JOIN divisions d ON d.revenue_account_id = pil.account_id
@@ -3360,6 +3470,275 @@ app.get('/api/expense-report', async (req, res) => {
     item_usage: itemsByGroup[`${g.branch_id}::${g.division_id}`] || [],
   }));
   res.json(result);
+});
+
+// ── ENUMERATIONS (Pencacahan) ─────────────────────────────────────────────────
+
+app.get('/api/enumerations', async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT e.*,
+            si.name AS source_item_name, si.units AS source_item_units,
+            oi.name AS output_item_name, oi.units AS output_item_units,
+            w.name  AS warehouse_name,
+            u.username AS created_by_name
+     FROM enumerations e
+     JOIN items      si ON si.id = e.source_item_id
+     JOIN items      oi ON oi.id = e.output_item_id
+     JOIN warehouses w  ON w.id  = e.warehouse_id
+     LEFT JOIN users u  ON u.id  = e.created_by
+     ORDER BY e.created_at DESC`
+  );
+  res.json(rows);
+});
+
+app.post('/api/enumerations', async (req, res) => {
+  const { warehouse_id, source_item_id, source_qty, source_unit_idx,
+          output_item_id, output_qty, output_unit_idx, date, notes } = req.body;
+
+  if (!warehouse_id || !source_item_id || !output_item_id ||
+      !source_qty || Number(source_qty) <= 0 ||
+      !output_qty || Number(output_qty) <= 0) {
+    return res.status(400).json({ error: 'Gudang, barang sumber, barang hasil, dan jumlah wajib diisi' });
+  }
+  if (source_item_id === output_item_id) {
+    return res.status(400).json({ error: 'Barang sumber dan hasil tidak boleh sama' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Load source item units
+    const { rows: [srcItem] } = await client.query('SELECT name, units FROM items WHERE id=$1', [source_item_id]);
+    if (!srcItem) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Barang sumber tidak ditemukan' }); }
+
+    const { rows: [outItem] } = await client.query('SELECT name, units FROM items WHERE id=$1', [output_item_id]);
+    if (!outItem) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Barang hasil tidak ditemukan' }); }
+
+    const { rows: [wh] } = await client.query('SELECT name FROM warehouses WHERE id=$1', [warehouse_id]);
+    if (!wh) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Gudang tidak ditemukan' }); }
+
+    // Convert requested source qty to lowest unit for FIFO deduction
+    const srcUnits = srcItem.units;
+    const srcLowestIdx = srcUnits.length - 1;
+    let srcConversion = 1;
+    for (let i = Number(source_unit_idx) + 1; i < srcUnits.length; i++) {
+      srcConversion *= srcUnits[i].perPrev;
+    }
+    const neededLowest = Number(source_qty) * srcConversion;
+    const srcUnitName  = srcUnits[Number(source_unit_idx)]?.name ?? srcUnits[srcLowestIdx]?.name ?? '';
+
+    // Check available stock (in lowest unit)
+    const { rows: availLots } = await client.query(
+      'SELECT quantity FROM inventory WHERE item_id=$1 AND warehouse_id=$2 AND unit_index=$3',
+      [source_item_id, warehouse_id, srcLowestIdx]
+    );
+    const totalAvailable = availLots.reduce((s, l) => s + Number(l.quantity), 0);
+    if (totalAvailable < neededLowest) {
+      const availInUserUnit = neededLowest > 0 ? (totalAvailable / srcConversion) : 0;
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `Stok "${srcItem.name}" tidak cukup di ${wh.name} (butuh ${source_qty} ${srcUnitName}, tersedia: ${availInUserUnit.toFixed(4)} ${srcUnitName})`
+      });
+    }
+
+    // FIFO deduction — collect total transferred value
+    const { rows: lots } = await client.query(
+      'SELECT id, quantity, value FROM inventory WHERE item_id=$1 AND warehouse_id=$2 AND unit_index=$3 ORDER BY date ASC, id ASC',
+      [source_item_id, warehouse_id, srcLowestIdx]
+    );
+
+    let remaining = neededLowest;
+    let transferredValue = 0;
+    for (const lot of lots) {
+      if (remaining <= 0) break;
+      const lotQty = Number(lot.quantity);
+      const lotVal = Number(lot.value);
+      const consume = Math.min(remaining, lotQty);
+      const consumeValue = lotQty > 0 ? Math.round(lotVal * consume / lotQty) : 0;
+      transferredValue += consumeValue;
+      remaining -= consume;
+      if (consume >= lotQty) {
+        await client.query('DELETE FROM inventory WHERE id=$1', [lot.id]);
+      } else {
+        await client.query('UPDATE inventory SET quantity=quantity-$1, value=value-$2 WHERE id=$3', [consume, consumeValue, lot.id]);
+      }
+    }
+
+    // Stock history: source item out
+    await writeHistory(client, {
+      item_id: source_item_id, warehouse_id,
+      quantity_change: -Number(source_qty),
+      unit_name: srcUnitName,
+      type: 'enumeration_out',
+      reference: `Pencacahan → ${outItem.name}`,
+      date: date || null,
+      value: -transferredValue,
+    });
+
+    // Add output item to inventory (value = transferredValue, preserving cost)
+    const outUnits    = outItem.units;
+    const outLowestIdx = outUnits.length - 1;
+    let outConversion = 1;
+    for (let i = Number(output_unit_idx) + 1; i < outUnits.length; i++) {
+      outConversion *= outUnits[i].perPrev;
+    }
+    const outputLowestQty = Number(output_qty) * outConversion;
+    const outUnitName     = outUnits[Number(output_unit_idx)]?.name ?? outUnits[outLowestIdx]?.name ?? '';
+    const txDate          = date || new Date().toISOString().split('T')[0];
+
+    await client.query(
+      `INSERT INTO inventory (item_id, warehouse_id, quantity, unit_index, value, date)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [output_item_id, warehouse_id, outputLowestQty, outLowestIdx, transferredValue, txDate]
+    );
+
+    // Stock history: output item in
+    await writeHistory(client, {
+      item_id: output_item_id, warehouse_id,
+      quantity_change: Number(output_qty),
+      unit_name: outUnitName,
+      type: 'enumeration_in',
+      reference: `Pencacahan ← ${srcItem.name}`,
+      date: date || null,
+      value: transferredValue,
+    });
+
+    // Save enumeration record
+    const { rows: [enumRec] } = await client.query(
+      `INSERT INTO enumerations
+         (warehouse_id, source_item_id, source_qty, source_unit_idx,
+          output_item_id, output_qty, output_unit_idx,
+          transferred_value, date, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [warehouse_id, source_item_id, Number(source_qty), Number(source_unit_idx),
+       output_item_id, Number(output_qty), Number(output_unit_idx),
+       transferredValue, txDate, notes || null, req.user.id]
+    );
+
+    const perUnitValue = Number(output_qty) > 0 ? Math.round(transferredValue / Number(output_qty)) : 0;
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'create', entity_type: 'enumeration', entity_id: enumRec.id,
+      description: `Pencacahan: ${source_qty} ${srcUnitName} "${srcItem.name}" → ${output_qty} ${outUnitName} "${outItem.name}" (nilai Rp ${transferredValue.toLocaleString('id-ID')}, ${perUnitValue.toLocaleString('id-ID')}/unit) di ${wh.name}`
+    });
+
+    await client.query('COMMIT');
+    res.status(201).json(enumRec);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/api/enumerations/:id', async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: [rec] } = await client.query(
+      `SELECT e.*,
+              si.name AS source_item_name, si.units AS source_item_units,
+              oi.name AS output_item_name, oi.units AS output_item_units,
+              w.name  AS warehouse_name
+       FROM enumerations e
+       JOIN items      si ON si.id = e.source_item_id
+       JOIN items      oi ON oi.id = e.output_item_id
+       JOIN warehouses w  ON w.id  = e.warehouse_id
+       WHERE e.id = $1`,
+      [id]
+    );
+    if (!rec) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Pencacahan tidak ditemukan' }); }
+
+    // Reverse output: remove output inventory lot by LIFO value match (deduct from newest lots)
+    const outUnits    = rec.output_item_units;
+    const outLowestIdx = outUnits.length - 1;
+    let outConversion = 1;
+    for (let i = Number(rec.output_unit_idx) + 1; i < outUnits.length; i++) {
+      outConversion *= outUnits[i].perPrev;
+    }
+    const outLowestQty = Number(rec.output_qty) * outConversion;
+    const outUnitName  = outUnits[Number(rec.output_unit_idx)]?.name ?? '';
+
+    const { rows: outLots } = await client.query(
+      'SELECT id, quantity, value FROM inventory WHERE item_id=$1 AND warehouse_id=$2 AND unit_index=$3 ORDER BY date DESC, id DESC',
+      [rec.output_item_id, rec.warehouse_id, outLowestIdx]
+    );
+    const totalOutAvail = outLots.reduce((s, l) => s + Number(l.quantity), 0);
+    if (totalOutAvail < outLowestQty) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Stok hasil tidak cukup untuk membatalkan pencacahan (sudah digunakan sebagian)' });
+    }
+
+    let toRemove = outLowestQty;
+    for (const lot of outLots) {
+      if (toRemove <= 0) break;
+      const lotQty = Number(lot.quantity);
+      const lotVal = Number(lot.value);
+      const take = Math.min(toRemove, lotQty);
+      const takeVal = lotQty > 0 ? Math.round(lotVal * take / lotQty) : 0;
+      toRemove -= take;
+      if (take >= lotQty) {
+        await client.query('DELETE FROM inventory WHERE id=$1', [lot.id]);
+      } else {
+        await client.query('UPDATE inventory SET quantity=quantity-$1, value=value-$2 WHERE id=$3', [take, takeVal, lot.id]);
+      }
+    }
+
+    // Reverse source: restore source inventory lot (add back as new lot dated today)
+    const srcUnits    = rec.source_item_units;
+    const srcLowestIdx = srcUnits.length - 1;
+    let srcConversion = 1;
+    for (let i = Number(rec.source_unit_idx) + 1; i < srcUnits.length; i++) {
+      srcConversion *= srcUnits[i].perPrev;
+    }
+    const srcLowestQty = Number(rec.source_qty) * srcConversion;
+    const srcUnitName  = srcUnits[Number(rec.source_unit_idx)]?.name ?? '';
+    const today = new Date().toISOString().split('T')[0];
+
+    await client.query(
+      `INSERT INTO inventory (item_id, warehouse_id, quantity, unit_index, value, date)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [rec.source_item_id, rec.warehouse_id, srcLowestQty, srcLowestIdx, rec.transferred_value, today]
+    );
+
+    // Stock history reversals
+    await writeHistory(client, {
+      item_id: rec.output_item_id, warehouse_id: rec.warehouse_id,
+      quantity_change: -Number(rec.output_qty),
+      unit_name: outUnitName,
+      type: 'enumeration_reversal',
+      reference: `Batal pencacahan ← ${rec.source_item_name}`,
+      date: today,
+    });
+    await writeHistory(client, {
+      item_id: rec.source_item_id, warehouse_id: rec.warehouse_id,
+      quantity_change: Number(rec.source_qty),
+      unit_name: srcUnitName,
+      type: 'enumeration_reversal',
+      reference: `Batal pencacahan → ${rec.output_item_name}`,
+      date: today,
+    });
+
+    await client.query('DELETE FROM enumerations WHERE id=$1', [id]);
+
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'delete', entity_type: 'enumeration', entity_id: id,
+      description: `Batal pencacahan: ${rec.source_qty} ${srcUnitName} "${rec.source_item_name}" ↔ ${rec.output_qty} ${outUnitName} "${rec.output_item_name}" di ${rec.warehouse_name}`
+    });
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
