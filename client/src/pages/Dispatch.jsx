@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { getItems, getWarehouses, getInventory, getBranches, getDivisions, getDispatches, createDispatch } from '../api';
 
 const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0' });
-const emptyHeader = { warehouse_id: '', branch_id: '', division_id: '', notes: '' };
+const today = () => new Date().toISOString().slice(0, 10);
+const emptyHeader = { warehouse_id: '', branch_id: '', division_id: '', notes: '', dispatch_date: today() };
 
 export default function Dispatch() {
   const [dispatches, setDispatches] = useState([]);
@@ -93,6 +94,7 @@ export default function Dispatch() {
         branch_id: header.branch_id,
         division_id: header.division_id,
         notes: header.notes || null,
+        dispatch_date: header.dispatch_date || today(),
         items: rows.map(r => ({ item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index) })),
       });
       setHeader(emptyHeader);
@@ -144,9 +146,15 @@ export default function Dispatch() {
             </div>
           </div>
 
-          <div className="form-group" style={{ marginBottom: '1rem' }}>
-            <label>Catatan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
-            <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Alasan atau deskripsi..." />
+          <div className="form-row" style={{ marginBottom: '1rem' }}>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label>Catatan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+              <input value={header.notes} onChange={setHeaderField('notes')} placeholder="Alasan atau deskripsi..." />
+            </div>
+            <div className="form-group" style={{ margin: 0, minWidth: '170px', maxWidth: '200px' }}>
+              <label>Tanggal Pengiriman</label>
+              <input type="date" value={header.dispatch_date} onChange={setHeaderField('dispatch_date')} max={today()} />
+            </div>
           </div>
 
           <div style={{ overflowX: 'auto', marginBottom: '0.5rem' }}>

@@ -571,6 +571,7 @@ pool.query(`
   ALTER TABLE divisions       ADD COLUMN IF NOT EXISTS expense_account_id   UUID REFERENCES accounts(id);
   ALTER TABLE sales           ADD COLUMN IF NOT EXISTS branch_id             UUID REFERENCES branches(id);
   ALTER TABLE sales           ADD COLUMN IF NOT EXISTS division_id           UUID REFERENCES divisions(id);
+  ALTER TABLE inventory       ADD COLUMN IF NOT EXISTS source_id             UUID;
 `).then(() => pool.query(`
   CREATE TABLE IF NOT EXISTS pos_imports (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1179,8 +1180,8 @@ app.post('/api/invoices', async (req, res) => {
         const lineValue = Math.round(Number(item.quantity) * Number(item.price));
         // FIFO: always create a new lot so each purchase is tracked separately
         await client.query(
-          `INSERT INTO inventory (item_id, warehouse_id, quantity, unit_index, value, date) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [item.item_id, invoice.warehouse_id, lowestQty, lowestIdx, lineValue, invoiceDate]
+          `INSERT INTO inventory (item_id, warehouse_id, quantity, unit_index, value, date, source_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [item.item_id, invoice.warehouse_id, lowestQty, lowestIdx, lineValue, invoiceDate, invoice.id]
         );
         await writeHistory(client, {
           item_id: item.item_id, warehouse_id: invoice.warehouse_id,
@@ -1350,42 +1351,70 @@ app.put('/api/invoices/:id', async (req, res) => {
 });
 
 app.delete('/api/invoices/:id', requireAdmin, async (req, res) => {
-  const { rows: [inv] } = await pool.query(
-    `SELECT inv.invoice_number, inv.payment_status, inv.account_id, inv.photo_path,
-            inv.invoice_type, inv.warehouse_id, inv.branch_id, inv.division_id, inv.dispatch_id,
-            COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
-     FROM invoices inv
-     LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-     WHERE inv.id = $1
-     GROUP BY inv.id`,
-    [req.params.id]
-  );
-  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
-  if (inv.photo_path) {
-    const filePath = path.join(uploadsDir, path.basename(inv.photo_path));
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  }
-  await pool.query('DELETE FROM invoices WHERE id=$1', [req.params.id]);
-  if (inv.payment_status !== 'unpaid' && inv.account_id) {
-    // Was paid: restore cash account
-    await pool.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [inv.total, inv.account_id]);
-  } else if (inv.payment_status === 'unpaid') {
-    // Was unpaid: reverse AP credit
-    const ap = await getApAccount(pool);
-    if (ap) await pool.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, ap.id]);
-  }
-  // Reverse Dr entry (skip dispatch-generated invoices)
-  if (!inv.dispatch_id) {
-    if (inv.invoice_type === 'purchase') {
-      const invAcct = await getInventoryAccount(pool, inv.warehouse_id);
-      if (invAcct) await pool.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, invAcct.id]);
-    } else if (inv.invoice_type === 'expense') {
-      const expAcct = await getExpenseAccount(pool, inv.division_id, inv.branch_id);
-      if (expAcct) await pool.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, expAcct.id]);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: [inv] } = await client.query(
+      `SELECT inv.invoice_number, inv.payment_status, inv.account_id, inv.photo_path,
+              inv.invoice_type, inv.warehouse_id, inv.branch_id, inv.division_id, inv.dispatch_id,
+              inv.amount_paid,
+              COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
+       FROM invoices inv
+       LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
+       WHERE inv.id = $1
+       GROUP BY inv.id`,
+      [req.params.id]
+    );
+    if (!inv) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Invoice not found' }); }
+
+    // Reverse cash / AP accounting
+    if (inv.payment_status === 'paid' && inv.account_id) {
+      // Fully paid: restore full amount to cash account
+      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [inv.total, inv.account_id]);
+    } else if (inv.payment_status === 'partial' && inv.account_id && inv.amount_paid) {
+      // Partially paid: restore only the amount actually paid to the cash account
+      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [inv.amount_paid, inv.account_id]);
+      // Reverse remaining AP balance (unpaid portion)
+      const ap = await getApAccount(client);
+      const unpaid = Number(inv.total) - Number(inv.amount_paid);
+      if (ap && unpaid > 0) await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [unpaid, ap.id]);
+    } else if (inv.payment_status === 'unpaid') {
+      // Unpaid: reverse the full AP credit
+      const ap = await getApAccount(client);
+      if (ap) await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, ap.id]);
     }
+
+    // Reverse Dr entry (skip dispatch-generated invoices)
+    if (!inv.dispatch_id) {
+      if (inv.invoice_type === 'purchase') {
+        const invAcct = await getInventoryAccount(client, inv.warehouse_id);
+        if (invAcct) await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, invAcct.id]);
+        // Remove inventory lots and stock history created by this invoice
+        await client.query('DELETE FROM inventory WHERE source_id=$1', [req.params.id]);
+        await client.query('DELETE FROM stock_history WHERE source_id=$1 AND source_type=$2', [req.params.id, 'invoice']);
+      } else if (inv.invoice_type === 'expense') {
+        const expAcct = await getExpenseAccount(client, inv.division_id, inv.branch_id);
+        if (expAcct) await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inv.total, expAcct.id]);
+      }
+    }
+
+    await client.query('DELETE FROM invoices WHERE id=$1', [req.params.id]);
+
+    if (inv.photo_path) {
+      const filePath = path.join(uploadsDir, path.basename(inv.photo_path));
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await logActivity(client, { user_id: req.user.id, username: req.user.username, action: 'delete', entity_type: 'invoice', entity_id: req.params.id, description: `Deleted invoice ${inv.invoice_number}` });
+    await client.query('COMMIT');
+    res.status(204).send();
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
   }
-  await logActivity(pool, { user_id: req.user.id, username: req.user.username, action: 'delete', entity_type: 'invoice', entity_id: req.params.id, description: `Deleted invoice ${inv.invoice_number}` });
-  res.status(204).send();
 });
 
 // ── INVOICE PAYMENT ───────────────────────────────────────────────────────────
@@ -1934,10 +1963,11 @@ app.get('/api/dispatches', async (req, res) => {
 });
 
 app.post('/api/dispatches', async (req, res) => {
-  const { branch_id, division_id, warehouse_id, notes, items } = req.body;
+  const { branch_id, division_id, warehouse_id, notes, dispatch_date, items } = req.body;
   if (!branch_id || !division_id || !warehouse_id || !Array.isArray(items) || !items.length) {
     return res.status(400).json({ error: 'Branch, division, warehouse, and at least one item are required' });
   }
+  const txDate = dispatch_date || new Date().toISOString().slice(0, 10);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -1947,9 +1977,9 @@ app.post('/api/dispatches', async (req, res) => {
     const { rows: [wh] }       = await client.query('SELECT name FROM warehouses WHERE id=$1', [warehouse_id]);
 
     const { rows: [dispatch] } = await client.query(
-      `INSERT INTO dispatches (branch_id, division_id, warehouse_id, notes, dispatched_by)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [branch_id, division_id, warehouse_id, notes || null, req.user.id]
+      `INSERT INTO dispatches (branch_id, division_id, warehouse_id, notes, dispatched_by, dispatched_at)
+       VALUES ($1,$2,$3,$4,$5,$6::timestamptz) RETURNING *`,
+      [branch_id, division_id, warehouse_id, notes || null, req.user.id, txDate]
     );
 
     const processedItems = [];
@@ -2004,7 +2034,7 @@ app.post('/api/dispatches', async (req, res) => {
 
       await writeHistory(client, {
         item_id, warehouse_id, quantity_change: -Number(quantity), unit_name, type: 'pemakaian',
-        reference: `Dispatch → ${branch.name} / ${division.name}`, date: null,
+        reference: `Dispatch → ${branch.name} / ${division.name}`, date: txDate,
         source_id: dispatch.id, source_type: 'dispatch',
         value: -dispatchedValue,
       });
@@ -2025,8 +2055,8 @@ app.post('/api/dispatches', async (req, res) => {
     );
     const { rows: [expInv] } = await client.query(
       `INSERT INTO invoices (invoice_number, date, payment_status, invoice_type, branch_id, division_id, dispatch_id)
-       VALUES ($1, CURRENT_DATE, 'paid', 'expense', $2, $3, $4) RETURNING *`,
-      [num, branch_id, division_id, dispatch.id]
+       VALUES ($1, $2::date, 'paid', 'expense', $3, $4, $5) RETURNING *`,
+      [num, txDate, branch_id, division_id, dispatch.id]
     );
     for (const pi of processedItems) {
       const pricePerUnit = pi.quantity > 0 ? Math.round(pi.dispatchedValue / pi.quantity) : 0;
