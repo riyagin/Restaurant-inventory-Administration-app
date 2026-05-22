@@ -2476,6 +2476,7 @@ function parsePosXlsx(buffer) {
   const skippedRows = [];
   let currentAN     = null;
   let currentStatus = null;
+  let currentDate   = null;
 
   for (let r = headerRow + 1; r <= range.e.r; r++) {
     const rowA = getCell(r, 0);
@@ -2484,6 +2485,9 @@ function parsePosXlsx(buffer) {
     const anVal = getCell(r, 39); // AN: Jenis Pembayaran
     if (anVal && anVal !== '-' && String(anVal).trim() !== '') currentAN = String(anVal).trim();
 
+    const dateVal = getCell(r, 3); // D: Tanggal
+    if (dateVal && String(dateVal).trim() !== '') currentDate = dateVal;
+
     const category = getCell(r, 9);  // J: Kategori Produk
     if (!category || String(category).trim() === '') continue;
 
@@ -2491,7 +2495,7 @@ function parsePosXlsx(buffer) {
     const disc        = Number(getCell(r, 21)) || 0; // V: Diskon
     const biaya       = Number(getCell(r, 29)) || 0; // AD: Biaya Tambahan
     const noPenjualan = getCell(r, 2);               // C: No Penjualan
-    const dateRaw     = getCell(r, 3);               // D: Tanggal
+    const dateRaw     = currentDate;
     const product     = getCell(r, 11);              // L: Nama Produk
 
     // AV (index 47): Status — empty cells inherit from the previous row
@@ -2635,6 +2639,56 @@ app.get('/api/pos-import', async (req, res) => {
     byImport[line.import_id].push(line);
   }
   res.json(imports.map(i => ({ ...i, lines: byImport[i.id] || [] })));
+});
+
+app.delete('/api/pos-import/:id', async (req, res) => {
+  const { id } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: [imp] } = await client.query(
+      `SELECT pi.*, u.username AS created_by_name
+       FROM pos_imports pi
+       LEFT JOIN users u ON u.id = pi.created_by
+       WHERE pi.id = $1`,
+      [id]
+    );
+    if (!imp) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Import tidak ditemukan' }); }
+
+    const { rows: lines } = await client.query(
+      'SELECT * FROM pos_import_lines WHERE import_id = $1',
+      [id]
+    );
+
+    // Reverse every balance change made during confirm:
+    // revenue, expense, and cash lines each did balance += amount — reverse with balance -= amount
+    // discount lines were stored but never touched balances, so skip them
+    for (const line of lines) {
+      if (line.line_type === 'discount') continue;
+      await client.query(
+        'UPDATE accounts SET balance = balance - $1 WHERE id = $2',
+        [Number(line.amount), line.account_id]
+      );
+    }
+
+    await client.query('DELETE FROM pos_imports WHERE id = $1', [id]);
+
+    const idrFmt = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(imp.total_amount);
+    await logActivity(client, {
+      user_id: req.user.id, username: req.user.username,
+      action: 'delete', entity_type: 'pos_import', entity_id: id,
+      description: `Hapus POS Import ${imp.date} (${imp.description}): ${idrFmt} — saldo akun dikembalikan`
+    });
+
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 });
 
 app.post('/api/pos-import/confirm', async (req, res) => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getAccounts, getBranches, getDivisions, getDivisionCategories, parsePosXlsx, confirmPosImport, getPosImports } from '../api';
+import { getAccounts, getBranches, getDivisions, getDivisionCategories, parsePosXlsx, confirmPosImport, getPosImports, deletePosImport } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
@@ -34,6 +34,7 @@ export default function SalesImport() {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone]           = useState(false);
   const [expandedImport, setExpandedImport] = useState(null);
+  const [deletingImport, setDeletingImport] = useState(null);
   const fileRef = useRef();
 
   const revenueAccounts  = accounts.filter(a => a.account_type === 'revenue');
@@ -337,6 +338,21 @@ export default function SalesImport() {
       setError(err.response?.data?.error || 'Gagal menyimpan');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleDeleteImport = async (imp, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Hapus import "${imp.description}" (${fmt(imp.date)})?\n\nSemua perubahan saldo akun dari import ini akan dikembalikan.`)) return;
+    setDeletingImport(imp.id);
+    try {
+      await deletePosImport(imp.id);
+      setExpandedImport(v => v === imp.id ? null : v);
+      getPosImports().then(r => setImports(r.data));
+    } catch (err) {
+      alert(err.response?.data?.error || 'Gagal menghapus import');
+    } finally {
+      setDeletingImport(null);
     }
   };
 
@@ -1141,6 +1157,7 @@ export default function SalesImport() {
                 <th>Dicatat oleh</th>
                 <th>Waktu Dicatat</th>
                 <th></th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -1154,10 +1171,20 @@ export default function SalesImport() {
                     <td style={{ color: '#888', fontSize: '0.82rem' }}>{imp.created_by_name || '—'}</td>
                     <td style={{ color: '#888', fontSize: '0.82rem' }}>{new Date(imp.created_at).toLocaleString('id-ID')}</td>
                     <td style={{ color: '#aaa', fontSize: '0.75rem', userSelect: 'none' }}>{expandedImport === imp.id ? '▼' : '▶'}</td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        onClick={(e) => handleDeleteImport(imp, e)}
+                        disabled={deletingImport === imp.id}
+                        title="Hapus import dan kembalikan saldo"
+                      >
+                        {deletingImport === imp.id ? '...' : 'Hapus'}
+                      </button>
+                    </td>
                   </tr>
                   {expandedImport === imp.id && (
                     <tr key={`${imp.id}-detail`}>
-                      <td colSpan={7} style={{ background: '#f8f9ff', padding: '0.75rem 1.5rem' }}>
+                      <td colSpan={8} style={{ background: '#f8f9ff', padding: '0.75rem 1.5rem' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '1.5rem' }}>
                           <div>
                             <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Pendapatan (Kredit)</div>

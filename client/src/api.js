@@ -151,6 +151,7 @@ export const deleteSale = (id) => api.delete(`/sales/${id}`);
 export const parsePosXlsx    = (formData) => api.post('/pos-import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const confirmPosImport = (data) => api.post('/pos-import/confirm', data);
 export const getPosImports    = () => api.get('/pos-import');
+export const deletePosImport  = (id)  => api.delete(`/pos-import/${id}`);
 
 export const getRecipes = () => api.get('/recipes');
 export const getRecipe = (id) => api.get(`/recipes/${id}`);
