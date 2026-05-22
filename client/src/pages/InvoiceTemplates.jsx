@@ -5,13 +5,14 @@ const TYPE_LABELS = { purchase: 'Pembelian (tambah stok)', expense: 'Pengeluaran
 
 const emptyRow = () => ({ item_id: '', description: '', unit_index: '0', useDescription: false });
 
-function TemplateItemRow({ row, index, allItems, onUpdate, onRemove, isLast }) {
-  const selectedItem = allItems.find(it => it.id === row.item_id);
+function TemplateItemRow({ row, index, invoiceType, stockItems, nonStockItems, onUpdate, onRemove }) {
+  const itemList = invoiceType === 'purchase' ? stockItems : nonStockItems;
+  const selectedItem = itemList.find(it => it.id === row.item_id);
 
   const setField = (field) => (e) => {
     const val = e.target.value;
     if (field === 'item_id') {
-      const item = allItems.find(it => it.id === val);
+      const item = itemList.find(it => it.id === val);
       onUpdate(index, { ...row, item_id: val, unit_index: item ? String(item.units.length - 1) : '0' });
     } else {
       onUpdate(index, { ...row, [field]: val });
@@ -25,28 +26,30 @@ function TemplateItemRow({ row, index, allItems, onUpdate, onRemove, isLast }) {
   return (
     <tr style={{ verticalAlign: 'top' }}>
       <td style={{ paddingTop: '0.3rem', minWidth: '220px' }}>
-        <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.3rem' }}>
-          <button
-            type="button"
-            onClick={() => toggleMode(false)}
-            style={{
-              fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
-              border: !row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
-              background: !row.useDescription ? '#e8f0fe' : '#f5f5f5',
-              color: !row.useDescription ? '#4f8ef7' : '#888', fontWeight: 600,
-            }}
-          >Daftar</button>
-          <button
-            type="button"
-            onClick={() => toggleMode(true)}
-            style={{
-              fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
-              border: row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
-              background: row.useDescription ? '#e8f0fe' : '#f5f5f5',
-              color: row.useDescription ? '#4f8ef7' : '#888', fontWeight: 600,
-            }}
-          >Manual</button>
-        </div>
+        {invoiceType === 'expense' && (
+          <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.3rem' }}>
+            <button
+              type="button"
+              onClick={() => toggleMode(false)}
+              style={{
+                fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
+                border: !row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
+                background: !row.useDescription ? '#e8f0fe' : '#f5f5f5',
+                color: !row.useDescription ? '#4f8ef7' : '#888', fontWeight: 600,
+              }}
+            >Daftar</button>
+            <button
+              type="button"
+              onClick={() => toggleMode(true)}
+              style={{
+                fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px', cursor: 'pointer',
+                border: row.useDescription ? '1.5px solid #4f8ef7' : '1.5px solid #e0e0e0',
+                background: row.useDescription ? '#e8f0fe' : '#f5f5f5',
+                color: row.useDescription ? '#4f8ef7' : '#888', fontWeight: 600,
+              }}
+            >Manual</button>
+          </div>
+        )}
         {row.useDescription ? (
           <input
             value={row.description}
@@ -57,14 +60,14 @@ function TemplateItemRow({ row, index, allItems, onUpdate, onRemove, isLast }) {
         ) : (
           <select value={row.item_id} onChange={setField('item_id')} style={{ width: '100%' }}>
             <option value="">Pilih item...</option>
-            {allItems.map(it => (
-              <option key={it.id} value={it.id}>{it.name} ({it.is_stock ? 'stok' : 'non-stok'})</option>
+            {itemList.map(it => (
+              <option key={it.id} value={it.id}>{it.name}</option>
             ))}
           </select>
         )}
       </td>
       <td style={{ paddingTop: '0.3rem', minWidth: '110px' }}>
-        <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
+        {invoiceType === 'expense' && <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />}
         {!row.useDescription && selectedItem ? (
           <select value={row.unit_index} onChange={setField('unit_index')} style={{ width: '100%' }}>
             {selectedItem.units.map((u, ui) => (
@@ -78,14 +81,14 @@ function TemplateItemRow({ row, index, allItems, onUpdate, onRemove, isLast }) {
         )}
       </td>
       <td style={{ paddingTop: '0.3rem', width: '40px', textAlign: 'center' }}>
-        <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
+        {invoiceType === 'expense' && <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />}
         <button type="button" onClick={() => onRemove(index)} className="btn btn-danger btn-sm" title="Hapus baris">✕</button>
       </td>
     </tr>
   );
 }
 
-function TemplateForm({ initial, allItems, onSave, onCancel }) {
+function TemplateForm({ initial, stockItems, nonStockItems, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [invoiceType, setInvoiceType] = useState(initial?.invoice_type ?? 'expense');
   const [rows, setRows] = useState(() => {
@@ -101,6 +104,11 @@ function TemplateForm({ initial, allItems, onSave, onCancel }) {
   });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const handleTypeChange = (newType) => {
+    setInvoiceType(newType);
+    setRows([emptyRow()]);
+  };
 
   const updateRow = (index, updated) => setRows(rs => rs.map((r, i) => i === index ? updated : r));
   const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index));
@@ -142,15 +150,20 @@ function TemplateForm({ initial, allItems, onSave, onCancel }) {
         </div>
         <div className="form-group" style={{ margin: 0, flex: 1 }}>
           <label>Tipe Invoice</label>
-          <select value={invoiceType} onChange={e => setInvoiceType(e.target.value)}>
+          <select value={invoiceType} onChange={e => handleTypeChange(e.target.value)}>
             <option value="expense">Pengeluaran (tanpa stok)</option>
             <option value="purchase">Pembelian (tambah stok)</option>
           </select>
         </div>
       </div>
 
-      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#444', marginBottom: '0.5rem' }}>
+      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#444', marginBottom: '0.25rem' }}>
         Item Bawaan Template <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional — bisa ditambah saat input invoice)</span>
+      </div>
+      <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.5rem' }}>
+        {invoiceType === 'purchase'
+          ? 'Hanya menampilkan item stok.'
+          : 'Hanya menampilkan item non-stok. Gunakan mode Manual untuk item bebas.'}
       </div>
 
       <div style={{ overflowX: 'auto', marginBottom: '0.75rem' }}>
@@ -168,10 +181,11 @@ function TemplateForm({ initial, allItems, onSave, onCancel }) {
                 key={i}
                 row={row}
                 index={i}
-                allItems={allItems}
+                invoiceType={invoiceType}
+                stockItems={stockItems}
+                nonStockItems={nonStockItems}
                 onUpdate={updateRow}
                 onRemove={removeRow}
-                isLast={rows.length === 1}
               />
             ))}
           </tbody>
@@ -194,7 +208,8 @@ function TemplateForm({ initial, allItems, onSave, onCancel }) {
 
 export default function InvoiceTemplates() {
   const [templates, setTemplates] = useState([]);
-  const [allItems, setAllItems] = useState([]);
+  const [stockItems, setStockItems] = useState([]);
+  const [nonStockItems, setNonStockItems] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
@@ -203,10 +218,8 @@ export default function InvoiceTemplates() {
 
   useEffect(() => {
     load();
-    Promise.all([
-      getItems({ is_stock: 'true' }),
-      getItems({ is_stock: 'false' }),
-    ]).then(([stk, nonstk]) => setAllItems([...stk.data, ...nonstk.data]));
+    getItems({ is_stock: 'true' }).then(r => setStockItems(r.data));
+    getItems({ is_stock: 'false' }).then(r => setNonStockItems(r.data));
   }, []);
 
   const handleCreate = async (data) => {
@@ -237,7 +250,8 @@ export default function InvoiceTemplates() {
       <div className="card" style={{ maxWidth: '800px' }}>
         <h2 style={{ marginBottom: '1.5rem' }}>Template Baru</h2>
         <TemplateForm
-          allItems={allItems}
+          stockItems={stockItems}
+          nonStockItems={nonStockItems}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
         />
@@ -251,7 +265,8 @@ export default function InvoiceTemplates() {
         <h2 style={{ marginBottom: '1.5rem' }}>Edit Template — {editing.name}</h2>
         <TemplateForm
           initial={editing}
-          allItems={allItems}
+          stockItems={stockItems}
+          nonStockItems={nonStockItems}
           onSave={handleUpdate}
           onCancel={() => setEditing(null)}
         />

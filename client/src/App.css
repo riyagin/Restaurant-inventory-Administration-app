@@ -210,7 +210,9 @@ tr.row-expanded td { background: #f0f4ff !important; }
   .activity-table th:nth-child(2),
   .activity-table td:nth-child(2) { display: none; }
 
-  /* Daily sales table: hide manual column on very small screens */
+  /* Daily sales table: smaller text and hide manual column on mobile */
+  .daily-sales-table { font-size: 0.78rem; }
+  .daily-sales-table th, .daily-sales-table td { padding: 0.45rem 0.4rem; }
   .daily-sales-table th:nth-child(3),
   .daily-sales-table td:nth-child(3) { display: none; }
 }
