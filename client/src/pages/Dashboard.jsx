@@ -60,7 +60,7 @@ function DailySalesCard() {
         <p style={{ color: '#e74c3c', fontSize: '0.88rem' }}>Gagal memuat data.</p>
       ) : (
         <>
-          <table>
+          <table className="daily-sales-table">
             <thead>
               <tr>
                 <th>Cabang</th>
@@ -175,7 +175,9 @@ export default function Dashboard() {
             <h2>Invoice Belum Lunas ({outstanding.length})</h2>
             <Link to="/invoices" className="btn btn-secondary btn-sm">Lihat Semua Invoice</Link>
           </div>
-          <table>
+
+          {/* Desktop table */}
+          <table className="invoice-desktop-table">
             <thead>
               <tr>
                 <th>No. Invoice</th>
@@ -225,6 +227,51 @@ export default function Dashboard() {
               })}
             </tbody>
           </table>
+
+          {/* Mobile cards */}
+          <div className="invoice-card-list">
+            {outstanding.map(inv => {
+              const remaining = Number(inv.total) - Number(inv.amount_paid);
+              const isOverdue = inv.due_date && inv.due_date < todayStr;
+              return (
+                <div key={inv.id} className={`inv-card${isOverdue ? ' overdue' : ''}`}>
+                  <div className="inv-card-top">
+                    <div>
+                      <div className="inv-card-num">{inv.invoice_number}</div>
+                      <div className="inv-card-vendor">{inv.vendor_name || '—'}</div>
+                    </div>
+                    <span style={{
+                      display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px',
+                      fontSize: '0.75rem', fontWeight: 600,
+                      background: inv.payment_status === 'partial' ? '#fff3e0' : '#fdecea',
+                      color: inv.payment_status === 'partial' ? '#e67e22' : '#c0392b',
+                    }}>
+                      {inv.payment_status === 'partial' ? 'Sebagian' : 'Belum Dibayar'}
+                    </span>
+                  </div>
+                  <div className="inv-card-row">
+                    <span className="lbl">Tanggal</span>
+                    <span>{fmtDate(inv.date)}</span>
+                  </div>
+                  <div className="inv-card-row">
+                    <span className="lbl">Jatuh Tempo</span>
+                    <span style={{ fontWeight: isOverdue ? 700 : 'normal', color: isOverdue ? '#e74c3c' : undefined }}>
+                      {inv.due_date ? fmtDate(inv.due_date) : '—'}
+                      {isOverdue && <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', background: '#fdecea', color: '#e74c3c', borderRadius: '3px', padding: '0.05rem 0.3rem', fontWeight: 700 }}>LEWAT</span>}
+                    </span>
+                  </div>
+                  <div className="inv-card-row">
+                    <span className="lbl">Total</span>
+                    <span style={{ fontWeight: 600 }}>{idr(inv.total)}</span>
+                  </div>
+                  <div className="inv-card-footer">
+                    <span style={{ fontWeight: 700, color: '#e67e22', fontSize: '0.95rem' }}>Sisa: {idr(remaining)}</span>
+                    <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -240,7 +287,7 @@ export default function Dashboard() {
           <div className="card-header" style={{ marginBottom: '0.75rem' }}>
             <h2>Aktivitas Terakhir</h2>
           </div>
-          <table>
+          <table className="activity-table">
             <thead>
               <tr>
                 <th>Waktu</th>

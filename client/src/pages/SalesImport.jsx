@@ -282,15 +282,53 @@ export default function SalesImport() {
     if (biayaMappings.some(m => !m.account_id)) { setError('Pilih akun biaya tambahan'); return; }
     setSubmitting(true);
     try {
-      await confirmPosImport({
-        date: parsed.date,
-        description,
-        filename,
-        revenue_mappings:  revMappings.map(m => ({ label: m.label, account_id: m.account_id, amount: Number(m.amount) })),
-        discount_mappings: discMappings.map(m => ({ label: m.label, account_id: m.account_id, amount: -Math.abs(Number(m.amount)) })),
-        expense_mappings:  biayaMappings.map(m => ({ label: m.label, account_id: m.account_id, amount: Number(m.amount) })),
-        cash_mappings:     cashMappings.map(m => ({ label: m.label, account_id: m.account_id, amount: Number(m.amount) })),
+      const dates = parsed.dates || [{ date: parsed.date, totalNet: totalRevenue, totalGross: parsed.totalGross, totalDisc: parsed.totalDisc || 0, totalBiaya: parsed.totalBiaya || 0 }];
+      const grandNet   = dates.reduce((s, d) => s + d.totalNet, 0) || 1;
+      const grandCash  = dates.reduce((s, d) => s + d.totalNet, 0) || 1; // same as grandNet
+      const grandDisc  = dates.reduce((s, d) => s + d.totalDisc, 0) || 1;
+      const grandBiaya = dates.reduce((s, d) => s + d.totalBiaya, 0) || 1;
+
+      const scale = (amount, ratio) => Math.round(Number(amount) * ratio);
+
+      const imports = dates.map((d, i) => {
+        const isLast = i === dates.length - 1;
+        const netRatio   = grandNet   > 0 ? d.totalNet   / grandNet   : 1 / dates.length;
+        const discRatio  = grandDisc  > 0 ? d.totalDisc  / grandDisc  : 1 / dates.length;
+        const biayaRatio = grandBiaya > 0 ? d.totalBiaya / grandBiaya : 1 / dates.length;
+
+        // For the last date, use remainder to avoid rounding drift
+        const rev = revMappings.map((m, mi) => {
+          const amt = isLast
+            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd, di) => s + scale(m.amount, grandNet > 0 ? dd.totalNet / grandNet : 1 / dates.length), 0)
+            : scale(m.amount, netRatio);
+          return { label: m.label, account_id: m.account_id, amount: amt };
+        }).filter(m => m.amount > 0);
+
+        const cash = cashMappings.map(m => {
+          const amt = isLast
+            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd) => s + scale(m.amount, grandNet > 0 ? dd.totalNet / grandNet : 1 / dates.length), 0)
+            : scale(m.amount, netRatio);
+          return { label: m.label, account_id: m.account_id, amount: amt };
+        }).filter(m => m.amount > 0);
+
+        const disc = discMappings.map(m => {
+          const amt = isLast
+            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd) => s + scale(m.amount, grandDisc > 0 ? dd.totalDisc / grandDisc : 1 / dates.length), 0)
+            : scale(m.amount, discRatio);
+          return { label: m.label, account_id: m.account_id, amount: -Math.abs(amt) };
+        }).filter(m => m.amount !== 0);
+
+        const biaya = biayaMappings.map(m => {
+          const amt = isLast
+            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd) => s + scale(m.amount, grandBiaya > 0 ? dd.totalBiaya / grandBiaya : 1 / dates.length), 0)
+            : scale(m.amount, biayaRatio);
+          return { label: m.label, account_id: m.account_id, amount: amt };
+        }).filter(m => m.amount > 0);
+
+        return { date: d.date, description: `${description}${dates.length > 1 ? ` (${d.date})` : ''}`, revenue_mappings: rev, cash_mappings: cash, discount_mappings: disc, expense_mappings: biaya };
       });
+
+      await confirmPosImport({ imports, filename });
       setDone(true);
       setParsed(null);
       setRevMappings([]); setCashMappings([]); setDiscMappings([]); setBiayaMappings([]);
@@ -362,13 +400,20 @@ export default function SalesImport() {
               </div>
               <div>
                 <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Tanggal Transaksi</div>
-                <input
-                  type="date"
-                  value={parsed.date || ''}
-                  onChange={e => setParsed(p => ({ ...p, date: e.target.value }))}
-                  style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 600 }}
-                  required
-                />
+                {parsed.dates && parsed.dates.length > 1 ? (
+                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#2c6fc2' }}>
+                    {parsed.dates.length} hari: {parsed.dates[0].date} s/d {parsed.dates[parsed.dates.length - 1].date}
+                    <div style={{ fontSize: '0.75rem', color: '#888', fontWeight: 400, marginTop: '0.15rem' }}>Akan disimpan sebagai {parsed.dates.length} import terpisah</div>
+                  </div>
+                ) : (
+                  <input
+                    type="date"
+                    value={parsed.date || ''}
+                    onChange={e => setParsed(p => ({ ...p, date: e.target.value }))}
+                    style={{ padding: '0.3rem 0.5rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.9rem', fontWeight: 600 }}
+                    required
+                  />
+                )}
               </div>
               <div>
                 <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Total Penjualan Kotor</div>

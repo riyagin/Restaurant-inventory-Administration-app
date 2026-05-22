@@ -2417,15 +2417,17 @@ function parsePosXlsx(buffer) {
     });
   }
 
-  // Resolve date: DD/MM/YYYY → YYYY-MM-DD
-  const firstDate = dataRows.find(r => r.dateRaw)?.dateRaw;
-  let saleDate = null;
-  if (firstDate) {
-    const s = String(firstDate);
+  // Parse DD/MM/YYYY string → YYYY-MM-DD
+  function parseDate(raw) {
+    if (!raw) return null;
+    const s = String(raw);
     const parts = s.split('/');
-    if (parts.length === 3) saleDate = `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
-    else saleDate = s.split('T')[0];
+    if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+    return s.split('T')[0];
   }
+
+  const firstDate = dataRows.find(r => r.dateRaw)?.dateRaw;
+  const saleDate = parseDate(firstDate);
 
   // Aggregate by category
   const catMap = {};
@@ -2455,6 +2457,18 @@ function parsePosXlsx(buffer) {
     payMap[k].net   += row.net;
   }
 
+  // Aggregate by date (for multi-day splits)
+  const dateMap = {};
+  for (const row of dataRows) {
+    const d = parseDate(row.dateRaw) || saleDate;
+    if (!dateMap[d]) dateMap[d] = { date: d, totalNet: 0, totalGross: 0, totalDisc: 0, totalBiaya: 0 };
+    dateMap[d].totalNet   += row.net;
+    dateMap[d].totalGross += row.gross;
+    dateMap[d].totalDisc  += row.disc;
+    dateMap[d].totalBiaya += row.biaya;
+  }
+  const dates = Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date));
+
   const rows = dataRows.map(r => ({ no_penjualan: r.no_penjualan, category: r.category, product: r.product, gross: r.gross, disc: r.disc, biaya: r.biaya, net: r.net, payment: r.payment }));
 
   const categories = Object.values(catMap).map(c => ({
@@ -2469,6 +2483,7 @@ function parsePosXlsx(buffer) {
 
   return {
     date: saleDate,
+    dates,
     categories,
     payments:      Object.values(payMap),
     rows,
@@ -2513,86 +2528,87 @@ app.get('/api/pos-import', async (req, res) => {
 });
 
 app.post('/api/pos-import/confirm', async (req, res) => {
-  const { date, description, filename, revenue_mappings, cash_mappings, discount_mappings = [], expense_mappings = [] } = req.body;
-  // revenue_mappings:  [{label, account_id, amount (=net of discount and commission)}]
-  // discount_mappings: [{label, account_id, amount (negative — reduces discount revenue account, informational)}]
-  // expense_mappings:  [{label, account_id, amount (=biaya tambahan)}]
-  // cash_mappings:     [{label, account_id, amount (=real received)}]
-  // Balance: sum(revenue) = sum(cash) + sum(expense)  — discount is embedded in net revenue
-  if (!date || !Array.isArray(revenue_mappings) || !Array.isArray(cash_mappings)) {
+  // imports: [{date, description, revenue_mappings, cash_mappings, discount_mappings, expense_mappings}]
+  // Each entry is one pos_imports record (one per transaction date).
+  const { imports, filename } = req.body;
+  if (!Array.isArray(imports) || imports.length === 0) {
     return res.status(400).json({ error: 'Data tidak lengkap' });
   }
-  const totalRevenue  = revenue_mappings.reduce((s, m) => s + Number(m.amount), 0);
-  const totalCash     = cash_mappings.reduce((s, m) => s + Number(m.amount), 0);
-  const totalDiscount = discount_mappings.reduce((s, m) => s + Number(m.amount), 0);
-  const totalExpense  = expense_mappings.reduce((s, m) => s + Number(m.amount), 0);
-  for (const m of [...revenue_mappings, ...cash_mappings]) {
-    if (!m.account_id) return res.status(400).json({ error: `Akun belum dipilih untuk "${m.label}"` });
-    if (!m.amount || Number(m.amount) <= 0) return res.status(400).json({ error: `Jumlah tidak valid untuk "${m.label}"` });
-  }
-  for (const m of discount_mappings) {
-    if (!m.account_id) return res.status(400).json({ error: `Akun diskon belum dipilih` });
-  }
-  for (const m of expense_mappings) {
-    if (!m.account_id) return res.status(400).json({ error: `Akun biaya tambahan belum dipilih` });
+
+  for (const entry of imports) {
+    const { date, revenue_mappings = [], cash_mappings = [], discount_mappings = [], expense_mappings = [] } = entry;
+    if (!date) return res.status(400).json({ error: 'Tanggal wajib diisi' });
+    for (const m of [...revenue_mappings, ...cash_mappings]) {
+      if (!m.account_id) return res.status(400).json({ error: `Akun belum dipilih untuk "${m.label}"` });
+      if (!m.amount || Number(m.amount) <= 0) return res.status(400).json({ error: `Jumlah tidak valid untuk "${m.label}"` });
+    }
+    for (const m of discount_mappings) {
+      if (!m.account_id) return res.status(400).json({ error: `Akun diskon belum dipilih` });
+    }
+    for (const m of expense_mappings) {
+      if (!m.account_id) return res.status(400).json({ error: `Akun biaya tambahan belum dipilih` });
+    }
   }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Credit revenue accounts (gross)
-    for (const m of revenue_mappings) {
-      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
-    }
-    // Discounts are informational only — revenue_mappings already use net amounts (gross - disc),
-    // so touching the revenue account again here would double-count the deduction.
-    // Debit biaya tambahan expense accounts
-    for (const m of expense_mappings) {
-      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
-    }
-    // Debit (increase) cash/asset accounts (net)
-    for (const m of cash_mappings) {
-      await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
-    }
+    const savedImports = [];
+    for (const entry of imports) {
+      const { date, description, revenue_mappings = [], cash_mappings = [], discount_mappings = [], expense_mappings = [] } = entry;
+      const totalRevenue = revenue_mappings.reduce((s, m) => s + Number(m.amount), 0);
 
-    // Save import record
-    const { rows: [imp] } = await client.query(
-      `INSERT INTO pos_imports (description, date, source_file, total_amount, created_by)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [description || `POS Import ${date}`, date, filename || null, totalRevenue, req.user.id]
-    );
+      // Update account balances
+      for (const m of revenue_mappings) {
+        await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
+      }
+      for (const m of expense_mappings) {
+        await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
+      }
+      for (const m of cash_mappings) {
+        await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [Number(m.amount), m.account_id]);
+      }
 
-    for (const m of revenue_mappings) {
-      await client.query(
-        `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'revenue')`,
-        [imp.id, m.account_id, m.label, Number(m.amount)]
+      const { rows: [imp] } = await client.query(
+        `INSERT INTO pos_imports (description, date, source_file, total_amount, created_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [description || `POS Import ${date}`, date, filename || null, totalRevenue, req.user.id]
       );
-    }
-    for (const m of discount_mappings) {
-      await client.query(
-        `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'discount')`,
-        [imp.id, m.account_id, m.label, Number(m.amount)]
-      );
-    }
-    for (const m of expense_mappings) {
-      await client.query(
-        `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'expense')`,
-        [imp.id, m.account_id, m.label, Number(m.amount)]
-      );
-    }
-    for (const m of cash_mappings) {
-      await client.query(
-        `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'cash')`,
-        [imp.id, m.account_id, m.label, Number(m.amount)]
-      );
-    }
 
-    const idrFmt = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalRevenue);
-    await logActivity(client, { user_id: req.user.id, username: req.user.username, action: 'create', entity_type: 'pos_import', entity_id: imp.id, description: `POS Import ${date}: ${idrFmt} (${revenue_mappings.length} kategori, ${cash_mappings.length} metode bayar)` });
+      for (const m of revenue_mappings) {
+        await client.query(
+          `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'revenue')`,
+          [imp.id, m.account_id, m.label, Number(m.amount)]
+        );
+      }
+      for (const m of discount_mappings) {
+        await client.query(
+          `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'discount')`,
+          [imp.id, m.account_id, m.label, Number(m.amount)]
+        );
+      }
+      for (const m of expense_mappings) {
+        await client.query(
+          `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'expense')`,
+          [imp.id, m.account_id, m.label, Number(m.amount)]
+        );
+      }
+      for (const m of cash_mappings) {
+        await client.query(
+          `INSERT INTO pos_import_lines (import_id, account_id, label, amount, line_type) VALUES ($1,$2,$3,$4,'cash')`,
+          [imp.id, m.account_id, m.label, Number(m.amount)]
+        );
+      }
+
+      const idrFmt = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(totalRevenue);
+      await logActivity(client, { user_id: req.user.id, username: req.user.username, action: 'create', entity_type: 'pos_import', entity_id: imp.id, description: `POS Import ${date}: ${idrFmt} (${revenue_mappings.length} kategori, ${cash_mappings.length} metode bayar)` });
+
+      savedImports.push(imp);
+    }
 
     await client.query('COMMIT');
-    res.status(201).json(imp);
+    res.status(201).json(savedImports.length === 1 ? savedImports[0] : savedImports);
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

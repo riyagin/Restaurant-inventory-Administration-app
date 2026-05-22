@@ -109,3 +109,50 @@ tr.row-expanded td { background: #f0f4ff !important; }
 .invoice-items-table tr:last-child td { border-bottom: none; }
 .invoice-items-table input, .invoice-items-table select { padding: 0.35rem 0.5rem; border: 1px solid #ddd; border-radius: 5px; font-size: 0.875rem; outline: none; background: #fff; }
 .invoice-items-table input:focus, .invoice-items-table select:focus { border-color: #4f8ef7; }
+
+.invoice-card-list { display: none; }
+
+/* ── Mobile ────────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .main-content { padding: 1rem; }
+  .card { padding: 1rem; }
+  .page-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+  .page-header h1 { font-size: 1.2rem; }
+  .stats-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .stat-card { padding: 0.9rem 1rem; }
+  .stat-card .value { font-size: 1.3rem; }
+
+  /* Stack card-header title + controls vertically */
+  .card-header { flex-direction: column; align-items: flex-start; }
+
+  /* Dashboard: outstanding invoices as stacked cards instead of wide table */
+  .invoice-desktop-table { display: none; }
+  .invoice-card-list { display: flex; flex-direction: column; gap: 0.75rem; }
+
+  .inv-card {
+    border: 1px solid #f0f0f0;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    background: #fafafa;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .inv-card.overdue { background: #fff5f5; border-color: #fcd1d1; }
+  .inv-card-top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .inv-card-num { font-weight: 700; font-size: 0.95rem; }
+  .inv-card-vendor { font-size: 0.82rem; color: #666; }
+  .inv-card-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: #555; }
+  .inv-card-row .lbl { color: #999; font-size: 0.78rem; }
+  .inv-card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 0.25rem; }
+
+  /* Activity table: hide time+user columns, show only action+description */
+  .activity-table th:nth-child(1),
+  .activity-table td:nth-child(1),
+  .activity-table th:nth-child(2),
+  .activity-table td:nth-child(2) { display: none; }
+
+  /* Daily sales table: hide manual column on very small screens */
+  .daily-sales-table th:nth-child(3),
+  .daily-sales-table td:nth-child(3) { display: none; }
+}
