@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: 'http://localhost:5000/api' });
+const { apiBaseUrl } = await fetch('/config.json').then(r => r.json());
+
+const api = axios.create({ baseURL: apiBaseUrl });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
@@ -164,6 +166,7 @@ export const exportActivityLog = (params) => api.get('/activity-log/export', { p
 export const deleteActivityLog = (before_date) => api.delete('/activity-log', { data: { before_date } });
 
 export const getStats = () => api.get('/stats');
+export const getDailySalesByBranch = (date) => api.get('/stats/daily-sales', { params: { date } });
 
 export const getExpenseReport = (params) => api.get('/expense-report', { params });
 

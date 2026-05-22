@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getStats } from '../api';
+import { getStats, getDailySalesByBranch } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -8,6 +8,103 @@ const idr = (v) =>
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 const todayStr = new Date().toISOString().split('T')[0];
+
+function offsetDate(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+}
+
+function DailySalesCard() {
+  const [date, setDate] = useState(todayStr);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getDailySalesByBranch(date)
+      .then(r => { setData(r.data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [date]);
+
+  const isToday = date === todayStr;
+  const totalManual = data ? data.branches.reduce((s, b) => s + b.manual_sales, 0) : 0;
+  const grandTotal  = data ? totalManual + (data.pos_revenue || 0) : 0;
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="card-header" style={{ alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>Penjualan Harian per Cabang</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setDate(d => offsetDate(d, -1))}
+            title="Hari sebelumnya"
+            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}
+          >‹</button>
+          <span style={{ fontWeight: 600, fontSize: '0.9rem', minWidth: '120px', textAlign: 'center' }}>
+            {fmtDate(date)}{isToday && <span style={{ marginLeft: '0.35rem', fontSize: '0.72rem', background: '#e8f5e9', color: '#2e7d32', borderRadius: '4px', padding: '0.05rem 0.35rem', fontWeight: 700 }}>Hari ini</span>}
+          </span>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => setDate(d => offsetDate(d, 1))}
+            disabled={isToday}
+            title="Hari berikutnya"
+            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}
+          >›</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <p style={{ color: '#999', fontSize: '0.88rem', padding: '0.5rem 0' }}>Memuat...</p>
+      ) : !data ? (
+        <p style={{ color: '#e74c3c', fontSize: '0.88rem' }}>Gagal memuat data.</p>
+      ) : (
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>Cabang</th>
+                <th style={{ textAlign: 'right' }}>Penjualan Manual</th>
+                <th style={{ textAlign: 'right' }}>Transaksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.branches.map(b => (
+                <tr key={b.branch_id}>
+                  <td style={{ fontWeight: 500 }}>{b.branch_name}</td>
+                  <td style={{ textAlign: 'right', fontWeight: b.manual_sales > 0 ? 600 : 'normal', color: b.manual_sales > 0 ? '#1a6632' : '#bbb' }}>
+                    {idr(b.manual_sales)}
+                  </td>
+                  <td style={{ textAlign: 'right', color: '#888', fontSize: '0.85rem' }}>
+                    {b.sale_count > 0 ? `${b.sale_count}x` : '—'}
+                  </td>
+                </tr>
+              ))}
+              {data.pos_revenue > 0 && (
+                <tr style={{ borderTop: '1px dashed #e0e0e0' }}>
+                  <td style={{ color: '#555', fontStyle: 'italic' }}>POS Import ({data.pos_import_count}x)</td>
+                  <td style={{ textAlign: 'right', fontWeight: 600, color: '#2c6fc2' }}>{idr(data.pos_revenue)}</td>
+                  <td></td>
+                </tr>
+              )}
+              {data.branches.length > 0 && (
+                <tr style={{ borderTop: '2px solid #e0e0e0', fontWeight: 700 }}>
+                  <td>Total</td>
+                  <td style={{ textAlign: 'right', color: grandTotal > 0 ? '#1a6632' : '#bbb' }}>{idr(grandTotal)}</td>
+                  <td></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+          {data.branches.length === 0 && (
+            <p style={{ color: '#999', fontSize: '0.88rem', margin: '0.5rem 0 0' }}>Tidak ada cabang terdaftar.</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
@@ -68,6 +165,9 @@ export default function Dashboard() {
           )}
         </Link>
       </div>
+
+      {/* Daily sales by branch */}
+      <DailySalesCard />
 
       {/* Outstanding invoices */}
       {outstanding.length > 0 && (

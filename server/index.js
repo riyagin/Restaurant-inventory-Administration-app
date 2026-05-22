@@ -3007,6 +3007,47 @@ app.get('/api/reports/daily', async (req, res) => {
   });
 });
 
+// ── DAILY SALES BY BRANCH ─────────────────────────────────────────────────────
+
+app.get('/api/stats/daily-sales', async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+  try {
+    const [salesRes, posRes] = await Promise.all([
+      pool.query(`
+        SELECT b.id AS branch_id, b.name AS branch_name,
+               COALESCE(SUM(s.amount), 0)::BIGINT AS manual_sales,
+               COUNT(s.id)::INT AS sale_count
+        FROM branches b
+        LEFT JOIN sales s ON s.branch_id = b.id AND s.date = $1
+        GROUP BY b.id, b.name
+        ORDER BY b.name
+      `, [date]),
+      pool.query(`
+        SELECT COALESCE(SUM(total_amount), 0)::BIGINT AS pos_revenue,
+               COUNT(id)::INT AS import_count
+        FROM pos_imports
+        WHERE date = $1
+      `, [date]),
+    ]);
+
+    const posRevenue   = Number(posRes.rows[0]?.pos_revenue || 0);
+    const posImports   = Number(posRes.rows[0]?.import_count || 0);
+
+    const branches = salesRes.rows.map(r => ({
+      branch_id:    r.branch_id,
+      branch_name:  r.branch_name,
+      manual_sales: Number(r.manual_sales),
+      sale_count:   Number(r.sale_count),
+    }));
+
+    res.json({ date, branches, pos_revenue: posRevenue, pos_import_count: posImports });
+  } catch (err) {
+    console.error('Daily sales error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── STATS ─────────────────────────────────────────────────────────────────────
 
 app.get('/api/stats', async (req, res) => {
