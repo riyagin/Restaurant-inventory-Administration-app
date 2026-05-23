@@ -17,6 +17,7 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
+server/config.json
 
 # Uploaded files (server)
 server/uploads/

@@ -36,8 +36,12 @@ GRANT ALL PRIVILEGES ON DATABASE inventory_app TO postgres;
 \q
 ```
 ```bash
-# Run schema
+# Run schema (first-time setup only)
 psql -U postgres -d inventory_app -f /var/www/inventory-app/server/schema.sql
+
+# Run migrations (applies any changes on top of the base schema)
+cd /var/www/inventory-app/server
+npm run migrate
 ```
 
 ## 3. Deploy application files
@@ -121,6 +125,28 @@ pm2 monit                  # live CPU/memory dashboard
 cd /var/www/inventory-app
 git pull
 cd server && npm install --omit=dev
+npm run migrate          # apply any new migrations before restarting
 cd ../client && npm install && npm run build
 pm2 restart inventory-app
 ```
+
+## First time running migrations on an existing database
+
+If your production DB already has the tables but was set up before the migration runner existed, mark all past migrations as already applied so the runner doesn't re-run them:
+
+```bash
+cd /var/www/inventory-app/server
+node migrate.js   # creates the schema_migrations table
+
+# Then mark the migrations that were already applied manually:
+psql -U postgres -d inventory_app -c "
+  INSERT INTO schema_migrations (filename) VALUES
+    ('add_enumerations.sql'),
+    ('add_template_vendor_warehouse.sql')
+  ON CONFLICT DO NOTHING;
+"
+
+node migrate.js   # should now print: No pending migrations.
+```
+
+From this point on, just run `npm run migrate` after every `git pull`.

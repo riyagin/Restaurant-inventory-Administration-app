@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getInvoiceTemplates, createInvoiceTemplate, updateInvoiceTemplate, deleteInvoiceTemplate, getItems } from '../api';
+import { getInvoiceTemplates, createInvoiceTemplate, updateInvoiceTemplate, deleteInvoiceTemplate, getItems, getVendors, getWarehouses } from '../api';
 
 const TYPE_LABELS = { purchase: 'Pembelian (tambah stok)', expense: 'Pengeluaran (tanpa stok)' };
 
@@ -88,9 +88,11 @@ function TemplateItemRow({ row, index, invoiceType, stockItems, nonStockItems, o
   );
 }
 
-function TemplateForm({ initial, stockItems, nonStockItems, onSave, onCancel }) {
+function TemplateForm({ initial, stockItems, nonStockItems, vendors, warehouses, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name ?? '');
   const [invoiceType, setInvoiceType] = useState(initial?.invoice_type ?? 'expense');
+  const [vendorId, setVendorId] = useState(initial?.vendor_id ?? '');
+  const [warehouseId, setWarehouseId] = useState(initial?.warehouse_id ?? '');
   const [rows, setRows] = useState(() => {
     if (initial?.items?.length) {
       return initial.items.map(ti => ({
@@ -107,6 +109,8 @@ function TemplateForm({ initial, stockItems, nonStockItems, onSave, onCancel }) 
 
   const handleTypeChange = (newType) => {
     setInvoiceType(newType);
+    setWarehouseId('');
+    setVendorId('');
     setRows([emptyRow()]);
   };
 
@@ -126,7 +130,13 @@ function TemplateForm({ initial, stockItems, nonStockItems, onSave, onCancel }) 
     }));
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), invoice_type: invoiceType, items });
+      await onSave({
+        name: name.trim(),
+        invoice_type: invoiceType,
+        vendor_id: vendorId || null,
+        warehouse_id: warehouseId || null,
+        items,
+      });
     } catch (err) {
       setError(err.response?.data?.error || 'Terjadi kesalahan');
     } finally {
@@ -155,6 +165,26 @@ function TemplateForm({ initial, stockItems, nonStockItems, onSave, onCancel }) 
             <option value="purchase">Pembelian (tambah stok)</option>
           </select>
         </div>
+      </div>
+      <div className="form-row" style={{ marginBottom: '1rem' }}>
+        {invoiceType === 'purchase' && (
+          <>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label>Gudang Default <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+              <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>
+                <option value="">Pilih gudang...</option>
+                {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label>Vendor Default <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+              <select value={vendorId} onChange={e => setVendorId(e.target.value)}>
+                <option value="">Pilih vendor...</option>
+                {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+          </>
+        )}
       </div>
 
       <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#444', marginBottom: '0.25rem' }}>
@@ -210,6 +240,8 @@ export default function InvoiceTemplates() {
   const [templates, setTemplates] = useState([]);
   const [stockItems, setStockItems] = useState([]);
   const [nonStockItems, setNonStockItems] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
@@ -220,6 +252,8 @@ export default function InvoiceTemplates() {
     load();
     getItems({ is_stock: 'true' }).then(r => setStockItems(r.data));
     getItems({ is_stock: 'false' }).then(r => setNonStockItems(r.data));
+    getVendors().then(r => setVendors(r.data));
+    getWarehouses().then(r => setWarehouses(r.data));
   }, []);
 
   const handleCreate = async (data) => {
@@ -252,6 +286,8 @@ export default function InvoiceTemplates() {
         <TemplateForm
           stockItems={stockItems}
           nonStockItems={nonStockItems}
+          vendors={vendors}
+          warehouses={warehouses}
           onSave={handleCreate}
           onCancel={() => setCreating(false)}
         />
@@ -267,6 +303,8 @@ export default function InvoiceTemplates() {
           initial={editing}
           stockItems={stockItems}
           nonStockItems={nonStockItems}
+          vendors={vendors}
+          warehouses={warehouses}
           onSave={handleUpdate}
           onCancel={() => setEditing(null)}
         />

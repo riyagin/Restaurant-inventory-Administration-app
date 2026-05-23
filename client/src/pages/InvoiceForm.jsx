@@ -95,14 +95,19 @@ export default function InvoiceForm() {
     setRows(type === 'expense' ? [emptyExpenseRow()] : [emptyPurchaseRow()]);
   };
 
-  const applyTemplate = (tpl) => {
+  const applyTemplate = async (tpl) => {
     setInvoiceType(tpl.invoice_type);
+    setHeader(h => ({
+      ...h,
+      vendor_id: tpl.vendor_id ?? h.vendor_id,
+      warehouse_id: tpl.warehouse_id ?? h.warehouse_id,
+    }));
     if (!tpl.items?.length) {
       setRows(tpl.invoice_type === 'expense' ? [emptyExpenseRow()] : [emptyPurchaseRow()]);
       return;
     }
     if (tpl.invoice_type === 'expense') {
-      setRows(tpl.items.map(ti => ti.item_id ? ({
+      const newRows = tpl.items.map(ti => ti.item_id ? ({
         item_id: ti.item_id,
         description: '',
         quantity: '',
@@ -116,14 +121,22 @@ export default function InvoiceForm() {
         unit_index: '0',
         price: '',
         useDescription: true,
-      })));
+      }));
+      setRows(newRows);
+      newRows.forEach((row, i) => {
+        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i);
+      });
     } else {
-      setRows(tpl.items.map(ti => ({
+      const newRows = tpl.items.map(ti => ({
         item_id: ti.item_id ?? '',
         quantity: '',
         unit_index: String(ti.unit_index ?? 0),
         price: '',
-      })));
+      }));
+      setRows(newRows);
+      newRows.forEach((row, i) => {
+        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i);
+      });
     }
   };
 

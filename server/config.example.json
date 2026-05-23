@@ -1,0 +1,10 @@
+{
+  "db": {
+    "host":     "localhost",
+    "port":     5432,
+    "database": "inventory_app",
+    "user":     "postgres",
+    "password": "your-db-password-here"
+  },
+  "jwtSecret": "change-this-to-a-long-random-string"
+}

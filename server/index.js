@@ -10,6 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { dbConfig, jwtSecret } from './config.js';
 const require = createRequire(import.meta.url);
 const XLSX = require('xlsx');
 
@@ -31,7 +32,7 @@ const { Pool } = pg;
 
 const app = express();
 const PORT = 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'inventory_secret_change_in_prod';
+const JWT_SECRET = jwtSecret;
 
 app.use(cors());
 app.use(express.json());
@@ -56,13 +57,7 @@ const apiLimiter = rateLimit({
   keyGenerator: (req) => req.user?.id || req.socket.remoteAddress,
 });
 
-const pool = new Pool({
-  host:     process.env.DB_HOST     || 'localhost',
-  port:     process.env.DB_PORT     || 5432,
-  database: process.env.DB_NAME     || 'inventory_app',
-  user:     process.env.DB_USER     || 'postgres',
-  password: process.env.DB_PASSWORD || 'seesaw',
-});
+const pool = new Pool(dbConfig);
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
@@ -1956,18 +1951,22 @@ app.get('/api/invoice-templates', async (req, res) => {
                 ) ORDER BY ti.sort_order
               ) FILTER (WHERE ti.id IS NOT NULL),
               '[]'
-            ) AS items
+            ) AS items,
+            t.vendor_id, v.name AS vendor_name,
+            t.warehouse_id, w.name AS warehouse_name
      FROM invoice_templates t
      LEFT JOIN invoice_template_items ti ON ti.template_id = t.id
      LEFT JOIN items i ON i.id = ti.item_id
-     GROUP BY t.id
+     LEFT JOIN vendors v ON v.id = t.vendor_id
+     LEFT JOIN warehouses w ON w.id = t.warehouse_id
+     GROUP BY t.id, v.name, w.name
      ORDER BY t.name`
   );
   res.json(rows);
 });
 
 app.post('/api/invoice-templates', requireAdmin, async (req, res) => {
-  const { name, invoice_type = 'expense', items = [] } = req.body;
+  const { name, invoice_type = 'expense', vendor_id, warehouse_id, items = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
   if (!['purchase', 'expense'].includes(invoice_type)) {
     return res.status(400).json({ error: 'invoice_type must be purchase or expense' });
@@ -1976,8 +1975,8 @@ app.post('/api/invoice-templates', requireAdmin, async (req, res) => {
   try {
     await client.query('BEGIN');
     const { rows: [tpl] } = await client.query(
-      `INSERT INTO invoice_templates (name, invoice_type) VALUES ($1, $2) RETURNING *`,
-      [name.trim(), invoice_type]
+      `INSERT INTO invoice_templates (name, invoice_type, vendor_id, warehouse_id) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [name.trim(), invoice_type, vendor_id || null, warehouse_id || null]
     );
     for (const [idx, item] of items.entries()) {
       await client.query(
@@ -2003,13 +2002,13 @@ app.post('/api/invoice-templates', requireAdmin, async (req, res) => {
 });
 
 app.put('/api/invoice-templates/:id', requireAdmin, async (req, res) => {
-  const { name, invoice_type, items = [] } = req.body;
+  const { name, invoice_type, vendor_id, warehouse_id, items = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const fields = ['name=$2'];
-    const vals = [req.params.id, name.trim()];
+    const fields = ['name=$2', 'vendor_id=$3', 'warehouse_id=$4'];
+    const vals = [req.params.id, name.trim(), vendor_id || null, warehouse_id || null];
     if (invoice_type) { fields.push(`invoice_type=$${vals.length + 1}`); vals.push(invoice_type); }
     const { rows } = await client.query(
       `UPDATE invoice_templates SET ${fields.join(', ')} WHERE id=$1 RETURNING *`, vals

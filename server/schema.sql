@@ -349,6 +349,8 @@ CREATE TABLE invoice_templates (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   name         TEXT        NOT NULL UNIQUE,
   invoice_type TEXT        NOT NULL DEFAULT 'expense',  -- 'purchase' | 'expense'
+  vendor_id    UUID        REFERENCES vendors(id) ON DELETE SET NULL,
+  warehouse_id UUID        REFERENCES warehouses(id) ON DELETE SET NULL,
   created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 
