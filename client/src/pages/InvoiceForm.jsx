@@ -123,8 +123,9 @@ export default function InvoiceForm() {
         useDescription: true,
       }));
       setRows(newRows);
+      const vid = tpl.vendor_id ?? '';
       newRows.forEach((row, i) => {
-        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i);
+        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i, vid);
       });
     } else {
       const newRows = tpl.items.map(ti => ({
@@ -134,8 +135,9 @@ export default function InvoiceForm() {
         price: '',
       }));
       setRows(newRows);
+      const vid = tpl.vendor_id ?? '';
       newRows.forEach((row, i) => {
-        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i);
+        if (row.item_id) fetchLastPrice(row.item_id, row.unit_index, i, vid);
       });
     }
   };
@@ -153,16 +155,22 @@ export default function InvoiceForm() {
       setDivisions([]);
       if (val) getDivisions({ branch_id: val }).then(r => setDivisions(r.data));
     }
+    if (field === 'vendor_id') {
+      // Clear price cache so last-price re-fetches with the new vendor
+      setLastPrices({});
+    }
   };
 
-  const fetchLastPrice = (itemId, unitIndex, rowIndex) => {
+  const fetchLastPrice = (itemId, unitIndex, rowIndex, vendorId = '') => {
     if (!itemId) return;
-    const key = `${itemId}:${unitIndex}`;
+    const key = `${itemId}:${unitIndex}:${vendorId}`;
     if (lastPrices[key] !== undefined) {
       setRows(rs => rs.map((r, i) => i === rowIndex && !r.price ? { ...r, price: String(lastPrices[key]) } : r));
       return;
     }
-    getItemLastPrice(itemId, { unit_index: unitIndex }).then(res => {
+    const params = { unit_index: unitIndex };
+    if (vendorId) params.vendor_id = vendorId;
+    getItemLastPrice(itemId, params).then(res => {
       const price = res.data?.price ?? null;
       setLastPrices(p => ({ ...p, [key]: price }));
       if (price != null) {
@@ -180,11 +188,11 @@ export default function InvoiceForm() {
         const selected = items.find(it => it.id === val);
         updated.unit_index = selected ? String(selected.units.length - 1) : '0';
         updated.price = '';
-        if (val) fetchLastPrice(val, updated.unit_index, index);
+        if (val) fetchLastPrice(val, updated.unit_index, index, header.vendor_id);
       }
       if (field === 'unit_index' && r.item_id) {
         updated.price = '';
-        fetchLastPrice(r.item_id, val, index);
+        fetchLastPrice(r.item_id, val, index, header.vendor_id);
       }
       return updated;
     }));
@@ -199,11 +207,11 @@ export default function InvoiceForm() {
         const selected = nonStockItems.find(it => it.id === val);
         updated.unit_index = selected ? String(selected.units.length - 1) : '0';
         updated.price = '';
-        if (val) fetchLastPrice(val, updated.unit_index, index);
+        if (val) fetchLastPrice(val, updated.unit_index, index, header.vendor_id);
       }
       if (field === 'unit_index' && r.item_id) {
         updated.price = '';
-        fetchLastPrice(r.item_id, val, index);
+        fetchLastPrice(r.item_id, val, index, header.vendor_id);
       }
       return updated;
     }));
@@ -267,7 +275,7 @@ export default function InvoiceForm() {
       warehouse_id: invoiceType === 'purchase' ? header.warehouse_id : undefined,
       branch_id:   invoiceType === 'expense' ? header.branch_id   || null : undefined,
       division_id: invoiceType === 'expense' ? header.division_id || null : undefined,
-      vendor_id:   invoiceType === 'purchase' ? header.vendor_id  || null : undefined,
+      vendor_id:   header.vendor_id || null,
       reference_number: header.reference_number || null,
       due_date: header.payment_status === 'paid' ? header.date : (header.due_date || null),
       items: invoiceType === 'expense'
@@ -398,7 +406,7 @@ export default function InvoiceForm() {
               </select>
             </div>
           )}
-          {invoiceType === 'purchase' && (
+          {(invoiceType === 'purchase' || invoiceType === 'expense') && (
             <div className="form-group" style={{ margin: 0 }}>
               <label>Vendor <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
               <select value={header.vendor_id} onChange={setHeaderField('vendor_id')}>
@@ -530,7 +538,7 @@ export default function InvoiceForm() {
                   <td style={{ minWidth: '140px', paddingTop: '0.3rem' }}>
                     <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
                     {(() => {
-                      const key = `${row.item_id}:${row.unit_index}`;
+                      const key = `${row.item_id}:${row.unit_index}:${header.vendor_id}`;
                       const lp = !row.useDescription && row.item_id ? lastPrices[key] : undefined;
                       return (
                         <>
@@ -578,7 +586,7 @@ export default function InvoiceForm() {
                   </td>
                   <td style={{ minWidth: '140px' }}>
                     {(() => {
-                      const key = `${row.item_id}:${row.unit_index}`;
+                      const key = `${row.item_id}:${row.unit_index}:${header.vendor_id}`;
                       const lp = row.item_id ? lastPrices[key] : undefined;
                       return (
                         <>

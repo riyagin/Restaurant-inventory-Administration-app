@@ -493,13 +493,14 @@ app.delete('/api/items/:id', requireAdmin, async (req, res) => {
 });
 
 app.get('/api/items/:id/last-price', async (req, res) => {
-  const { unit_index } = req.query;
+  const { unit_index, vendor_id } = req.query;
   let q = `SELECT ii.price, ii.unit_index, inv.date
             FROM invoice_items ii
             JOIN invoices inv ON inv.id = ii.invoice_id
             WHERE ii.item_id = $1`;
   const params = [req.params.id];
-  if (unit_index !== undefined) { params.push(Number(unit_index)); q += ` AND ii.unit_index = $2`; }
+  if (unit_index !== undefined) { params.push(Number(unit_index)); q += ` AND ii.unit_index = $${params.length}`; }
+  if (vendor_id)                { params.push(vendor_id);          q += ` AND ii.vendor_id  = $${params.length}`; }
   q += ` ORDER BY inv.date DESC, inv.created_at DESC LIMIT 1`;
   const { rows } = await pool.query(q, params);
   res.json(rows[0] ?? null);
@@ -1146,9 +1147,9 @@ app.post('/api/invoices', async (req, res) => {
         // Expense: link to non-stock item (item_id) or fall back to free-form description
         if (item.item_id) {
           await client.query(
-            `INSERT INTO invoice_items (invoice_id, item_id, unit_index, quantity, price)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [invoice.id, item.item_id, item.unit_index ?? 0, item.quantity, item.price]
+            `INSERT INTO invoice_items (invoice_id, item_id, vendor_id, unit_index, quantity, price)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [invoice.id, item.item_id, vendor_id || null, item.unit_index ?? 0, item.quantity, item.price]
           );
         } else {
           await client.query(
@@ -1283,8 +1284,8 @@ app.put('/api/invoices/:id', async (req, res) => {
       if (old.invoice_type === 'expense') {
         if (item.item_id) {
           await client.query(
-            `INSERT INTO invoice_items (invoice_id, item_id, unit_index, quantity, price) VALUES ($1,$2,$3,$4,$5)`,
-            [req.params.id, item.item_id, item.unit_index ?? 0, item.quantity, item.price]
+            `INSERT INTO invoice_items (invoice_id, item_id, vendor_id, unit_index, quantity, price) VALUES ($1,$2,$3,$4,$5,$6)`,
+            [req.params.id, item.item_id, vendor_id || null, item.unit_index ?? 0, item.quantity, item.price]
           );
         } else {
           await client.query(
