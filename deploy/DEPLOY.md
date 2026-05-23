@@ -66,9 +66,20 @@ npm run build
 
 ## 4. Configure environment
 
-Edit `deploy/ecosystem.config.cjs` and set:
-- `JWT_SECRET` — a long random string (run: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`)
-- `DB_PASSWORD` — your PostgreSQL password
+Copy the config template and fill in your values:
+
+```bash
+cp /var/www/inventory-app/server/config.example.json /var/www/inventory-app/server/config.json
+nano /var/www/inventory-app/server/config.json
+```
+
+Set `db.password` to your PostgreSQL password and `jwtSecret` to a long random string:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+`config.json` is gitignored and never committed — it stays only on the server.
 
 ## 5. Start the app with PM2
 
