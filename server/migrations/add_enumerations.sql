@@ -1,7 +1,7 @@
 -- Migration: add_enumerations
 -- Pencacahan: break down 1 source item into N output items, with variable yield
 
-CREATE TABLE enumerations (
+CREATE TABLE IF NOT EXISTS enumerations (
   id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   warehouse_id    UUID        NOT NULL REFERENCES warehouses(id) ON DELETE RESTRICT,
   source_item_id  UUID        NOT NULL REFERENCES items(id) ON DELETE RESTRICT,
@@ -18,6 +18,6 @@ CREATE TABLE enumerations (
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX enumerations_source_item_idx ON enumerations (source_item_id);
-CREATE INDEX enumerations_output_item_idx ON enumerations (output_item_id);
-CREATE INDEX enumerations_date_idx        ON enumerations (date DESC);
+CREATE INDEX IF NOT EXISTS enumerations_source_item_idx ON enumerations (source_item_id);
+CREATE INDEX IF NOT EXISTS enumerations_output_item_idx ON enumerations (output_item_id);
+CREATE INDEX IF NOT EXISTS enumerations_date_idx        ON enumerations (date DESC);
