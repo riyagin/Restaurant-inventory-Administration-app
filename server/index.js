@@ -2465,12 +2465,43 @@ function parsePosXlsx(buffer) {
   const range = XLSX.utils.decode_range(ws['!ref']);
   const getCell = (r, c) => { const cell = ws[XLSX.utils.encode_cell({ r, c })]; return cell ? cell.v : null; };
 
-  // Find header row: column J (index 9) should contain "Kategori Produk"
+  // Find header row by searching for "Kategori Produk" anywhere on the row.
+  // POS export column order has changed over time (e.g. extra Poin/Skema Hadiah
+  // columns inserted between Nama Promo and Subsidi Promo), so resolve every
+  // column we need by header name rather than fixed indices.
   let headerRow = -1;
+  let headers = [];
   for (let r = 0; r <= range.e.r; r++) {
-    if (getCell(r, 9) === 'Kategori Produk') { headerRow = r; break; }
+    const row = [];
+    for (let c = range.s.c; c <= range.e.c; c++) row.push(getCell(r, c));
+    if (row.some(v => v === 'Kategori Produk')) { headerRow = r; headers = row; break; }
   }
-  if (headerRow === -1) throw new Error('Format tidak dikenal: kolom J harus berisi "Kategori Produk"');
+  if (headerRow === -1) throw new Error('Format tidak dikenal: header "Kategori Produk" tidak ditemukan');
+
+  const findCol = (...names) => {
+    for (const n of names) {
+      const idx = headers.findIndex(h => h && String(h).trim().toLowerCase() === n.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const colNoPenjualan = findCol('No Penjualan');
+  const colTanggal     = findCol('Tanggal Penjualan', 'Tanggal');
+  const colKategori    = findCol('Kategori Produk');
+  const colProduk      = findCol('Nama Produk');
+  const colGross       = findCol('Penjualan Kotor');
+  const colDisc        = findCol('Diskon');
+  const colBiaya       = findCol('Biaya Tambahan');
+  const colPayment     = findCol('Jenis Pembayaran');
+  const colStatus      = findCol('Status');
+
+  for (const [name, idx] of Object.entries({
+    'Kategori Produk': colKategori, 'Penjualan Kotor': colGross,
+    'Diskon': colDisc, 'Jenis Pembayaran': colPayment, 'Status': colStatus,
+  })) {
+    if (idx === -1) throw new Error(`Format tidak dikenal: kolom "${name}" tidak ditemukan`);
+  }
 
   const dataRows = [];
   const skippedRows = [];
@@ -2482,24 +2513,24 @@ function parsePosXlsx(buffer) {
     const rowA = getCell(r, 0);
     if (String(rowA) === 'TOTAL') break;
 
-    const anVal = getCell(r, 39); // AN: Jenis Pembayaran
+    const anVal = getCell(r, colPayment); // Jenis Pembayaran
     if (anVal && anVal !== '-' && String(anVal).trim() !== '') currentAN = String(anVal).trim();
 
-    const dateVal = getCell(r, 3); // D: Tanggal
+    const dateVal = colTanggal !== -1 ? getCell(r, colTanggal) : null;
     if (dateVal && String(dateVal).trim() !== '') currentDate = dateVal;
 
-    const category = getCell(r, 9);  // J: Kategori Produk
+    const category = getCell(r, colKategori);
     if (!category || String(category).trim() === '') continue;
 
-    const gross       = Number(getCell(r, 20)) || 0; // U: Penjualan Kotor
-    const disc        = Number(getCell(r, 21)) || 0; // V: Diskon
-    const biaya       = Number(getCell(r, 29)) || 0; // AD: Biaya Tambahan
-    const noPenjualan = getCell(r, 2);               // C: No Penjualan
+    const gross       = Number(getCell(r, colGross)) || 0;
+    const disc        = Number(getCell(r, colDisc)) || 0;
+    const biaya       = colBiaya !== -1 ? (Number(getCell(r, colBiaya)) || 0) : 0;
+    const noPenjualan = colNoPenjualan !== -1 ? getCell(r, colNoPenjualan) : null;
     const dateRaw     = currentDate;
-    const product     = getCell(r, 11);              // L: Nama Produk
+    const product     = colProduk !== -1 ? getCell(r, colProduk) : null;
 
-    // AV (index 47): Status — empty cells inherit from the previous row
-    const statusRaw = getCell(r, 47);
+    // Status — empty cells inherit from the previous row
+    const statusRaw = getCell(r, colStatus);
     const statusVal = statusRaw ? String(statusRaw).trim() : '';
     if (statusVal !== '') currentStatus = statusVal;
     const statusStr = currentStatus || '';
