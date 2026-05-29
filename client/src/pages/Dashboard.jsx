@@ -127,50 +127,73 @@ function StockFlowChart({ data }) {
 }
 
 // ─── stock flow card ──────────────────────────────────────────────────────────
-function StockFlowCard({ period }) {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [chartStart, setChartStart] = useState(nDaysAgo(6));
-  const [chartEnd,   setChartEnd]   = useState(todayStr);
-  const [customMode, setCustomMode] = useState(false);
+const QUICK_RANGES = [
+  { label: '7 Hari',    days: 6  },
+  { label: '14 Hari',   days: 13 },
+  { label: '30 Hari',   days: 29 },
+  { label: 'Bulan Ini', days: null }, // special: 1st of month → today
+];
 
-  // summary uses the period from the parent dashboard
-  useEffect(() => {
+function getMonthStart() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function StockFlowCard() {
+  const defaultStart = nDaysAgo(6);
+
+  const [rangeStart, setRangeStart] = useState(defaultStart);
+  const [rangeEnd,   setRangeEnd]   = useState(todayStr);
+  // draft holds what's typed in the inputs before Apply is clicked
+  const [draft, setDraft] = useState({ start: defaultStart, end: todayStr });
+  const [activePreset, setActivePreset] = useState('7 Hari');
+
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchRange = useCallback((s, e) => {
     setLoading(true);
-    getStockFlow({ period })
-      .then(r => { setData(r.data); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [period]);
-
-  // chart uses its own date range
-  const [chartData, setChartData]   = useState(null);
-  const [chartLoad, setChartLoad]   = useState(true);
-
-  const fetchChart = useCallback((s, e) => {
-    setChartLoad(true);
     getStockFlow({ start: s, end: e })
-      .then(r => { setChartData(r.data.chart); setChartLoad(false); })
-      .catch(() => setChartLoad(false));
+      .then(r  => { setData(r.data);  setLoading(false); })
+      .catch(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchChart(chartStart, chartEnd); }, []); // eslint-disable-line
+  useEffect(() => { fetchRange(rangeStart, rangeEnd); }, []); // eslint-disable-line
 
-  function applyChart() { fetchChart(chartStart, chartEnd); }
+  function applyPreset(opt) {
+    const s = opt.days === null ? getMonthStart() : nDaysAgo(opt.days);
+    const e = todayStr;
+    setRangeStart(s); setRangeEnd(e);
+    setDraft({ start: s, end: e });
+    setActivePreset(opt.label);
+    fetchRange(s, e);
+  }
+
+  function applyCustom() {
+    if (!draft.start || !draft.end || draft.start > draft.end) return;
+    setRangeStart(draft.start); setRangeEnd(draft.end);
+    setActivePreset(null);
+    fetchRange(draft.start, draft.end);
+  }
 
   const s = data?.summary;
 
   return (
     <div className="card" style={{ marginBottom: '1.5rem' }}>
       <div className="card-header">
-        <h2 style={{ margin: 0 }}>Arus Stok &amp; Pendapatan</h2>
-        <span style={{ fontSize: '0.8rem', color: '#888', fontWeight: 500 }}>
-          {PERIOD_LABELS[period]}
-        </span>
+        <h2 style={{ margin: 0 }}>Pendapatan vs Pengeluaran</h2>
       </div>
 
       {/* summary tiles */}
       {loading ? (
-        <p style={{ color: '#999', fontSize: '0.88rem' }}>Memuat...</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={tileStyle('#f5f5f5', '#ddd')}>
+              <div style={tileLabelStyle}>—</div>
+              <div style={{ ...tileValueStyle, color: '#ccc' }}>—</div>
+            </div>
+          ))}
+        </div>
       ) : !s ? (
         <p style={{ color: '#e74c3c', fontSize: '0.88rem' }}>Gagal memuat data.</p>
       ) : (
@@ -192,52 +215,46 @@ function StockFlowCard({ period }) {
         </div>
       )}
 
-      {/* chart range controls */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-        <span style={{ fontSize: '0.82rem', color: '#666', fontWeight: 600 }}>Grafik:</span>
-        {[
-          { label: '7 Hari', days: 6 },
-          { label: '14 Hari', days: 13 },
-          { label: '30 Hari', days: 29 },
-        ].map(opt => {
-          const s = nDaysAgo(opt.days);
-          const active = !customMode && chartStart === s && chartEnd === todayStr;
-          return (
+      {/* range controls — sit directly above the chart */}
+      <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '0.75rem', marginBottom: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          {QUICK_RANGES.map(opt => (
             <button
               key={opt.label}
               className="btn btn-secondary btn-sm"
-              style={{ background: active ? '#4f8ef7' : undefined, color: active ? '#fff' : undefined }}
-              onClick={() => { setCustomMode(false); setChartStart(s); setChartEnd(todayStr); fetchChart(s, todayStr); }}
+              style={{ background: activePreset === opt.label ? '#4f8ef7' : undefined, color: activePreset === opt.label ? '#fff' : undefined }}
+              onClick={() => applyPreset(opt)}
             >
               {opt.label}
             </button>
-          );
-        })}
-        <button
-          className="btn btn-secondary btn-sm"
-          style={{ background: customMode ? '#4f8ef7' : undefined, color: customMode ? '#fff' : undefined }}
-          onClick={() => setCustomMode(m => !m)}
-        >
-          Kustom
-        </button>
-        {customMode && (
-          <>
-            <input type="date" value={chartStart} max={chartEnd}
-              onChange={e => setChartStart(e.target.value)}
-              style={dateInputStyle} />
-            <span style={{ color: '#aaa', fontSize: '0.8rem' }}>–</span>
-            <input type="date" value={chartEnd} min={chartStart} max={todayStr}
-              onChange={e => setChartEnd(e.target.value)}
-              style={dateInputStyle} />
-            <button className="btn btn-primary btn-sm" onClick={applyChart}>Terapkan</button>
-          </>
-        )}
+          ))}
+
+          <span style={{ color: '#ddd', margin: '0 0.15rem' }}>|</span>
+
+          <input
+            type="date"
+            value={draft.start}
+            max={draft.end}
+            onChange={e => { setDraft(d => ({ ...d, start: e.target.value })); setActivePreset(null); }}
+            style={dateInputStyle}
+          />
+          <span style={{ color: '#aaa', fontSize: '0.8rem' }}>–</span>
+          <input
+            type="date"
+            value={draft.end}
+            min={draft.start}
+            max={todayStr}
+            onChange={e => { setDraft(d => ({ ...d, end: e.target.value })); setActivePreset(null); }}
+            style={dateInputStyle}
+          />
+          <button className="btn btn-primary btn-sm" onClick={applyCustom}>Terapkan</button>
+        </div>
       </div>
 
-      {chartLoad ? (
-        <p style={{ color: '#999', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>Memuat grafik...</p>
+      {loading ? (
+        <p style={{ color: '#999', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>Memuat...</p>
       ) : (
-        <StockFlowChart data={chartData} />
+        <StockFlowChart data={data?.chart} />
       )}
     </div>
   );
@@ -434,7 +451,7 @@ export default function Dashboard() {
       )}
 
       {/* stock flow card */}
-      <StockFlowCard period={period} />
+      <StockFlowCard />
 
       {/* daily sales by branch */}
       <DailySalesCard />
