@@ -90,13 +90,13 @@ function StockFlowChart({ data }) {
           const gx = padL + i * groupW + barPad;
           return (
             <g key={d.date}>
-              <rect x={gx} y={py(d.revenue)} width={barW} height={bh(d.revenue)}
-                fill="#22c55e" rx={2} opacity={0.85}>
-                <title>Pendapatan: {idr(d.revenue)}</title>
-              </rect>
-              <rect x={gx + barW + 2} y={py(d.spend)} width={barW} height={bh(d.spend)}
+              <rect x={gx} y={py(d.spend)} width={barW} height={bh(d.spend)}
                 fill="#f97316" rx={2} opacity={0.85}>
                 <title>Pengeluaran: {idr(d.spend)}</title>
+              </rect>
+              <rect x={gx + barW + 2} y={py(d.revenue)} width={barW} height={bh(d.revenue)}
+                fill="#22c55e" rx={2} opacity={0.85}>
+                <title>Pendapatan: {idr(d.revenue)}</title>
               </rect>
               <text
                 x={gx + barW + 1} y={H - padB + 14}
