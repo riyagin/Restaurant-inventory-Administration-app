@@ -35,3 +35,6 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Local-only assets (per-developer)
+client/public/favicon.local.*

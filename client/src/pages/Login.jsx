@@ -8,7 +8,10 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const set = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
+  const set = (field) => (e) => {
+    const value = field === 'username' ? e.target.value.toLowerCase() : e.target.value;
+    setForm(f => ({ ...f, [field]: value }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();

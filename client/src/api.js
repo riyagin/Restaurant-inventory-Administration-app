@@ -171,8 +171,9 @@ export const getActivityLog = (params) => api.get('/activity-log', { params });
 export const exportActivityLog = (params) => api.get('/activity-log/export', { params, responseType: 'blob' });
 export const deleteActivityLog = (before_date) => api.delete('/activity-log', { data: { before_date } });
 
-export const getStats = () => api.get('/stats');
+export const getStats = (params) => api.get('/stats', { params });
 export const getDailySalesByBranch = (date) => api.get('/stats/daily-sales', { params: { date } });
+export const getStockFlow = (params) => api.get('/stats/stock-flow', { params });
 
 export const getExpenseReport = (params) => api.get('/expense-report', { params });
 

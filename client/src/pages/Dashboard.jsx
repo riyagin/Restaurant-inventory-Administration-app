@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getStats, getDailySalesByBranch } from '../api';
+import { getStats, getDailySalesByBranch, getStockFlow } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const fmtDate = (d) =>
+  d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+
+const fmtDateShort = (d) => {
+  if (!d) return '';
+  const dt = new Date(d + 'T00:00:00');
+  return dt.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+};
 
 const todayStr = new Date().toISOString().split('T')[0];
 
@@ -15,9 +22,257 @@ function offsetDate(dateStr, days) {
   return d.toISOString().split('T')[0];
 }
 
+function nDaysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
+const PERIODS = [
+  { key: 'daily',   label: 'Harian' },
+  { key: 'weekly',  label: 'Mingguan' },
+  { key: 'monthly', label: 'Bulanan' },
+  { key: 'yearly',  label: 'Tahunan' },
+];
+
+const PERIOD_LABELS = {
+  daily:   'Hari Ini',
+  weekly:  '7 Hari Terakhir',
+  monthly: 'Bulan Ini',
+  yearly:  'Tahun Ini',
+};
+
+// ─── compact number formatter for chart y-axis ───────────────────────────────
+function compactIdr(v) {
+  if (v === 0) return '0';
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1).replace('.0', '')}M`;
+  if (v >= 1_000_000)     return `${(v / 1_000_000).toFixed(1).replace('.0', '')}jt`;
+  if (v >= 1_000)         return `${(v / 1_000).toFixed(0)}rb`;
+  return String(v);
+}
+
+// ─── SVG bar chart ────────────────────────────────────────────────────────────
+function StockFlowChart({ data }) {
+  if (!data || data.length === 0) {
+    return <p style={{ color: '#999', fontSize: '0.85rem', textAlign: 'center', padding: '2rem 0' }}>Tidak ada data untuk rentang ini.</p>;
+  }
+
+  const W = 700, H = 240;
+  const padL = 58, padR = 12, padT = 14, padB = 42;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const maxVal = Math.max(...data.flatMap(d => [d.stock_in, d.stock_out]), 1);
+  const yMax   = maxVal * 1.12;
+
+  const groupW  = plotW / data.length;
+  const barPad  = Math.max(groupW * 0.12, 2);
+  const barW    = Math.max((groupW - barPad * 2 - 2) / 2, 3);
+
+  const py = (val) => padT + plotH - (val / yMax) * plotH;
+  const bh = (val) => Math.max((val / yMax) * plotH, 0);
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => yMax * f);
+
+  return (
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: '320px', height: 'auto', display: 'block' }}>
+        {/* grid lines + y labels */}
+        {yTicks.map((tick, i) => (
+          <g key={i}>
+            <line x1={padL} y1={py(tick)} x2={padL + plotW} y2={py(tick)} stroke="#f0f0f0" strokeWidth={1} />
+            <text x={padL - 5} y={py(tick) + 4} textAnchor="end" fontSize={10} fill="#aaa">
+              {compactIdr(tick)}
+            </text>
+          </g>
+        ))}
+
+        {/* bars */}
+        {data.map((d, i) => {
+          const gx = padL + i * groupW + barPad;
+          const inH  = bh(d.stock_in);
+          const outH = bh(d.stock_out);
+          return (
+            <g key={d.date}>
+              {/* stock in bar */}
+              <rect
+                x={gx} y={py(d.stock_in)}
+                width={barW} height={inH}
+                fill="#3b82f6" rx={2}
+                opacity={0.85}
+              >
+                <title>Masuk: {idr(d.stock_in)}</title>
+              </rect>
+              {/* stock out bar */}
+              <rect
+                x={gx + barW + 2} y={py(d.stock_out)}
+                width={barW} height={outH}
+                fill="#f97316" rx={2}
+                opacity={0.85}
+              >
+                <title>Keluar: {idr(d.stock_out)}</title>
+              </rect>
+              {/* date label */}
+              <text
+                x={gx + barW + 1}
+                y={H - padB + 14}
+                textAnchor="middle"
+                fontSize={data.length > 20 ? 7 : 9}
+                fill="#999"
+              >
+                {fmtDateShort(d.date)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* axes */}
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="#e0e0e0" strokeWidth={1} />
+        <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="#e0e0e0" strokeWidth={1} />
+      </svg>
+
+      {/* legend */}
+      <div style={{ display: 'flex', gap: '1.25rem', justifyContent: 'center', marginTop: '0.25rem' }}>
+        <span style={{ fontSize: '0.8rem', color: '#555', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <span style={{ width: 12, height: 12, background: '#3b82f6', borderRadius: 2, display: 'inline-block' }} />
+          Stok Masuk
+        </span>
+        <span style={{ fontSize: '0.8rem', color: '#555', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+          <span style={{ width: 12, height: 12, background: '#f97316', borderRadius: 2, display: 'inline-block' }} />
+          Stok Keluar
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── stock flow card ──────────────────────────────────────────────────────────
+function StockFlowCard({ period }) {
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [chartStart, setChartStart] = useState(nDaysAgo(6));
+  const [chartEnd,   setChartEnd]   = useState(todayStr);
+  const [customMode, setCustomMode] = useState(false);
+
+  // summary uses the period from the parent dashboard
+  useEffect(() => {
+    setLoading(true);
+    getStockFlow({ period })
+      .then(r => { setData(r.data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [period]);
+
+  // chart uses its own date range
+  const [chartData, setChartData]   = useState(null);
+  const [chartLoad, setChartLoad]   = useState(true);
+
+  const fetchChart = useCallback((s, e) => {
+    setChartLoad(true);
+    getStockFlow({ start: s, end: e })
+      .then(r => { setChartData(r.data.chart); setChartLoad(false); })
+      .catch(() => setChartLoad(false));
+  }, []);
+
+  useEffect(() => { fetchChart(chartStart, chartEnd); }, []); // eslint-disable-line
+
+  function applyChart() { fetchChart(chartStart, chartEnd); }
+
+  const s = data?.summary;
+
+  return (
+    <div className="card" style={{ marginBottom: '1.5rem' }}>
+      <div className="card-header">
+        <h2 style={{ margin: 0 }}>Arus Stok &amp; Pendapatan</h2>
+        <span style={{ fontSize: '0.8rem', color: '#888', fontWeight: 500 }}>
+          {PERIOD_LABELS[period]}
+        </span>
+      </div>
+
+      {/* summary tiles */}
+      {loading ? (
+        <p style={{ color: '#999', fontSize: '0.88rem' }}>Memuat...</p>
+      ) : !s ? (
+        <p style={{ color: '#e74c3c', fontSize: '0.88rem' }}>Gagal memuat data.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+          <div style={tileStyle('#eff6ff', '#1d4ed8')}>
+            <div style={tileLabelStyle}>Nilai Stok Masuk</div>
+            <div style={tileValueStyle}>{idr(s.stock_in)}</div>
+          </div>
+          <div style={tileStyle('#fff7ed', '#c2410c')}>
+            <div style={tileLabelStyle}>Nilai Stok Keluar</div>
+            <div style={tileValueStyle}>{idr(s.stock_out)}</div>
+          </div>
+          <div style={tileStyle('#f0fdf4', '#15803d')}>
+            <div style={tileLabelStyle}>Pendapatan Bersih</div>
+            <div style={tileValueStyle}>{idr(s.revenue)}</div>
+          </div>
+        </div>
+      )}
+
+      {/* chart range controls */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+        <span style={{ fontSize: '0.82rem', color: '#666', fontWeight: 600 }}>Grafik:</span>
+        {[
+          { label: '7 Hari', days: 6 },
+          { label: '14 Hari', days: 13 },
+          { label: '30 Hari', days: 29 },
+        ].map(opt => {
+          const s = nDaysAgo(opt.days);
+          const active = !customMode && chartStart === s && chartEnd === todayStr;
+          return (
+            <button
+              key={opt.label}
+              className="btn btn-secondary btn-sm"
+              style={{ background: active ? '#4f8ef7' : undefined, color: active ? '#fff' : undefined }}
+              onClick={() => { setCustomMode(false); setChartStart(s); setChartEnd(todayStr); fetchChart(s, todayStr); }}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+        <button
+          className="btn btn-secondary btn-sm"
+          style={{ background: customMode ? '#4f8ef7' : undefined, color: customMode ? '#fff' : undefined }}
+          onClick={() => setCustomMode(m => !m)}
+        >
+          Kustom
+        </button>
+        {customMode && (
+          <>
+            <input type="date" value={chartStart} max={chartEnd}
+              onChange={e => setChartStart(e.target.value)}
+              style={dateInputStyle} />
+            <span style={{ color: '#aaa', fontSize: '0.8rem' }}>–</span>
+            <input type="date" value={chartEnd} min={chartStart} max={todayStr}
+              onChange={e => setChartEnd(e.target.value)}
+              style={dateInputStyle} />
+            <button className="btn btn-primary btn-sm" onClick={applyChart}>Terapkan</button>
+          </>
+        )}
+      </div>
+
+      {chartLoad ? (
+        <p style={{ color: '#999', fontSize: '0.85rem', textAlign: 'center', padding: '1.5rem 0' }}>Memuat grafik...</p>
+      ) : (
+        <StockFlowChart data={chartData} />
+      )}
+    </div>
+  );
+}
+
+const tileStyle = (bg, color) => ({
+  background: bg, borderRadius: 8, padding: '0.85rem 1rem',
+  borderLeft: `3px solid ${color}`,
+});
+const tileLabelStyle = { fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.35rem' };
+const tileValueStyle  = { fontSize: '1.1rem', fontWeight: 700, color: '#1a1a2e' };
+const dateInputStyle  = { fontSize: '0.8rem', padding: '0.25rem 0.4rem', borderRadius: 5, border: '1px solid #ddd' };
+
+// ─── daily sales card ─────────────────────────────────────────────────────────
 function DailySalesCard() {
-  const [date, setDate] = useState(todayStr);
-  const [data, setData] = useState(null);
+  const [date, setDate]   = useState(todayStr);
+  const [data, setData]   = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -27,7 +282,7 @@ function DailySalesCard() {
       .catch(() => setLoading(false));
   }, [date]);
 
-  const isToday = date === todayStr;
+  const isToday    = date === todayStr;
   const grandTotal = data ? data.branches.reduce((s, b) => s + b.total, 0) : 0;
 
   return (
@@ -35,22 +290,17 @@ function DailySalesCard() {
       <div className="card-header" style={{ alignItems: 'center' }}>
         <h2 style={{ margin: 0 }}>Penjualan Harian per Cabang</h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <button
-            className="btn btn-secondary btn-sm"
+          <button className="btn btn-secondary btn-sm"
             onClick={() => setDate(d => offsetDate(d, -1))}
-            title="Hari sebelumnya"
-            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}
-          >‹</button>
+            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}>‹</button>
           <span style={{ fontWeight: 600, fontSize: '0.9rem', minWidth: '120px', textAlign: 'center' }}>
-            {fmtDate(date)}{isToday && <span style={{ marginLeft: '0.35rem', fontSize: '0.72rem', background: '#e8f5e9', color: '#2e7d32', borderRadius: '4px', padding: '0.05rem 0.35rem', fontWeight: 700 }}>Hari ini</span>}
+            {fmtDate(date)}
+            {isToday && <span style={{ marginLeft: '0.35rem', fontSize: '0.72rem', background: '#e8f5e9', color: '#2e7d32', borderRadius: '4px', padding: '0.05rem 0.35rem', fontWeight: 700 }}>Hari ini</span>}
           </span>
-          <button
-            className="btn btn-secondary btn-sm"
+          <button className="btn btn-secondary btn-sm"
             onClick={() => setDate(d => offsetDate(d, 1))}
             disabled={isToday}
-            title="Hari berikutnya"
-            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}
-          >›</button>
+            style={{ padding: '0.25rem 0.6rem', fontSize: '1rem', lineHeight: 1 }}>›</button>
         </div>
       </div>
 
@@ -105,70 +355,109 @@ function DailySalesCard() {
   );
 }
 
+// ─── main dashboard ───────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [stats, setStats] = useState(null);
-  const [error, setError] = useState('');
+  const [period, setPeriod] = useState('daily');
+  const [stats,  setStats]  = useState(null);
+  const [error,  setError]  = useState('');
 
   useEffect(() => {
-    getStats().then(r => setStats(r.data)).catch(err => setError(err.response?.data?.error || err.message || 'Gagal memuat dasbor'));
-  }, []);
+    getStats({ period })
+      .then(r => setStats(r.data))
+      .catch(err => setError(err.response?.data?.error || err.message || 'Gagal memuat dasbor'));
+  }, [period]);
 
   if (error) return <p style={{ padding: '2rem', color: '#e74c3c' }}>Error: {error}</p>;
-  if (!stats) return <p style={{ padding: '2rem', color: '#999' }}>Memuat...</p>;
 
-  const outstanding = stats.outstandingInvoices || [];
+  const outstanding  = stats?.outstandingInvoices || [];
   const overdueCount = outstanding.filter(inv => inv.due_date && inv.due_date < todayStr).length;
 
   return (
     <>
-      <div className="page-header">
-        <h1>Dasbor</h1>
+      <div className="page-header" style={{ alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+        <h1 style={{ margin: 0 }}>Dasbor</h1>
+        {/* period filter */}
+        <div style={{ display: 'flex', gap: '0.35rem', background: '#f3f4f6', borderRadius: 8, padding: '0.25rem' }}>
+          {PERIODS.map(p => (
+            <button
+              key={p.key}
+              onClick={() => { setPeriod(p.key); setStats(null); }}
+              style={{
+                border: 'none', cursor: 'pointer', borderRadius: 6,
+                padding: '0.3rem 0.75rem', fontSize: '0.82rem', fontWeight: 600,
+                background: period === p.key ? '#fff' : 'transparent',
+                color:      period === p.key ? '#1a1a2e' : '#888',
+                boxShadow:  period === p.key ? '0 1px 3px rgba(0,0,0,0.12)' : 'none',
+                transition: 'all 0.15s',
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
-        <div className="stat-card">
-          <div className="label">Total Produk</div>
-          <div className="value">{stats.totalItems}</div>
-          <div style={{ fontSize: '0.8rem', color: '#aaa', marginTop: '0.25rem' }}>
-            {stats.totalInventoryRecords} catatan inventaris
-          </div>
+      {/* stat cards */}
+      {!stats ? (
+        <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
+          {[0,1,2,3].map(i => (
+            <div key={i} className="stat-card" style={{ opacity: 0.4 }}>
+              <div className="label">—</div>
+              <div className="value" style={{ fontSize: '1.5rem', color: '#ccc' }}>—</div>
+            </div>
+          ))}
         </div>
-
-        <div className="stat-card">
-          <div className="label">Nilai Inventaris Global</div>
-          <div className="value" style={{ fontSize: '1.25rem' }}>{idr(stats.totalInventoryValue)}</div>
-        </div>
-
-        <div className="stat-card">
-          <div className="label">Pembelian Hari Ini</div>
-          <div className="value" style={{ fontSize: '1.25rem', color: stats.todayPurchasesTotal > 0 ? '#2c6fc2' : '#ccc' }}>
-            {idr(stats.todayPurchasesTotal)}
-          </div>
-          {stats.todayPurchasesCount > 0 && (
+      ) : (
+        <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
+          <div className="stat-card">
+            <div className="label">Total Produk</div>
+            <div className="value">{stats.totalItems}</div>
             <div style={{ fontSize: '0.8rem', color: '#aaa', marginTop: '0.25rem' }}>
-              {stats.todayPurchasesCount} invoice
+              {stats.totalInventoryRecords} catatan inventaris
             </div>
-          )}
-        </div>
-
-        <Link to="/invoices?status=unpaid" className="stat-card" style={{ textDecoration: 'none', cursor: 'pointer', background: outstanding.length > 0 ? '#fff8e1' : undefined, borderColor: outstanding.length > 0 ? '#ffe082' : undefined }}>
-          <div className="label" style={{ color: outstanding.length > 0 ? '#b45309' : undefined }}>Invoice Belum Lunas</div>
-          <div className="value" style={{ color: outstanding.length > 0 ? '#b45309' : '#ccc' }}>
-            {outstanding.length}
           </div>
-          {overdueCount > 0 && (
-            <div style={{ fontSize: '0.8rem', color: '#e74c3c', fontWeight: 600, marginTop: '0.25rem' }}>
-              {overdueCount} lewat jatuh tempo
-            </div>
-          )}
-        </Link>
-      </div>
 
-      {/* Daily sales by branch */}
+          <div className="stat-card">
+            <div className="label">Nilai Inventaris Global</div>
+            <div className="value" style={{ fontSize: '1.25rem' }}>{idr(stats.totalInventoryValue)}</div>
+          </div>
+
+          <div className="stat-card">
+            <div className="label">Pembelian — {PERIOD_LABELS[period]}</div>
+            <div className="value" style={{ fontSize: '1.25rem', color: stats.purchasesTotal > 0 ? '#2c6fc2' : '#ccc' }}>
+              {idr(stats.purchasesTotal)}
+            </div>
+            {stats.purchasesCount > 0 && (
+              <div style={{ fontSize: '0.8rem', color: '#aaa', marginTop: '0.25rem' }}>
+                {stats.purchasesCount} invoice
+              </div>
+            )}
+          </div>
+
+          <Link to="/invoices?status=unpaid" className="stat-card"
+            style={{ textDecoration: 'none', cursor: 'pointer',
+              background: outstanding.length > 0 ? '#fff8e1' : undefined,
+              borderColor: outstanding.length > 0 ? '#ffe082' : undefined }}>
+            <div className="label" style={{ color: outstanding.length > 0 ? '#b45309' : undefined }}>Invoice Belum Lunas</div>
+            <div className="value" style={{ color: outstanding.length > 0 ? '#b45309' : '#ccc' }}>
+              {outstanding.length}
+            </div>
+            {overdueCount > 0 && (
+              <div style={{ fontSize: '0.8rem', color: '#e74c3c', fontWeight: 600, marginTop: '0.25rem' }}>
+                {overdueCount} lewat jatuh tempo
+              </div>
+            )}
+          </Link>
+        </div>
+      )}
+
+      {/* stock flow card */}
+      <StockFlowCard period={period} />
+
+      {/* daily sales by branch */}
       <DailySalesCard />
 
-      {/* Outstanding invoices */}
+      {/* outstanding invoices */}
       {outstanding.length > 0 && (
         <div className="card" style={{ marginBottom: '1.5rem' }}>
           <div className="card-header">
@@ -176,7 +465,7 @@ export default function Dashboard() {
             <Link to="/invoices" className="btn btn-secondary btn-sm">Lihat Semua Invoice</Link>
           </div>
 
-          {/* Desktop table */}
+          {/* desktop table */}
           <table className="invoice-desktop-table">
             <thead>
               <tr>
@@ -202,9 +491,7 @@ export default function Dashboard() {
                     <td style={{ fontSize: '0.85rem', fontWeight: isOverdue ? 700 : 'normal', color: isOverdue ? '#e74c3c' : '#555', whiteSpace: 'nowrap' }}>
                       {inv.due_date ? fmtDate(inv.due_date) : '—'}
                       {isOverdue && (
-                        <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', background: '#fdecea', color: '#e74c3c', borderRadius: '3px', padding: '0.05rem 0.3rem', fontWeight: 700 }}>
-                          LEWAT
-                        </span>
+                        <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', background: '#fdecea', color: '#e74c3c', borderRadius: '3px', padding: '0.05rem 0.3rem', fontWeight: 700 }}>LEWAT</span>
                       )}
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(inv.total)}</td>
@@ -214,7 +501,7 @@ export default function Dashboard() {
                         display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px',
                         fontSize: '0.75rem', fontWeight: 600,
                         background: inv.payment_status === 'partial' ? '#fff3e0' : '#fdecea',
-                        color: inv.payment_status === 'partial' ? '#e67e22' : '#c0392b',
+                        color:      inv.payment_status === 'partial' ? '#e67e22' : '#c0392b',
                       }}>
                         {inv.payment_status === 'partial' ? 'Sebagian' : 'Belum Dibayar'}
                       </span>
@@ -228,7 +515,7 @@ export default function Dashboard() {
             </tbody>
           </table>
 
-          {/* Mobile cards */}
+          {/* mobile cards */}
           <div className="invoice-card-list">
             {outstanding.map(inv => {
               const remaining = Number(inv.total) - Number(inv.amount_paid);
@@ -244,7 +531,7 @@ export default function Dashboard() {
                       display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px',
                       fontSize: '0.75rem', fontWeight: 600,
                       background: inv.payment_status === 'partial' ? '#fff3e0' : '#fdecea',
-                      color: inv.payment_status === 'partial' ? '#e67e22' : '#c0392b',
+                      color:      inv.payment_status === 'partial' ? '#e67e22' : '#c0392b',
                     }}>
                       {inv.payment_status === 'partial' ? 'Sebagian' : 'Belum Dibayar'}
                     </span>
@@ -275,14 +562,14 @@ export default function Dashboard() {
         </div>
       )}
 
-      {outstanding.length === 0 && (
+      {outstanding.length === 0 && stats && (
         <div style={{ background: '#e6f9f0', border: '1px solid #b2dfdb', borderRadius: '8px', padding: '1rem 1.5rem', color: '#1b5e45', fontWeight: 500, fontSize: '0.9rem', marginBottom: '1.5rem' }}>
           Semua invoice sudah lunas.
         </div>
       )}
 
-      {/* Recent activity */}
-      {(stats.recentActivity || []).length > 0 && (
+      {/* recent activity */}
+      {(stats?.recentActivity || []).length > 0 && (
         <div className="card">
           <div className="card-header" style={{ marginBottom: '0.75rem' }}>
             <h2>Aktivitas Terakhir</h2>

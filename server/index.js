@@ -72,7 +72,8 @@ function issueToken(user) {
 }
 
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
-  const { username, password } = req.body;
+  const { username: rawUsername, password } = req.body;
+  const username = rawUsername?.toLowerCase();
   if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
   const { rows } = await pool.query('SELECT * FROM users WHERE username=$1', [username]);
   const user = rows[0];
@@ -3268,16 +3269,117 @@ app.get('/api/stats/daily-sales', async (req, res) => {
 
 // ── STATS ─────────────────────────────────────────────────────────────────────
 
+function periodRange(period) {
+  const today = new Date();
+  const end = today.toISOString().split('T')[0];
+  let start;
+  switch (period) {
+    case 'weekly': {
+      const d = new Date(today); d.setDate(d.getDate() - 6);
+      start = d.toISOString().split('T')[0]; break;
+    }
+    case 'monthly':
+      start = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`; break;
+    case 'yearly':
+      start = `${today.getFullYear()}-01-01`; break;
+    default:
+      start = end;
+  }
+  return { start, end };
+}
+
+app.get('/api/stats/stock-flow', requireAuth, async (req, res) => {
+  try {
+    const { period = 'weekly', start: qs, end: qe } = req.query;
+    const range = (qs && qe) ? { start: qs, end: qe } : periodRange(period);
+    const { start, end } = range;
+
+    const [stockInRes, stockOutRes, revenueRes, chartInRes, chartOutRes, chartDaysRes] = await Promise.all([
+      pool.query(`
+        SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
+        FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
+        WHERE inv.invoice_type = 'purchase' AND inv.date BETWEEN $1 AND $2`, [start, end]),
+
+      pool.query(`
+        SELECT COALESCE(SUM(ABS(value)), 0)::BIGINT AS total
+        FROM stock_history
+        WHERE quantity_change < 0 AND value IS NOT NULL AND date BETWEEN $1 AND $2`, [start, end]),
+
+      pool.query(`
+        SELECT
+          COALESCE((SELECT SUM(amount) FROM sales WHERE date BETWEEN $1 AND $2), 0)::BIGINT AS manual_sales,
+          COALESCE((
+            SELECT SUM(pil.amount) FROM pos_imports pi
+            JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
+            WHERE pi.date BETWEEN $1 AND $2
+          ), 0)::BIGINT AS pos_revenue`, [start, end]),
+
+      pool.query(`
+        SELECT inv.date::TEXT AS date, COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS stock_in
+        FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
+        WHERE inv.invoice_type = 'purchase' AND inv.date BETWEEN $1 AND $2
+        GROUP BY inv.date ORDER BY inv.date`, [start, end]),
+
+      pool.query(`
+        SELECT date::TEXT, COALESCE(SUM(ABS(value)), 0)::BIGINT AS stock_out
+        FROM stock_history
+        WHERE quantity_change < 0 AND value IS NOT NULL AND date BETWEEN $1 AND $2
+        GROUP BY date ORDER BY date`, [start, end]),
+
+      pool.query(`
+        SELECT day::TEXT AS date,
+               COALESCE(ms.manual_sales, 0) + COALESCE(pos.pos_revenue, 0) AS revenue
+        FROM (SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS day) days
+        LEFT JOIN (
+          SELECT date, SUM(amount)::BIGINT AS manual_sales FROM sales
+          WHERE date BETWEEN $1 AND $2 GROUP BY date
+        ) ms ON ms.date = days.day
+        LEFT JOIN (
+          SELECT pi.date, SUM(pil.amount)::BIGINT AS pos_revenue
+          FROM pos_imports pi JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
+          WHERE pi.date BETWEEN $1 AND $2 GROUP BY pi.date
+        ) pos ON pos.date = days.day
+        ORDER BY day`, [start, end]),
+    ]);
+
+    const inByDate  = Object.fromEntries(chartInRes.rows.map(r  => [r.date, Number(r.stock_in)]));
+    const outByDate = Object.fromEntries(chartOutRes.rows.map(r => [r.date, Number(r.stock_out)]));
+    const chart = chartDaysRes.rows.map(r => ({
+      date:      r.date,
+      stock_in:  inByDate[r.date]  || 0,
+      stock_out: outByDate[r.date] || 0,
+      revenue:   Number(r.revenue) || 0,
+    }));
+
+    res.json({
+      period, start, end,
+      summary: {
+        stock_in:  Number(stockInRes.rows[0].total),
+        stock_out: Number(stockOutRes.rows[0].total),
+        revenue:   Number(revenueRes.rows[0].manual_sales) + Number(revenueRes.rows[0].pos_revenue),
+      },
+      chart,
+    });
+  } catch (err) {
+    console.error('Stock flow error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/stats', async (req, res) => {
   try {
-    const [itemsRes, invRes, valueRes, todayRes, outstandingRes, activityRes] = await Promise.all([
+    const { period = 'daily' } = req.query;
+    const { start: periodStart, end: periodEnd } = periodRange(period);
+
+    const [itemsRes, invRes, valueRes, purchasesRes, outstandingRes, activityRes] = await Promise.all([
       pool.query('SELECT COUNT(*) FROM items'),
       pool.query('SELECT COUNT(*) FROM inventory'),
       pool.query('SELECT COALESCE(SUM(value), 0) AS total FROM inventory'),
       pool.query(`SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total, COUNT(DISTINCT inv.id)::INT AS count
                   FROM invoices inv
                   LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-                  WHERE inv.date = CURRENT_DATE AND inv.invoice_type = 'purchase'`),
+                  WHERE inv.date BETWEEN $1 AND $2 AND inv.invoice_type = 'purchase'`,
+                  [periodStart, periodEnd]),
       pool.query(`SELECT inv.id, inv.invoice_number, inv.amount_paid,
                          inv.payment_status, inv.due_date, inv.date, inv.invoice_type,
                          v.name AS vendor_name,
@@ -3295,8 +3397,9 @@ app.get('/api/stats', async (req, res) => {
       totalItems:            Number(itemsRes.rows[0].count),
       totalInventoryRecords: Number(invRes.rows[0].count),
       totalInventoryValue:   Number(valueRes.rows[0].total),
-      todayPurchasesTotal:   Number(todayRes.rows[0].total),
-      todayPurchasesCount:   Number(todayRes.rows[0].count),
+      purchasesTotal:        Number(purchasesRes.rows[0].total),
+      purchasesCount:        Number(purchasesRes.rows[0].count),
+      period,
       outstandingInvoices:   outstandingRes.rows,
       recentActivity:        activityRes.rows,
     });
