@@ -62,12 +62,12 @@ function StockFlowChart({ data }) {
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
-  const maxVal = Math.max(...data.flatMap(d => [d.stock_in, d.stock_out]), 1);
+  const maxVal = Math.max(...data.flatMap(d => [d.revenue, d.spend]), 1);
   const yMax   = maxVal * 1.12;
 
-  const groupW  = plotW / data.length;
-  const barPad  = Math.max(groupW * 0.12, 2);
-  const barW    = Math.max((groupW - barPad * 2 - 2) / 2, 3);
+  const groupW = plotW / data.length;
+  const barPad = Math.max(groupW * 0.12, 2);
+  const barW   = Math.max((groupW - barPad * 2 - 2) / 2, 3);
 
   const py = (val) => padT + plotH - (val / yMax) * plotH;
   const bh = (val) => Math.max((val / yMax) * plotH, 0);
@@ -77,7 +77,6 @@ function StockFlowChart({ data }) {
   return (
     <div style={{ width: '100%', overflowX: 'auto' }}>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: '320px', height: 'auto', display: 'block' }}>
-        {/* grid lines + y labels */}
         {yTicks.map((tick, i) => (
           <g key={i}>
             <line x1={padL} y1={py(tick)} x2={padL + plotW} y2={py(tick)} stroke="#f0f0f0" strokeWidth={1} />
@@ -87,38 +86,21 @@ function StockFlowChart({ data }) {
           </g>
         ))}
 
-        {/* bars */}
         {data.map((d, i) => {
           const gx = padL + i * groupW + barPad;
-          const inH  = bh(d.stock_in);
-          const outH = bh(d.stock_out);
           return (
             <g key={d.date}>
-              {/* stock in bar */}
-              <rect
-                x={gx} y={py(d.stock_in)}
-                width={barW} height={inH}
-                fill="#3b82f6" rx={2}
-                opacity={0.85}
-              >
-                <title>Masuk: {idr(d.stock_in)}</title>
+              <rect x={gx} y={py(d.revenue)} width={barW} height={bh(d.revenue)}
+                fill="#22c55e" rx={2} opacity={0.85}>
+                <title>Pendapatan: {idr(d.revenue)}</title>
               </rect>
-              {/* stock out bar */}
-              <rect
-                x={gx + barW + 2} y={py(d.stock_out)}
-                width={barW} height={outH}
-                fill="#f97316" rx={2}
-                opacity={0.85}
-              >
-                <title>Keluar: {idr(d.stock_out)}</title>
+              <rect x={gx + barW + 2} y={py(d.spend)} width={barW} height={bh(d.spend)}
+                fill="#f97316" rx={2} opacity={0.85}>
+                <title>Pengeluaran: {idr(d.spend)}</title>
               </rect>
-              {/* date label */}
               <text
-                x={gx + barW + 1}
-                y={H - padB + 14}
-                textAnchor="middle"
-                fontSize={data.length > 20 ? 7 : 9}
-                fill="#999"
+                x={gx + barW + 1} y={H - padB + 14}
+                textAnchor="middle" fontSize={data.length > 20 ? 7 : 9} fill="#999"
               >
                 {fmtDateShort(d.date)}
               </text>
@@ -126,20 +108,18 @@ function StockFlowChart({ data }) {
           );
         })}
 
-        {/* axes */}
         <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="#e0e0e0" strokeWidth={1} />
         <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="#e0e0e0" strokeWidth={1} />
       </svg>
 
-      {/* legend */}
       <div style={{ display: 'flex', gap: '1.25rem', justifyContent: 'center', marginTop: '0.25rem' }}>
         <span style={{ fontSize: '0.8rem', color: '#555', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-          <span style={{ width: 12, height: 12, background: '#3b82f6', borderRadius: 2, display: 'inline-block' }} />
-          Stok Masuk
+          <span style={{ width: 12, height: 12, background: '#22c55e', borderRadius: 2, display: 'inline-block' }} />
+          Pendapatan
         </span>
         <span style={{ fontSize: '0.8rem', color: '#555', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
           <span style={{ width: 12, height: 12, background: '#f97316', borderRadius: 2, display: 'inline-block' }} />
-          Stok Keluar
+          Pengeluaran
         </span>
       </div>
     </div>
@@ -195,17 +175,19 @@ function StockFlowCard({ period }) {
         <p style={{ color: '#e74c3c', fontSize: '0.88rem' }}>Gagal memuat data.</p>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
-          <div style={tileStyle('#eff6ff', '#1d4ed8')}>
-            <div style={tileLabelStyle}>Nilai Stok Masuk</div>
-            <div style={tileValueStyle}>{idr(s.stock_in)}</div>
+          <div style={tileStyle('#f0fdf4', '#15803d')}>
+            <div style={tileLabelStyle}>Pendapatan</div>
+            <div style={tileValueStyle}>{idr(s.revenue)}</div>
           </div>
           <div style={tileStyle('#fff7ed', '#c2410c')}>
-            <div style={tileLabelStyle}>Nilai Stok Keluar</div>
-            <div style={tileValueStyle}>{idr(s.stock_out)}</div>
+            <div style={tileLabelStyle}>Pengeluaran</div>
+            <div style={tileValueStyle}>{idr(s.spend)}</div>
           </div>
-          <div style={tileStyle('#f0fdf4', '#15803d')}>
-            <div style={tileLabelStyle}>Pendapatan Bersih</div>
-            <div style={tileValueStyle}>{idr(s.revenue)}</div>
+          <div style={tileStyle(s.margin >= 0 ? '#f0fdf4' : '#fef2f2', s.margin >= 0 ? '#15803d' : '#b91c1c')}>
+            <div style={tileLabelStyle}>Selisih (Margin)</div>
+            <div style={{ ...tileValueStyle, color: s.margin >= 0 ? '#15803d' : '#b91c1c' }}>
+              {s.margin >= 0 ? '+' : ''}{idr(s.margin)}
+            </div>
           </div>
         </div>
       )}

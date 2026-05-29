@@ -3294,72 +3294,54 @@ app.get('/api/stats/stock-flow', requireAuth, async (req, res) => {
     const range = (qs && qe) ? { start: qs, end: qe } : periodRange(period);
     const { start, end } = range;
 
-    const [stockInRes, stockOutRes, revenueRes, chartInRes, chartOutRes, chartDaysRes] = await Promise.all([
-      pool.query(`
-        SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
-        FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
-        WHERE inv.invoice_type = 'purchase' AND inv.date BETWEEN $1 AND $2`, [start, end]),
-
-      pool.query(`
-        SELECT COALESCE(SUM(ABS(value)), 0)::BIGINT AS total
+    // Single query: all four daily sub-totals joined onto a generated date series
+    const { rows } = await pool.query(`
+      SELECT
+        day::TEXT AS date,
+        COALESCE(su.stock_usage,   0)::BIGINT AS stock_usage,
+        COALESCE(ei.expense_total, 0)::BIGINT AS expense_total,
+        COALESCE(ms.manual_sales,  0)::BIGINT AS manual_sales,
+        COALESCE(pos.pos_revenue,  0)::BIGINT AS pos_revenue
+      FROM (SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS day) days
+      LEFT JOIN (
+        SELECT date, SUM(ABS(value))::BIGINT AS stock_usage
         FROM stock_history
-        WHERE quantity_change < 0 AND value IS NOT NULL AND date BETWEEN $1 AND $2`, [start, end]),
-
-      pool.query(`
-        SELECT
-          COALESCE((SELECT SUM(amount) FROM sales WHERE date BETWEEN $1 AND $2), 0)::BIGINT AS manual_sales,
-          COALESCE((
-            SELECT SUM(pil.amount) FROM pos_imports pi
-            JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
-            WHERE pi.date BETWEEN $1 AND $2
-          ), 0)::BIGINT AS pos_revenue`, [start, end]),
-
-      pool.query(`
-        SELECT inv.date::TEXT AS date, COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS stock_in
+        WHERE source_type = 'dispatch' AND value IS NOT NULL AND date BETWEEN $1 AND $2
+        GROUP BY date
+      ) su ON su.date = days.day
+      LEFT JOIN (
+        SELECT inv.date, SUM(ii.quantity * ii.price)::BIGINT AS expense_total
         FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
-        WHERE inv.invoice_type = 'purchase' AND inv.date BETWEEN $1 AND $2
-        GROUP BY inv.date ORDER BY inv.date`, [start, end]),
+        WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
+        GROUP BY inv.date
+      ) ei ON ei.date = days.day
+      LEFT JOIN (
+        SELECT date, SUM(amount)::BIGINT AS manual_sales
+        FROM sales WHERE date BETWEEN $1 AND $2
+        GROUP BY date
+      ) ms ON ms.date = days.day
+      LEFT JOIN (
+        SELECT pi.date, SUM(pil.amount)::BIGINT AS pos_revenue
+        FROM pos_imports pi
+        JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
+        WHERE pi.date BETWEEN $1 AND $2
+        GROUP BY pi.date
+      ) pos ON pos.date = days.day
+      ORDER BY day
+    `, [start, end]);
 
-      pool.query(`
-        SELECT date::TEXT, COALESCE(SUM(ABS(value)), 0)::BIGINT AS stock_out
-        FROM stock_history
-        WHERE quantity_change < 0 AND value IS NOT NULL AND date BETWEEN $1 AND $2
-        GROUP BY date ORDER BY date`, [start, end]),
-
-      pool.query(`
-        SELECT day::TEXT AS date,
-               COALESCE(ms.manual_sales, 0) + COALESCE(pos.pos_revenue, 0) AS revenue
-        FROM (SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS day) days
-        LEFT JOIN (
-          SELECT date, SUM(amount)::BIGINT AS manual_sales FROM sales
-          WHERE date BETWEEN $1 AND $2 GROUP BY date
-        ) ms ON ms.date = days.day
-        LEFT JOIN (
-          SELECT pi.date, SUM(pil.amount)::BIGINT AS pos_revenue
-          FROM pos_imports pi JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
-          WHERE pi.date BETWEEN $1 AND $2 GROUP BY pi.date
-        ) pos ON pos.date = days.day
-        ORDER BY day`, [start, end]),
-    ]);
-
-    const inByDate  = Object.fromEntries(chartInRes.rows.map(r  => [r.date, Number(r.stock_in)]));
-    const outByDate = Object.fromEntries(chartOutRes.rows.map(r => [r.date, Number(r.stock_out)]));
-    const chart = chartDaysRes.rows.map(r => ({
-      date:      r.date,
-      stock_in:  inByDate[r.date]  || 0,
-      stock_out: outByDate[r.date] || 0,
-      revenue:   Number(r.revenue) || 0,
-    }));
-
-    res.json({
-      period, start, end,
-      summary: {
-        stock_in:  Number(stockInRes.rows[0].total),
-        stock_out: Number(stockOutRes.rows[0].total),
-        revenue:   Number(revenueRes.rows[0].manual_sales) + Number(revenueRes.rows[0].pos_revenue),
-      },
-      chart,
+    const chart = rows.map(r => {
+      const spend   = Number(r.stock_usage) + Number(r.expense_total);
+      const revenue = Number(r.manual_sales) + Number(r.pos_revenue);
+      return { date: r.date, spend, revenue, margin: revenue - spend };
     });
+
+    const summary = chart.reduce(
+      (s, d) => ({ spend: s.spend + d.spend, revenue: s.revenue + d.revenue, margin: s.margin + d.margin }),
+      { spend: 0, revenue: 0, margin: 0 }
+    );
+
+    res.json({ period, start, end, summary, chart });
   } catch (err) {
     console.error('Stock flow error:', err);
     res.status(500).json({ error: err.message });
