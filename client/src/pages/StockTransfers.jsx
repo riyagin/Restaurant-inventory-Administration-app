@@ -112,7 +112,7 @@ export default function StockTransfers() {
   return (
     <>
       <div className="page-header">
-        <h1>Transfer Stok</h1>
+        <h1>Transfer Gudang</h1>
       </div>
 
       <div className="card" style={{ maxWidth: '860px', marginBottom: '1.5rem' }}>
@@ -229,7 +229,7 @@ export default function StockTransfers() {
               + Tambah Baris
             </button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Memproses...' : 'Transfer Stok'}
+              {loading ? 'Memproses...' : 'Transfer Gudang'}
             </button>
           </div>
         </form>

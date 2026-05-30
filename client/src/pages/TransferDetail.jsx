@@ -22,7 +22,7 @@ export default function TransferDetail() {
     <>
       <div className="page-header">
         <div>
-          <h1 style={{ marginBottom: '0.2rem' }}>Transfer Stok</h1>
+          <h1 style={{ marginBottom: '0.2rem' }}>Transfer Gudang</h1>
           <div style={{ fontSize: '0.85rem', color: '#888' }}>
             {first.from_warehouse_name} → {first.to_warehouse_name} &nbsp;·&nbsp; {fmt(first.transferred_at)}
           </div>

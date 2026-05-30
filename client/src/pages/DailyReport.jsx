@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getDailyReport } from '../api';
+import { getDailyReport, getBranches } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v ?? 0);
@@ -39,20 +39,28 @@ function EmptyRow({ cols, label }) {
 }
 
 export default function DailyReport() {
-  const [date, setDate]       = useState(todayISO());
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
+  const [date, setDate]         = useState(todayISO());
+  const [branchId, setBranchId] = useState('');
+  const [branches, setBranches] = useState([]);
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+
+  useEffect(() => {
+    getBranches().then(r => setBranches(r.data)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!date) return;
     setLoading(true);
     setError('');
-    getDailyReport({ date })
+    const params = { date };
+    if (branchId) params.branch_id = branchId;
+    getDailyReport(params)
       .then(r => setData(r.data))
       .catch(e => setError(e.response?.data?.error || 'Gagal memuat laporan'))
       .finally(() => setLoading(false));
-  }, [date]);
+  }, [date, branchId]);
 
   const fmtDate = (d) => d
     ? new Date(d + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
@@ -80,7 +88,7 @@ export default function DailyReport() {
         <Link to="/reports/financial" className="btn btn-secondary">← Laporan Keuangan</Link>
       </div>
 
-      {/* Date picker */}
+      {/* Date + branch filter */}
       <div className="card" style={{ marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <label style={{ fontWeight: 600, fontSize: '0.9rem', color: '#444' }}>Tanggal</label>
@@ -92,6 +100,21 @@ export default function DailyReport() {
           />
           <button className="btn btn-secondary btn-sm" onClick={() => setDate(todayISO())}>Hari Ini</button>
           {date && <span style={{ color: '#888', fontSize: '0.88rem' }}>{fmtDate(date)}</span>}
+
+          {branches.length > 0 && (
+            <>
+              <span style={{ color: '#ddd' }}>|</span>
+              <label style={{ fontWeight: 600, fontSize: '0.9rem', color: '#444' }}>Cabang</label>
+              <select
+                value={branchId}
+                onChange={e => setBranchId(e.target.value)}
+                style={{ padding: '0.4rem 0.6rem', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.88rem' }}
+              >
+                <option value="">Semua Cabang</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </>
+          )}
         </div>
       </div>
 
@@ -303,7 +326,7 @@ export default function DailyReport() {
           {/* Stock Transfers */}
           {data.transfers.length > 0 && (
             <div className="card" style={{ marginBottom: '1.5rem' }}>
-              <SectionHeader title="Transfer Stok Antar Gudang" count={data.transfers.length} />
+              <SectionHeader title="Transfer Gudang" count={data.transfers.length} />
               <table>
                 <thead>
                   <tr>
@@ -352,7 +375,7 @@ export default function DailyReport() {
                 <tbody>
                   {data.opnames.map(op => (
                     <tr key={op.id}>
-                      <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmtTime(op.created_at)}</td>
+                      <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmtTime(op.performed_at)}</td>
                       <td style={{ fontSize: '0.88rem' }}>{op.warehouse_name}</td>
                       <td style={{ fontSize: '0.85rem', color: '#666' }}>{op.operator_name || op.performed_by_name || '—'}</td>
                       <td style={{ textAlign: 'right', fontSize: '0.85rem' }}>{op.item_count}</td>

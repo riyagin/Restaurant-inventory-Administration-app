@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { getFinancialReport } from '../api';
+import { getFinancialReport, getBranches } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -197,18 +197,25 @@ function buildExcel({ trees, startDate, endDate, isPeriod }) {
 
 export default function FinancialReport() {
   const [accounts, setAccounts] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]   = useState(true);
   const [startDate, setStartDate] = useState(firstOfMonthStr());
   const [endDate, setEndDate]     = useState(todayStr());
   const [isPeriod, setIsPeriod]   = useState(false);
+  const [branchId, setBranchId]   = useState('');
+  const [branches, setBranches]   = useState([]);
+
+  useEffect(() => {
+    getBranches().then(r => setBranches(r.data)).catch(() => {});
+  }, []);
 
   const fetchReport = useCallback(() => {
     setLoading(true);
     const params = isPeriod ? { start_date: startDate, end_date: endDate } : {};
+    if (branchId && isPeriod) params.branch_id = branchId;
     getFinancialReport(params)
       .then(r => setAccounts(r.data))
       .finally(() => setLoading(false));
-  }, [isPeriod, startDate, endDate]);
+  }, [isPeriod, startDate, endDate, branchId]);
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
 
@@ -243,7 +250,7 @@ export default function FinancialReport() {
         </div>
       </div>
 
-      {/* Date range filter */}
+      {/* Date range + branch filter */}
       <div className="card" style={{ marginBottom: '1.25rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}>
@@ -277,6 +284,20 @@ export default function FinancialReport() {
                   style={{ width: 'auto' }}
                 />
               </div>
+
+              {branches.length > 0 && (
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.2rem', display: 'block' }}>Cabang (Laba Rugi)</label>
+                  <select
+                    value={branchId}
+                    onChange={e => setBranchId(e.target.value)}
+                    style={{ padding: '0.35rem 0.6rem', border: '1px solid #ddd', borderRadius: 6, fontSize: '0.88rem' }}
+                  >
+                    <option value="">Seluruh Organisasi</option>
+                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+              )}
             </>
           )}
 
@@ -297,9 +318,19 @@ export default function FinancialReport() {
           <div className="card">
             <div className="card-header" style={{ marginBottom: '1rem' }}>
               <h2>Laporan Laba Rugi</h2>
-              {isPeriod && (
-                <span style={{ fontSize: '0.78rem', color: '#888' }}>{startDate} s/d {endDate}</span>
-              )}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
+                {isPeriod && (
+                  <span style={{ fontSize: '0.78rem', color: '#888' }}>{startDate} s/d {endDate}</span>
+                )}
+                {isPeriod && branchId && (
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, background: '#e8f0fe', color: '#3949ab', borderRadius: 4, padding: '0.1rem 0.45rem' }}>
+                    {branches.find(b => b.id === branchId)?.name || 'Cabang'}
+                  </span>
+                )}
+                {isPeriod && !branchId && (
+                  <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Seluruh Organisasi</span>
+                )}
+              </div>
             </div>
 
             <Section title="Pendapatan" nodes={trees.revenue || []} color="#e6f9f0" />

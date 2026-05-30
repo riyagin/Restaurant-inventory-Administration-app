@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getStats, getDailySalesByBranch, getStockFlow } from '../api';
+import { getStats, getDailySalesByBranch, getStockFlow, getBranches } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -139,26 +139,27 @@ function getMonthStart() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-function StockFlowCard() {
+function StockFlowCard({ branchId }) {
   const defaultStart = nDaysAgo(6);
 
   const [rangeStart, setRangeStart] = useState(defaultStart);
   const [rangeEnd,   setRangeEnd]   = useState(todayStr);
-  // draft holds what's typed in the inputs before Apply is clicked
   const [draft, setDraft] = useState({ start: defaultStart, end: todayStr });
   const [activePreset, setActivePreset] = useState('7 Hari');
 
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchRange = useCallback((s, e) => {
+  const fetchRange = useCallback((s, e, bid) => {
     setLoading(true);
-    getStockFlow({ start: s, end: e })
+    const params = { start: s, end: e };
+    if (bid) params.branch_id = bid;
+    getStockFlow(params)
       .then(r  => { setData(r.data);  setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchRange(rangeStart, rangeEnd); }, []); // eslint-disable-line
+  useEffect(() => { fetchRange(rangeStart, rangeEnd, branchId); }, [branchId]); // eslint-disable-line
 
   function applyPreset(opt) {
     const s = opt.days === null ? getMonthStart() : nDaysAgo(opt.days);
@@ -166,14 +167,14 @@ function StockFlowCard() {
     setRangeStart(s); setRangeEnd(e);
     setDraft({ start: s, end: e });
     setActivePreset(opt.label);
-    fetchRange(s, e);
+    fetchRange(s, e, branchId);
   }
 
   function applyCustom() {
     if (!draft.start || !draft.end || draft.start > draft.end) return;
     setRangeStart(draft.start); setRangeEnd(draft.end);
     setActivePreset(null);
-    fetchRange(draft.start, draft.end);
+    fetchRange(draft.start, draft.end, branchId);
   }
 
   const s = data?.summary;
@@ -356,15 +357,24 @@ function DailySalesCard() {
 
 // ─── main dashboard ───────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const [period, setPeriod] = useState('daily');
-  const [stats,  setStats]  = useState(null);
-  const [error,  setError]  = useState('');
+  const [period,   setPeriod]   = useState('daily');
+  const [branchId, setBranchId] = useState('');
+  const [branches, setBranches] = useState([]);
+  const [stats,    setStats]    = useState(null);
+  const [error,    setError]    = useState('');
 
   useEffect(() => {
-    getStats({ period })
+    getBranches().then(r => setBranches(r.data)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setStats(null);
+    const params = { period };
+    if (branchId) params.branch_id = branchId;
+    getStats(params)
       .then(r => setStats(r.data))
       .catch(err => setError(err.response?.data?.error || err.message || 'Gagal memuat dasbor'));
-  }, [period]);
+  }, [period, branchId]);
 
   if (error) return <p style={{ padding: '2rem', color: '#e74c3c' }}>Error: {error}</p>;
 
@@ -380,7 +390,7 @@ export default function Dashboard() {
           {PERIODS.map(p => (
             <button
               key={p.key}
-              onClick={() => { setPeriod(p.key); setStats(null); }}
+              onClick={() => setPeriod(p.key)}
               style={{
                 border: 'none', cursor: 'pointer', borderRadius: 6,
                 padding: '0.3rem 0.75rem', fontSize: '0.82rem', fontWeight: 600,
@@ -394,6 +404,17 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+        {/* branch filter */}
+        {branches.length > 0 && (
+          <select
+            value={branchId}
+            onChange={e => setBranchId(e.target.value)}
+            style={{ padding: '0.35rem 0.6rem', border: '1px solid #ddd', borderRadius: 6, fontSize: '0.82rem', fontWeight: 600, color: branchId ? '#1a1a2e' : '#888' }}
+          >
+            <option value="">Semua Cabang</option>
+            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        )}
       </div>
 
       {/* stat cards */}
@@ -451,7 +472,7 @@ export default function Dashboard() {
       )}
 
       {/* stock flow card */}
-      <StockFlowCard />
+      <StockFlowCard branchId={branchId} />
 
       {/* daily sales by branch */}
       <DailySalesCard />

@@ -3005,8 +3005,9 @@ app.post('/api/account-adjustments/transfer', requireAdmin, async (req, res) => 
 // ── FINANCIAL REPORT ──────────────────────────────────────────────────────────
 
 app.get('/api/reports/financial', async (req, res) => {
-  const { start_date, end_date } = req.query;
+  const { start_date, end_date, branch_id } = req.query;
   const usePeriod = start_date && end_date;
+  const hb = !!branch_id;
 
   const { rows: accounts } = await pool.query(
     `SELECT id, account_number, name, account_type, balance, parent_id, is_system
@@ -3017,9 +3018,17 @@ app.get('/api/reports/financial', async (req, res) => {
   let adjMap = {};
 
   if (usePeriod) {
-    // Compute period balances for revenue/expense accounts from transaction tables
+    const params = hb ? [start_date, end_date, branch_id] : [start_date, end_date];
+
     const { rows: periodRows } = await pool.query(`
       WITH
+        ${hb ? `pos_branch_imps AS (
+          SELECT DISTINCT pil.import_id
+          FROM pos_import_lines pil
+          JOIN pos_imports pi ON pi.id = pil.import_id AND pi.date BETWEEN $1 AND $2
+          JOIN divisions dv ON dv.revenue_account_id = pil.account_id AND dv.branch_id = $3
+          WHERE pil.line_type = 'revenue'
+        ),` : ''}
         sales_rev AS (
           SELECT COALESCE(dv.revenue_account_id, b.revenue_account_id) AS account_id,
                  SUM(s.amount) AS total
@@ -3028,12 +3037,14 @@ app.get('/api/reports/financial', async (req, res) => {
           LEFT JOIN branches b ON b.id = s.branch_id
           WHERE s.date BETWEEN $1 AND $2
             AND COALESCE(dv.revenue_account_id, b.revenue_account_id) IS NOT NULL
+            ${hb ? 'AND COALESCE(s.branch_id, dv.branch_id) = $3' : ''}
           GROUP BY 1
         ),
         pos_rev AS (
           SELECT pil.account_id, SUM(pil.amount) AS total
           FROM pos_import_lines pil
           JOIN pos_imports pi ON pi.id = pil.import_id
+          ${hb ? 'JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id' : ''}
           WHERE pil.line_type = 'revenue' AND pi.date BETWEEN $1 AND $2
           GROUP BY pil.account_id
         ),
@@ -3046,12 +3057,14 @@ app.get('/api/reports/financial', async (req, res) => {
           LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
           WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
             AND COALESCE(dv.expense_account_id, b.expense_account_id) IS NOT NULL
+            ${hb ? 'AND COALESCE(inv.branch_id, dv.branch_id) = $3' : ''}
           GROUP BY 1
         ),
         pos_exp AS (
           SELECT pil.account_id, SUM(pil.amount) AS total
           FROM pos_import_lines pil
           JOIN pos_imports pi ON pi.id = pil.import_id
+          ${hb ? 'JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id' : ''}
           WHERE pil.line_type = 'expense' AND pi.date BETWEEN $1 AND $2
           GROUP BY pil.account_id
         ),
@@ -3059,6 +3072,7 @@ app.get('/api/reports/financial', async (req, res) => {
           SELECT pil.account_id, SUM(pil.amount) AS total
           FROM pos_import_lines pil
           JOIN pos_imports pi ON pi.id = pil.import_id
+          ${hb ? 'JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id' : ''}
           WHERE pil.line_type = 'discount' AND pi.date BETWEEN $1 AND $2
           GROUP BY pil.account_id
         ),
@@ -3074,11 +3088,11 @@ app.get('/api/reports/financial', async (req, res) => {
           UNION ALL SELECT account_id, total FROM inv_exp
           UNION ALL SELECT account_id, total FROM pos_exp
           UNION ALL SELECT account_id, total FROM pos_disc
-          UNION ALL SELECT account_id, total FROM adj_period
+          ${hb ? '' : 'UNION ALL SELECT account_id, total FROM adj_period'}
         )
       SELECT account_id, SUM(total)::BIGINT AS period_balance
       FROM combined GROUP BY account_id
-    `, [start_date, end_date]);
+    `, params);
 
     periodMap = Object.fromEntries(periodRows.map(r => [r.account_id, Number(r.period_balance)]));
 
@@ -3110,113 +3124,132 @@ app.get('/api/reports/financial', async (req, res) => {
 // ── DAILY REPORT ─────────────────────────────────────────────────────────────
 
 app.get('/api/reports/daily', async (req, res) => {
-  const { date } = req.query;
+  const { date, branch_id } = req.query;
   if (!date) return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
 
-  const [posRes, invoicesRes, dispatchesRes, opnameRes, transfersRes, salesRes] = await Promise.all([
-    // POS imports on this date
-    pool.query(`
-      SELECT pi.id, pi.description, pi.date, pi.total_amount, pi.source_file,
-             u.username AS created_by_name,
-             json_agg(json_build_object(
-               'label', pil.label, 'amount', pil.amount, 'line_type', pil.line_type,
-               'account_name', a.name, 'account_number', a.account_number
-             ) ORDER BY pil.line_type DESC, pil.amount DESC) AS lines
-      FROM pos_imports pi
-      LEFT JOIN users u ON u.id = pi.created_by
-      LEFT JOIN pos_import_lines pil ON pil.import_id = pi.id
-      LEFT JOIN accounts a ON a.id = pil.account_id
-      WHERE pi.date = $1
-      GROUP BY pi.id, u.username
-      ORDER BY pi.created_at`, [date]),
+  try {
+    const hb = !!branch_id;
 
-    // Purchase invoices on this date
-    pool.query(`
-      SELECT inv.id, inv.invoice_number, inv.date, inv.invoice_type, inv.payment_status,
-             inv.amount_paid, v.name AS vendor_name, b.name AS branch_name, dv.name AS division_name,
-             COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
-      FROM invoices inv
-      LEFT JOIN vendors v ON v.id = inv.vendor_id
-      LEFT JOIN branches b ON b.id = inv.branch_id
-      LEFT JOIN divisions dv ON dv.id = inv.division_id
-      LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-      WHERE inv.date = $1
-      GROUP BY inv.id, v.name, b.name, dv.name
-      ORDER BY inv.date`, [date]),
+    const [posRes, invoicesRes, dispatchesRes, opnameRes, transfersRes, salesRes] = await Promise.all([
+      // POS imports on this date (filtered by branch via division revenue account mapping)
+      pool.query(`
+        SELECT pi.id, pi.description, pi.date, pi.total_amount, pi.source_file,
+               u.username AS created_by_name,
+               json_agg(json_build_object(
+                 'label', pil.label, 'amount', pil.amount, 'line_type', pil.line_type,
+                 'account_name', a.name, 'account_number', a.account_number
+               ) ORDER BY pil.line_type DESC, pil.amount DESC) AS lines
+        FROM pos_imports pi
+        LEFT JOIN users u ON u.id = pi.created_by
+        LEFT JOIN pos_import_lines pil ON pil.import_id = pi.id
+        LEFT JOIN accounts a ON a.id = pil.account_id
+        WHERE pi.date = $1
+          ${hb ? `AND pi.id IN (
+            SELECT pil2.import_id FROM pos_import_lines pil2
+            JOIN divisions dv ON dv.revenue_account_id = pil2.account_id AND dv.branch_id = $2
+            WHERE pil2.line_type = 'revenue'
+          )` : ''}
+        GROUP BY pi.id, u.username
+        ORDER BY pi.created_at`,
+        hb ? [date, branch_id] : [date]),
 
-    // Dispatches on this date
-    pool.query(`
-      SELECT d.id, d.dispatched_at, d.notes, b.name AS branch_name, dv.name AS division_name,
-             w.name AS warehouse_name, u.username AS dispatched_by_name,
-             COUNT(di.id)::INT AS item_count,
-             COUNT(DISTINCT di.item_id)::INT AS distinct_items
-      FROM dispatches d
-      JOIN branches b ON b.id = d.branch_id
-      JOIN divisions dv ON dv.id = d.division_id
-      JOIN warehouses w ON w.id = d.warehouse_id
-      LEFT JOIN users u ON u.id = d.dispatched_by
-      LEFT JOIN dispatch_items di ON di.dispatch_id = d.id
-      WHERE d.dispatched_at::date = $1
-      GROUP BY d.id, b.name, dv.name, w.name, u.username
-      ORDER BY d.dispatched_at`, [date]),
+      // Invoices on this date
+      pool.query(`
+        SELECT inv.id, inv.invoice_number, inv.date, inv.invoice_type, inv.payment_status,
+               inv.amount_paid, v.name AS vendor_name, b.name AS branch_name, dv.name AS division_name,
+               COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
+        FROM invoices inv
+        LEFT JOIN vendors v ON v.id = inv.vendor_id
+        LEFT JOIN branches b ON b.id = inv.branch_id
+        LEFT JOIN divisions dv ON dv.id = inv.division_id
+        LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
+        WHERE inv.date = $1
+          ${hb ? 'AND inv.branch_id = $2' : ''}
+        GROUP BY inv.id, v.name, b.name, dv.name
+        ORDER BY inv.date`,
+        hb ? [date, branch_id] : [date]),
 
-    // Stock opname on this date
-    pool.query(`
-      SELECT so.id, so.created_at, so.notes, so.operator_name, so.pic_name,
-             w.name AS warehouse_name, u.username AS performed_by_name,
-             COUNT(soi.id)::INT AS item_count,
-             COALESCE(SUM(ABS(soi.difference)), 0)::BIGINT AS total_diff
-      FROM stock_opname so
-      JOIN warehouses w ON w.id = so.warehouse_id
-      LEFT JOIN users u ON u.id = so.performed_by
-      LEFT JOIN stock_opname_items soi ON soi.opname_id = so.id
-      WHERE so.created_at::date = $1
-      GROUP BY so.id, w.name, u.username
-      ORDER BY so.created_at`, [date]),
+      // Dispatches on this date
+      pool.query(`
+        SELECT d.id, d.dispatched_at, d.notes, b.name AS branch_name, dv.name AS division_name,
+               w.name AS warehouse_name, u.username AS dispatched_by_name,
+               COUNT(di.id)::INT AS item_count,
+               COUNT(DISTINCT di.item_id)::INT AS distinct_items
+        FROM dispatches d
+        JOIN branches b ON b.id = d.branch_id
+        JOIN divisions dv ON dv.id = d.division_id
+        JOIN warehouses w ON w.id = d.warehouse_id
+        LEFT JOIN users u ON u.id = d.dispatched_by
+        LEFT JOIN dispatch_items di ON di.dispatch_id = d.id
+        WHERE d.dispatched_at::date = $1
+          ${hb ? 'AND d.branch_id = $2' : ''}
+        GROUP BY d.id, b.name, dv.name, w.name, u.username
+        ORDER BY d.dispatched_at`,
+        hb ? [date, branch_id] : [date]),
 
-    // Stock transfers on this date
-    pool.query(`
-      SELECT st.group_id, MIN(st.transferred_at) AS transferred_at,
-             fw.name AS from_warehouse, tw.name AS to_warehouse,
-             u.username AS transferred_by_name,
-             COUNT(st.id)::INT AS item_count,
-             COUNT(DISTINCT st.item_id)::INT AS distinct_items
-      FROM stock_transfers st
-      JOIN warehouses fw ON fw.id = st.from_warehouse_id
-      JOIN warehouses tw ON tw.id = st.to_warehouse_id
-      LEFT JOIN users u ON u.id = st.transferred_by
-      WHERE st.transferred_at::date = $1
-      GROUP BY st.group_id, fw.name, tw.name, u.username
-      ORDER BY transferred_at`, [date]),
+      // Stock opname (warehouse-level, no branch filter)
+      pool.query(`
+        SELECT so.id, so.performed_at, so.notes, so.operator_name, so.pic_name,
+               w.name AS warehouse_name, u.username AS performed_by_name,
+               COUNT(soi.id)::INT AS item_count,
+               COALESCE(SUM(ABS(soi.difference)), 0)::BIGINT AS total_diff
+        FROM stock_opname so
+        JOIN warehouses w ON w.id = so.warehouse_id
+        LEFT JOIN users u ON u.id = so.performed_by
+        LEFT JOIN stock_opname_items soi ON soi.opname_id = so.id
+        WHERE so.performed_at::date = $1
+        GROUP BY so.id, w.name, u.username
+        ORDER BY so.performed_at`, [date]),
 
-    // Manual sales on this date
-    pool.query(`
-      SELECT s.id, s.date, s.amount, s.description,
-             b.name AS branch_name, dv.name AS division_name, u.username AS created_by_name
-      FROM sales s
-      LEFT JOIN branches b ON b.id = s.branch_id
-      LEFT JOIN divisions dv ON dv.id = s.division_id
-      LEFT JOIN users u ON u.id = s.created_by
-      WHERE s.date = $1
-      ORDER BY s.created_at`, [date]),
-  ]);
+      // Stock transfers (warehouse-level, no branch filter)
+      pool.query(`
+        SELECT st.group_id, MIN(st.transferred_at) AS transferred_at,
+               fw.name AS from_warehouse, tw.name AS to_warehouse,
+               u.username AS transferred_by_name,
+               COUNT(st.id)::INT AS item_count,
+               COUNT(DISTINCT st.item_id)::INT AS distinct_items
+        FROM stock_transfers st
+        JOIN warehouses fw ON fw.id = st.from_warehouse_id
+        JOIN warehouses tw ON tw.id = st.to_warehouse_id
+        LEFT JOIN users u ON u.id = st.transferred_by
+        WHERE st.transferred_at::date = $1
+        GROUP BY st.group_id, fw.name, tw.name, u.username
+        ORDER BY transferred_at`, [date]),
 
-  res.json({
-    date,
-    pos_imports:     posRes.rows,
-    invoices:        invoicesRes.rows,
-    dispatches:      dispatchesRes.rows,
-    opnames:         opnameRes.rows,
-    transfers:       transfersRes.rows,
-    sales:           salesRes.rows,
-    summary: {
-      pos_revenue:       posRes.rows.reduce((s, r) => s + Number(r.total_amount), 0),
-      manual_sales:      salesRes.rows.reduce((s, r) => s + Number(r.amount), 0),
-      purchases:         invoicesRes.rows.filter(i => i.invoice_type === 'purchase').reduce((s, i) => s + Number(i.total), 0),
-      expenses:          invoicesRes.rows.filter(i => i.invoice_type === 'expense').reduce((s, i) => s + Number(i.total), 0),
-      dispatch_count:    dispatchesRes.rows.length,
-    },
-  });
+      // Manual sales on this date
+      pool.query(`
+        SELECT s.id, s.date, s.amount, s.description,
+               b.name AS branch_name, dv.name AS division_name, u.username AS created_by_name
+        FROM sales s
+        LEFT JOIN branches b ON b.id = s.branch_id
+        LEFT JOIN divisions dv ON dv.id = s.division_id
+        LEFT JOIN users u ON u.id = s.created_by
+        WHERE s.date = $1
+          ${hb ? 'AND s.branch_id = $2' : ''}
+        ORDER BY s.created_at`,
+        hb ? [date, branch_id] : [date]),
+    ]);
+
+    res.json({
+      date,
+      pos_imports:  posRes.rows,
+      invoices:     invoicesRes.rows,
+      dispatches:   dispatchesRes.rows,
+      opnames:      opnameRes.rows,
+      transfers:    transfersRes.rows,
+      sales:        salesRes.rows,
+      summary: {
+        pos_revenue:    posRes.rows.reduce((s, r) => s + Number(r.total_amount), 0),
+        manual_sales:   salesRes.rows.reduce((s, r) => s + Number(r.amount), 0),
+        purchases:      invoicesRes.rows.filter(i => i.invoice_type === 'purchase').reduce((s, i) => s + Number(i.total), 0),
+        expenses:       invoicesRes.rows.filter(i => i.invoice_type === 'expense').reduce((s, i) => s + Number(i.total), 0),
+        dispatch_count: dispatchesRes.rows.length,
+      },
+    });
+  } catch (err) {
+    console.error('Daily report error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── DAILY SALES BY BRANCH ─────────────────────────────────────────────────────
@@ -3290,11 +3323,13 @@ function periodRange(period) {
 
 app.get('/api/stats/stock-flow', requireAuth, async (req, res) => {
   try {
-    const { period = 'weekly', start: qs, end: qe } = req.query;
+    const { period = 'weekly', start: qs, end: qe, branch_id } = req.query;
     const range = (qs && qe) ? { start: qs, end: qe } : periodRange(period);
     const { start, end } = range;
 
-    // Single query: all four daily sub-totals joined onto a generated date series
+    const hb = !!branch_id;
+    const params = hb ? [start, end, branch_id] : [start, end];
+
     const { rows } = await pool.query(`
       SELECT
         day::TEXT AS date,
@@ -3304,31 +3339,35 @@ app.get('/api/stats/stock-flow', requireAuth, async (req, res) => {
         COALESCE(pos.pos_revenue,  0)::BIGINT AS pos_revenue
       FROM (SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS day) days
       LEFT JOIN (
-        SELECT date, SUM(ABS(value))::BIGINT AS stock_usage
-        FROM stock_history
-        WHERE source_type = 'dispatch' AND value IS NOT NULL AND date BETWEEN $1 AND $2
-        GROUP BY date
+        SELECT sh.date, SUM(ABS(sh.value))::BIGINT AS stock_usage
+        FROM stock_history sh
+        ${hb ? 'JOIN dispatches d ON d.id = sh.source_id AND d.branch_id = $3' : ''}
+        WHERE sh.source_type = 'dispatch' AND sh.value IS NOT NULL AND sh.date BETWEEN $1 AND $2
+        GROUP BY sh.date
       ) su ON su.date = days.day
       LEFT JOIN (
         SELECT inv.date, SUM(ii.quantity * ii.price)::BIGINT AS expense_total
         FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
         WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
+          ${hb ? 'AND inv.branch_id = $3' : ''}
         GROUP BY inv.date
       ) ei ON ei.date = days.day
       LEFT JOIN (
         SELECT date, SUM(amount)::BIGINT AS manual_sales
         FROM sales WHERE date BETWEEN $1 AND $2
+          ${hb ? 'AND branch_id = $3' : ''}
         GROUP BY date
       ) ms ON ms.date = days.day
       LEFT JOIN (
         SELECT pi.date, SUM(pil.amount)::BIGINT AS pos_revenue
         FROM pos_imports pi
         JOIN pos_import_lines pil ON pil.import_id = pi.id AND pil.line_type = 'revenue'
+        ${hb ? 'JOIN divisions dv ON dv.revenue_account_id = pil.account_id AND dv.branch_id = $3' : ''}
         WHERE pi.date BETWEEN $1 AND $2
         GROUP BY pi.date
       ) pos ON pos.date = days.day
       ORDER BY day
-    `, [start, end]);
+    `, params);
 
     const chart = rows.map(r => {
       const spend   = Number(r.stock_usage) + Number(r.expense_total);
@@ -3350,8 +3389,13 @@ app.get('/api/stats/stock-flow', requireAuth, async (req, res) => {
 
 app.get('/api/stats', async (req, res) => {
   try {
-    const { period = 'daily' } = req.query;
+    const { period = 'daily', branch_id } = req.query;
     const { start: periodStart, end: periodEnd } = periodRange(period);
+
+    const purchasesParams = [periodStart, periodEnd];
+    const branchClause = branch_id
+      ? ` AND inv.branch_id = $${purchasesParams.push(branch_id)}`
+      : '';
 
     const [itemsRes, invRes, valueRes, purchasesRes, outstandingRes, activityRes] = await Promise.all([
       pool.query('SELECT COUNT(*) FROM items'),
@@ -3360,8 +3404,8 @@ app.get('/api/stats', async (req, res) => {
       pool.query(`SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total, COUNT(DISTINCT inv.id)::INT AS count
                   FROM invoices inv
                   LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-                  WHERE inv.date BETWEEN $1 AND $2 AND inv.invoice_type = 'purchase'`,
-                  [periodStart, periodEnd]),
+                  WHERE inv.date BETWEEN $1 AND $2 AND inv.invoice_type = 'purchase'${branchClause}`,
+                  purchasesParams),
       pool.query(`SELECT inv.id, inv.invoice_number, inv.amount_paid,
                          inv.payment_status, inv.due_date, inv.date, inv.invoice_type,
                          v.name AS vendor_name,

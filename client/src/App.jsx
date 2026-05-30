@@ -146,7 +146,7 @@ function Nav() {
 
         <NavDropdown label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
           {menuLink('/inventory', 'Inventaris')}
-          {menuLink('/transfers', 'Transfer Stok')}
+          {menuLink('/transfers', 'Transfer Gudang')}
           {menuLink('/dispatch', 'Pengiriman ke Cabang')}
           {menuLink('/stock-opname', 'Stok Opname')}
           {menuLink('/enumerations', 'Pencacahan')}
@@ -210,7 +210,7 @@ function Nav() {
 
           <MobileSection label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
             <Link to="/inventory" className={isActive('/inventory') ? 'active' : ''}>Inventaris</Link>
-            <Link to="/transfers" className={isActive('/transfers') ? 'active' : ''}>Transfer Stok</Link>
+            <Link to="/transfers" className={isActive('/transfers') ? 'active' : ''}>Transfer Gudang</Link>
             <Link to="/dispatch" className={isActive('/dispatch') ? 'active' : ''}>Pengiriman ke Cabang</Link>
             <Link to="/stock-opname" className={isActive('/stock-opname') ? 'active' : ''}>Stok Opname</Link>
             <Link to="/enumerations" className={isActive('/enumerations') ? 'active' : ''}>Pencacahan</Link>
