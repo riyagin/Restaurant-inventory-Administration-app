@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getInvoices, deleteInvoice, payInvoice, getAccounts } from '../api';
+import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions } from '../api';
 
 function getUser() {
   try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
@@ -33,20 +33,27 @@ export default function Invoices() {
   const [paying, setPaying]               = useState(false);
   const [payError, setPayError]           = useState('');
 
-  const [search,   setSearch]   = useState('');
-  const [status,   setStatus]   = useState('all');
-  const [type,     setType]     = useState('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo,   setDateTo]   = useState('');
+  const [branches,   setBranches]   = useState([]);
+  const [divisions,  setDivisions]  = useState([]);
+
+  const [search,     setSearch]     = useState('');
+  const [status,     setStatus]     = useState('all');
+  const [type,       setType]       = useState('all');
+  const [dateFrom,   setDateFrom]   = useState('');
+  const [dateTo,     setDateTo]     = useState('');
+  const [branchFilter,   setBranchFilter]   = useState('');
+  const [divisionFilter, setDivisionFilter] = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
     const params = { page, limit: PAGE_SIZE };
-    if (search)            params.search    = search;
-    if (status !== 'all')  params.status    = status;
-    if (type   !== 'all')  params.type      = type;
-    if (dateFrom)          params.date_from = dateFrom;
-    if (dateTo)            params.date_to   = dateTo;
+    if (search)                params.search      = search;
+    if (status !== 'all')      params.status      = status;
+    if (type   !== 'all')      params.type        = type;
+    if (dateFrom)              params.date_from   = dateFrom;
+    if (dateTo)                params.date_to     = dateTo;
+    if (branchFilter)          params.branch_id   = branchFilter;
+    if (divisionFilter)        params.division_id = divisionFilter;
     getInvoices(params)
       .then(r => {
         setInvoices(r.data.invoices);
@@ -55,10 +62,14 @@ export default function Invoices() {
         setOutCount(r.data.outstanding_count ?? 0);
       })
       .finally(() => setLoading(false));
-  }, [search, status, type, dateFrom, dateTo, page]);
+  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionFilter, page]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { getAccounts().then(r => setAccounts(r.data)); }, []);
+  useEffect(() => {
+    getAccounts().then(r => setAccounts(r.data));
+    getBranches().then(r => setBranches(r.data)).catch(() => {});
+    getDivisions().then(r => setDivisions(r.data)).catch(() => {});
+  }, []);
 
   // Reset to page 1 whenever filters change
   const setFilter = (setter) => (val) => { setter(val); setPage(1); };
@@ -97,11 +108,13 @@ export default function Invoices() {
 
   const clearFilters = () => {
     setSearch(''); setStatus('all'); setType('all');
-    setDateFrom(''); setDateTo(''); setPage(1);
+    setDateFrom(''); setDateTo('');
+    setBranchFilter(''); setDivisionFilter('');
+    setPage(1);
   };
 
   const totalPages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo;
+  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionFilter;
   const pageStart   = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd     = Math.min(page * PAGE_SIZE, total);
 
@@ -157,6 +170,20 @@ export default function Invoices() {
             </select>
             <input type="date" value={dateFrom} onChange={e => setFilter(setDateFrom)(e.target.value)} title="Dari tanggal" />
             <input type="date" value={dateTo}   onChange={e => setFilter(setDateTo)(e.target.value)}   title="Sampai tanggal" />
+            {branches.length > 0 && (
+              <select value={branchFilter} onChange={e => setFilter(setBranchFilter)(e.target.value)} title="Filter cabang">
+                <option value="">Semua Cabang</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            )}
+            {divisions.length > 0 && (
+              <select value={divisionFilter} onChange={e => setFilter(setDivisionFilter)(e.target.value)} title="Filter divisi">
+                <option value="">Semua Divisi</option>
+                {divisions.map(d => (
+                  <option key={d.id} value={d.id}>{d.name} — {d.branch_name}</option>
+                ))}
+              </select>
+            )}
             {hasFilters && (
               <button type="button" onClick={clearFilters} className="btn btn-secondary btn-sm">Bersihkan</button>
             )}

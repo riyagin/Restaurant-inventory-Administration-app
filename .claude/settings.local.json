@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(node -e ' *)",
-      "Read(//c/Users/USER/Documents/AA/Data penjualan 8-12 mei/**)"
+      "Read(//c/Users/USER/Documents/AA/Data penjualan 8-12 mei/**)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Projek AA\\\\inventory-app\" -Recurse -Include \"*.js\", \"*.sql\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Projek AA\\\\inventory-app\" -Recurse -Name)"
     ]
   }
 }

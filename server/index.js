@@ -1037,7 +1037,7 @@ const invoiceListSelect = `
 `;
 
 app.get('/api/invoices', async (req, res) => {
-  const { status, type, search, date_from, date_to, page = 1, limit = 25 } = req.query;
+  const { status, type, search, date_from, date_to, branch_id, division_id, page = 1, limit = 25 } = req.query;
   const params = [];
   const conditions = [];
 
@@ -1055,6 +1055,8 @@ app.get('/api/invoices', async (req, res) => {
     params.push(`%${search}%`);
     conditions.push(`(inv.invoice_number ILIKE $${params.length} OR inv.reference_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`);
   }
+  if (branch_id)   { params.push(branch_id);   conditions.push(`inv.branch_id = $${params.length}`); }
+  if (division_id) { params.push(division_id); conditions.push(`inv.division_id = $${params.length}`); }
 
   const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
   const pageNum  = Math.max(1, parseInt(page) || 1);
@@ -3955,4 +3957,162 @@ app.delete('/api/enumerations/:id', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+// ── MIGRATIONS ────────────────────────────────────────────────────────────────
+
+async function runMigrations() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id     TEXT        PRIMARY KEY,
+        run_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    const { rows: applied } = await client.query('SELECT id FROM _migrations');
+    const done = new Set(applied.map(r => r.id));
+
+    const migrations = [
+      {
+        id: '001_token_blocklist',
+        sql: `
+          CREATE TABLE IF NOT EXISTS token_blocklist (
+            jti        TEXT        PRIMARY KEY,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS token_blocklist_expires_idx ON token_blocklist (expires_at);
+        `,
+      },
+      {
+        id: '002_warehouses_inventory_account',
+        sql: `ALTER TABLE warehouses ADD COLUMN IF NOT EXISTS inventory_account_id UUID REFERENCES accounts(id);`,
+      },
+      {
+        id: '003_divisions_discount_account',
+        sql: `ALTER TABLE divisions ADD COLUMN IF NOT EXISTS discount_account_id UUID REFERENCES accounts(id);`,
+      },
+      {
+        id: '004_stock_history_value_source',
+        sql: `
+          ALTER TABLE stock_history ADD COLUMN IF NOT EXISTS value       BIGINT;
+          ALTER TABLE stock_history ADD COLUMN IF NOT EXISTS source_id   UUID;
+          ALTER TABLE stock_history ADD COLUMN IF NOT EXISTS source_type TEXT;
+        `,
+      },
+      {
+        id: '005_stock_transfers_group_id',
+        sql: `ALTER TABLE stock_transfers ADD COLUMN IF NOT EXISTS group_id UUID;`,
+      },
+      {
+        id: '006_stock_opname_operator_pic',
+        sql: `
+          ALTER TABLE stock_opname ADD COLUMN IF NOT EXISTS operator_name TEXT;
+          ALTER TABLE stock_opname ADD COLUMN IF NOT EXISTS pic_name      TEXT;
+        `,
+      },
+      {
+        id: '007_stock_opname_items_waste_value',
+        sql: `ALTER TABLE stock_opname_items ADD COLUMN IF NOT EXISTS waste_value BIGINT NOT NULL DEFAULT 0;`,
+      },
+      {
+        id: '008_invoices_branch_division_dispatch_vendor',
+        sql: `
+          ALTER TABLE invoices ADD COLUMN IF NOT EXISTS branch_id   UUID REFERENCES branches(id);
+          ALTER TABLE invoices ADD COLUMN IF NOT EXISTS division_id UUID REFERENCES divisions(id);
+          ALTER TABLE invoices ADD COLUMN IF NOT EXISTS dispatch_id UUID REFERENCES dispatches(id);
+          ALTER TABLE invoices ADD COLUMN IF NOT EXISTS vendor_id   UUID REFERENCES vendors(id);
+        `,
+      },
+      {
+        id: '009_pos_imports',
+        sql: `
+          CREATE TABLE IF NOT EXISTS pos_imports (
+            id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            description  TEXT,
+            date         DATE        NOT NULL,
+            source_file  TEXT,
+            total_amount BIGINT      NOT NULL,
+            created_by   UUID        REFERENCES users(id),
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE TABLE IF NOT EXISTS pos_import_lines (
+            id         UUID   PRIMARY KEY DEFAULT gen_random_uuid(),
+            import_id  UUID   REFERENCES pos_imports(id) ON DELETE CASCADE,
+            account_id UUID   REFERENCES accounts(id),
+            label      TEXT   NOT NULL,
+            amount     BIGINT NOT NULL,
+            line_type  TEXT   NOT NULL
+          );
+        `,
+      },
+      {
+        id: '010_account_adjustments',
+        sql: `
+          CREATE TABLE IF NOT EXISTS account_adjustments (
+            id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            account_id      UUID        NOT NULL REFERENCES accounts(id),
+            amount          BIGINT      NOT NULL,
+            description     TEXT        NOT NULL,
+            created_by      UUID        REFERENCES users(id),
+            created_by_name TEXT,
+            created_at      TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE INDEX IF NOT EXISTS account_adjustments_account_idx ON account_adjustments (account_id);
+          CREATE INDEX IF NOT EXISTS account_adjustments_created_idx ON account_adjustments (created_at DESC);
+        `,
+      },
+      {
+        id: '011_invoice_templates',
+        sql: `
+          CREATE TABLE IF NOT EXISTS invoice_templates (
+            id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            name         TEXT        NOT NULL UNIQUE,
+            invoice_type TEXT        NOT NULL DEFAULT 'expense',
+            vendor_id    UUID        REFERENCES vendors(id) ON DELETE SET NULL,
+            warehouse_id UUID        REFERENCES warehouses(id) ON DELETE SET NULL,
+            created_at   TIMESTAMPTZ DEFAULT NOW()
+          );
+          CREATE TABLE IF NOT EXISTS invoice_template_items (
+            id          UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+            template_id UUID    NOT NULL REFERENCES invoice_templates(id) ON DELETE CASCADE,
+            item_id     UUID    REFERENCES items(id) ON DELETE SET NULL,
+            description TEXT,
+            unit_index  INT     NOT NULL DEFAULT 0,
+            sort_order  INT     NOT NULL DEFAULT 0
+          );
+        `,
+      },
+      {
+        id: '012_indexes',
+        sql: `
+          CREATE INDEX IF NOT EXISTS activity_log_created_idx    ON activity_log    (created_at DESC);
+          CREATE INDEX IF NOT EXISTS invoice_items_invoice_idx   ON invoice_items   (invoice_id);
+          CREATE INDEX IF NOT EXISTS invoices_payment_status_idx ON invoices        (payment_status);
+          CREATE INDEX IF NOT EXISTS invoices_date_idx           ON invoices        (date);
+        `,
+      },
+    ];
+
+    for (const m of migrations) {
+      if (done.has(m.id)) continue;
+      console.log(`[migration] running ${m.id}`);
+      await client.query('BEGIN');
+      try {
+        await client.query(m.sql);
+        await client.query('INSERT INTO _migrations (id) VALUES ($1)', [m.id]);
+        await client.query('COMMIT');
+        console.log(`[migration] ${m.id} done`);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      }
+    }
+  } finally {
+    client.release();
+  }
+}
+
+runMigrations()
+  .then(() => app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`)))
+  .catch(err => { console.error('[migration] failed:', err); process.exit(1); });

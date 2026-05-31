@@ -51,11 +51,21 @@ function compactIdr(v) {
   return String(v);
 }
 
+// ─── month colours for compact date labels (up to 4 months in a 60-day window) ─
+const MONTH_COLORS = ['#6366f1', '#f59e0b', '#ec4899', '#14b8a6'];
+
 // ─── SVG bar chart ────────────────────────────────────────────────────────────
 function StockFlowChart({ data }) {
   if (!data || data.length === 0) {
     return <p style={{ color: '#999', fontSize: '0.85rem', textAlign: 'center', padding: '2rem 0' }}>Tidak ada data untuk rentang ini.</p>;
   }
+
+  const isCompact = data.length > 20;
+
+  // build month → color mapping
+  const months = [...new Set(data.map(d => d.date.slice(0, 7)))];
+  const monthColorMap = {};
+  months.forEach((m, i) => { monthColorMap[m] = MONTH_COLORS[i % MONTH_COLORS.length]; });
 
   const W = 700, H = 240;
   const padL = 58, padR = 12, padT = 14, padB = 42;
@@ -88,6 +98,8 @@ function StockFlowChart({ data }) {
 
         {data.map((d, i) => {
           const gx = padL + i * groupW + barPad;
+          const dayNum = new Date(d.date + 'T00:00:00').getDate();
+          const monthKey = d.date.slice(0, 7);
           return (
             <g key={d.date}>
               <rect x={gx} y={py(d.spend)} width={barW} height={bh(d.spend)}
@@ -98,12 +110,22 @@ function StockFlowChart({ data }) {
                 fill="#22c55e" rx={2} opacity={0.85}>
                 <title>Pendapatan: {idr(d.revenue)}</title>
               </rect>
-              <text
-                x={gx + barW + 1} y={H - padB + 14}
-                textAnchor="middle" fontSize={data.length > 20 ? 7 : 9} fill="#999"
-              >
-                {fmtDateShort(d.date)}
-              </text>
+              {isCompact ? (
+                <text
+                  x={gx + barW + 1} y={H - padB + 14}
+                  textAnchor="middle" fontSize={8}
+                  fill={monthColorMap[monthKey]} fontWeight="600"
+                >
+                  {dayNum}
+                </text>
+              ) : (
+                <text
+                  x={gx + barW + 1} y={H - padB + 14}
+                  textAnchor="middle" fontSize={9} fill="#999"
+                >
+                  {fmtDateShort(d.date)}
+                </text>
+              )}
             </g>
           );
         })}
@@ -112,7 +134,7 @@ function StockFlowChart({ data }) {
         <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="#e0e0e0" strokeWidth={1} />
       </svg>
 
-      <div style={{ display: 'flex', gap: '1.25rem', justifyContent: 'center', marginTop: '0.25rem' }}>
+      <div style={{ display: 'flex', gap: '1.25rem', justifyContent: 'center', marginTop: '0.25rem', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '0.8rem', color: '#555', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
           <span style={{ width: 12, height: 12, background: '#22c55e', borderRadius: 2, display: 'inline-block' }} />
           Pendapatan
@@ -121,6 +143,12 @@ function StockFlowChart({ data }) {
           <span style={{ width: 12, height: 12, background: '#f97316', borderRadius: 2, display: 'inline-block' }} />
           Pengeluaran
         </span>
+        {isCompact && months.map((m, i) => (
+          <span key={m} style={{ fontSize: '0.78rem', color: MONTH_COLORS[i % MONTH_COLORS.length], fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ width: 10, height: 10, background: MONTH_COLORS[i % MONTH_COLORS.length], borderRadius: '50%', display: 'inline-block' }} />
+            {new Date(m + '-01T00:00:00').toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -236,7 +264,14 @@ function StockFlowCard({ branchId }) {
             type="date"
             value={draft.start}
             max={draft.end}
-            onChange={e => { setDraft(d => ({ ...d, start: e.target.value })); setActivePreset(null); }}
+            min={offsetDate(draft.end, -59)}
+            onChange={e => {
+              const newStart = e.target.value;
+              const maxEnd = offsetDate(newStart, 59);
+              const clampedEnd = draft.end > maxEnd ? maxEnd : draft.end > todayStr ? todayStr : draft.end;
+              setDraft({ start: newStart, end: clampedEnd });
+              setActivePreset(null);
+            }}
             style={dateInputStyle}
           />
           <span style={{ color: '#aaa', fontSize: '0.8rem' }}>–</span>
@@ -244,8 +279,14 @@ function StockFlowCard({ branchId }) {
             type="date"
             value={draft.end}
             min={draft.start}
-            max={todayStr}
-            onChange={e => { setDraft(d => ({ ...d, end: e.target.value })); setActivePreset(null); }}
+            max={(() => { const m = offsetDate(draft.start, 59); return m < todayStr ? m : todayStr; })()}
+            onChange={e => {
+              const newEnd = e.target.value;
+              const minStart = offsetDate(newEnd, -59);
+              const clampedStart = draft.start < minStart ? minStart : draft.start;
+              setDraft({ start: clampedStart, end: newEnd });
+              setActivePreset(null);
+            }}
             style={dateInputStyle}
           />
           <button className="btn btn-primary btn-sm" onClick={applyCustom}>Terapkan</button>
