@@ -1037,7 +1037,7 @@ const invoiceListSelect = `
 `;
 
 app.get('/api/invoices', async (req, res) => {
-  const { status, type, search, date_from, date_to, branch_id, division_id, page = 1, limit = 25 } = req.query;
+  const { status, type, search, date_from, date_to, branch_id, division_name, page = 1, limit = 25 } = req.query;
   const params = [];
   const conditions = [];
 
@@ -1055,8 +1055,8 @@ app.get('/api/invoices', async (req, res) => {
     params.push(`%${search}%`);
     conditions.push(`(inv.invoice_number ILIKE $${params.length} OR inv.reference_number ILIKE $${params.length} OR v.name ILIKE $${params.length})`);
   }
-  if (branch_id)   { params.push(branch_id);   conditions.push(`inv.branch_id = $${params.length}`); }
-  if (division_id) { params.push(division_id); conditions.push(`inv.division_id = $${params.length}`); }
+  if (branch_id)     { params.push(branch_id);     conditions.push(`inv.branch_id = $${params.length}`); }
+  if (division_name) { params.push(division_name); conditions.push(`dv.name = $${params.length}`); }
 
   const where = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
   const pageNum  = Math.max(1, parseInt(page) || 1);

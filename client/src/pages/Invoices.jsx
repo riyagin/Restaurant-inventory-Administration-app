@@ -41,8 +41,8 @@ export default function Invoices() {
   const [type,       setType]       = useState('all');
   const [dateFrom,   setDateFrom]   = useState('');
   const [dateTo,     setDateTo]     = useState('');
-  const [branchFilter,   setBranchFilter]   = useState('');
-  const [divisionFilter, setDivisionFilter] = useState('');
+  const [branchFilter,        setBranchFilter]        = useState('');
+  const [divisionNameFilter,  setDivisionNameFilter]  = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -52,8 +52,8 @@ export default function Invoices() {
     if (type   !== 'all')      params.type        = type;
     if (dateFrom)              params.date_from   = dateFrom;
     if (dateTo)                params.date_to     = dateTo;
-    if (branchFilter)          params.branch_id   = branchFilter;
-    if (divisionFilter)        params.division_id = divisionFilter;
+    if (branchFilter)       params.branch_id      = branchFilter;
+    if (divisionNameFilter) params.division_name  = divisionNameFilter;
     getInvoices(params)
       .then(r => {
         setInvoices(r.data.invoices);
@@ -62,7 +62,7 @@ export default function Invoices() {
         setOutCount(r.data.outstanding_count ?? 0);
       })
       .finally(() => setLoading(false));
-  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionFilter, page]);
+  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionNameFilter, page]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -109,12 +109,12 @@ export default function Invoices() {
   const clearFilters = () => {
     setSearch(''); setStatus('all'); setType('all');
     setDateFrom(''); setDateTo('');
-    setBranchFilter(''); setDivisionFilter('');
+    setBranchFilter(''); setDivisionNameFilter('');
     setPage(1);
   };
 
   const totalPages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionFilter;
+  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionNameFilter;
   const pageStart   = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd     = Math.min(page * PAGE_SIZE, total);
 
@@ -177,10 +177,10 @@ export default function Invoices() {
               </select>
             )}
             {divisions.length > 0 && (
-              <select value={divisionFilter} onChange={e => setFilter(setDivisionFilter)(e.target.value)} title="Filter divisi">
+              <select value={divisionNameFilter} onChange={e => setFilter(setDivisionNameFilter)(e.target.value)} title="Filter divisi">
                 <option value="">Semua Divisi</option>
-                {divisions.map(d => (
-                  <option key={d.id} value={d.id}>{d.name} — {d.branch_name}</option>
+                {[...new Set(divisions.map(d => d.name))].sort().map(name => (
+                  <option key={name} value={name}>{name}</option>
                 ))}
               </select>
             )}
