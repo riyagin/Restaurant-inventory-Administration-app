@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getAccounts, getBranches, getDivisions, getDivisionCategories, parsePosXlsx, confirmPosImport, getPosImports, deletePosImport } from '../api';
+import { getAccounts, getBranches, getDivisions, getDivisionCategories, getWarehouses, parsePosXlsx, confirmPosImport, getPosImports, deletePosImport } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
 const idr = (v) =>
@@ -8,10 +8,11 @@ const idr = (v) =>
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 
 export default function SalesImport() {
-  const [accounts, setAccounts]   = useState([]);
-  const [branches, setBranches]   = useState([]);
-  const [divisions, setDivisions] = useState([]);
-  const [imports, setImports]     = useState([]);
+  const [accounts, setAccounts]     = useState([]);
+  const [branches, setBranches]     = useState([]);
+  const [divisions, setDivisions]   = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+  const [imports, setImports]       = useState([]);
   const [parsed, setParsed]       = useState(null);
   const [filename, setFilename]   = useState('');
   const [description, setDescription] = useState('');
@@ -37,14 +38,32 @@ export default function SalesImport() {
   const [deletingImport, setDeletingImport] = useState(null);
   const fileRef = useRef();
 
-  const revenueAccounts  = accounts.filter(a => a.account_type === 'revenue');
-  const cashAccounts     = accounts.filter(a => a.account_type === 'asset' && !a.is_system);
+  const allDiscountAccountIds = new Set(divisions.filter(d => d.discount_account_id).map(d => d.discount_account_id));
+  const branchDivisionRevenueIds = selectedBranchId
+    ? new Set(divisions.filter(d => d.branch_id === selectedBranchId && d.revenue_account_id).map(d => d.revenue_account_id))
+    : new Set(divisions.filter(d => d.revenue_account_id).map(d => d.revenue_account_id));
+  const inventoryAccountIds = new Set(warehouses.filter(w => w.inventory_account_id).map(w => w.inventory_account_id));
+
+  const revenueAccounts  = accounts.filter(a =>
+    a.account_type === 'revenue' &&
+    !allDiscountAccountIds.has(a.id) &&
+    (branchDivisionRevenueIds.size === 0 || branchDivisionRevenueIds.has(a.id))
+  );
+  const branchDivisionDiscountIds = selectedBranchId
+    ? new Set(divisions.filter(d => d.branch_id === selectedBranchId && d.discount_account_id).map(d => d.discount_account_id))
+    : allDiscountAccountIds;
+  const discountAccounts = accounts.filter(a =>
+    a.account_type === 'revenue' &&
+    branchDivisionDiscountIds.has(a.id)
+  );
+  const cashAccounts     = accounts.filter(a => a.account_type === 'asset' && !a.is_system && !inventoryAccountIds.has(a.id));
   const expenseAccounts  = accounts.filter(a => a.account_type === 'expense' && !a.is_system);
 
   useEffect(() => {
     getAccounts().then(r => setAccounts(r.data));
     getBranches().then(r => setBranches(r.data));
     getDivisions().then(r => setDivisions(r.data));
+    getWarehouses().then(r => setWarehouses(r.data));
     getPosImports().then(r => setImports(r.data));
   }, []);
 
@@ -154,7 +173,8 @@ export default function SalesImport() {
       const totalDisc  = Math.round(data.totalDisc  || 0);
       const totalBiaya = Math.round(data.totalBiaya || 0);
       setDiscMappings(totalDisc > 0 ? [{ division_id: null, label: 'Diskon', amount: totalDisc, account_id: '' }] : []);
-      setBiayaMappings(totalBiaya > 0 ? [{ label: 'Biaya Tambahan', amount: totalBiaya, account_id: '' }] : []);
+      const defaultBiayaId = accounts.find(a => a.account_number === '59999')?.id || '';
+      setBiayaMappings(totalBiaya > 0 ? [{ label: 'Biaya Tambahan', amount: totalBiaya, account_id: defaultBiayaId }] : []);
       setBiayaRows(data.biayaRows || []);
       setSkippedRows(data.skippedRows || []);
     } catch (err) {
@@ -531,7 +551,7 @@ export default function SalesImport() {
                       <select
                         value={m.account_id}
                         onChange={e => updateCash(i, 'account_id', e.target.value)}
-                        style={{ width: '100%', fontSize: '0.85rem' }}
+                        style={{ width: '100%', fontSize: '0.85rem', borderColor: !m.account_id ? '#e67e22' : undefined }}
                         required
                       >
                         <option value="">— Pilih akun —</option>
@@ -721,7 +741,7 @@ export default function SalesImport() {
                           <select
                             value={m.account_id}
                             onChange={e => updateRev(i, 'account_id', e.target.value)}
-                            style={{ flex: 1, fontSize: '0.85rem' }}
+                            style={{ flex: 1, fontSize: '0.85rem', borderColor: !m.account_id ? '#e67e22' : undefined }}
                             required
                           >
                             <option value="">— Pilih akun —</option>
@@ -874,11 +894,11 @@ export default function SalesImport() {
                         <select
                           value={m.account_id}
                           onChange={e => updateDisc(i, 'account_id', e.target.value)}
-                          style={{ width: '100%', fontSize: '0.85rem' }}
+                          style={{ width: '100%', fontSize: '0.85rem', borderColor: !m.account_id ? '#e67e22' : undefined }}
                           required
                         >
                           <option value="">— Pilih akun —</option>
-                          {revenueAccounts.map(a => (
+                          {discountAccounts.map(a => (
                             <option key={a.id} value={a.id}>
                               {a.account_number ? `${a.account_number} · ` : ''}{a.name}
                             </option>
@@ -929,7 +949,7 @@ export default function SalesImport() {
                         <select
                           value={m.account_id}
                           onChange={e => updateBiaya(i, 'account_id', e.target.value)}
-                          style={{ width: '100%', fontSize: '0.85rem' }}
+                          style={{ width: '100%', fontSize: '0.85rem', borderColor: !m.account_id ? '#e67e22' : undefined }}
                           required
                         >
                           <option value="">— Pilih akun —</option>

@@ -1,8 +1,8 @@
 @echo off
 title Inventory App Launcher
 
-echo Starting backend server...
-start "Backend" cmd /k "cd /d "%~dp0server" && npm run dev"
+echo Starting Go backend server...
+start "Backend" cmd /k "cd /d "%~dp0server-go" && go run ./cmd/api"
 
 echo Starting frontend...
 start "Frontend" cmd /k "cd /d "%~dp0client" && npm run dev"

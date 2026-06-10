@@ -1,5 +1,84 @@
 # Deployment Guide
 
+## Go Backend Deployment
+
+### Build binary (on Windows, cross-compile for Ubuntu)
+
+```bash
+cd server-go
+$env:GOOS="linux"; $env:GOARCH="amd64"; go build -o api ./cmd/api
+```
+
+Or on Linux/Mac:
+
+```bash
+cd server-go
+GOOS=linux GOARCH=amd64 go build -o api ./cmd/api
+ls -lh api   # expect ~15–25 MB single binary
+```
+
+### Transfer binary to VPS
+
+```bash
+scp server-go/api user@your-vps:/var/www/inventory-app/server-go/
+```
+
+### Apply pending migrations
+
+```bash
+migrate -path server-go/migrations \
+  -database "postgres://postgres:password@localhost:5432/inventory_app?sslmode=disable" up
+```
+
+### Start / reload with PM2
+
+```bash
+# First deploy
+pm2 start deploy/ecosystem.config.cjs
+
+# Subsequent deploys
+pm2 reload inventory-app
+```
+
+---
+
+## Production Cutover: Express → Go
+
+### Prerequisites
+
+- Go binary deployed at `/var/www/inventory-app/server-go/api`
+- Both PM2 entries running: `inventory-app` on `:5000`, `inventory-app-legacy` on `:5001`
+- Nginx already proxies `/api/` to `:5000`
+
+### Steps
+
+1. Verify Go server is healthy:
+   ```bash
+   curl http://localhost:5000/api/health
+   ```
+2. Run smoke tests:
+   ```bash
+   bash /var/www/inventory-app/server-go/scripts/verify.sh
+   ```
+3. Monitor Go logs for at least 24 hours:
+   ```bash
+   pm2 logs inventory-app
+   ```
+4. **If issues found** — roll back to Express immediately:
+   ```bash
+   pm2 stop inventory-app
+   # temporarily route legacy to :5000 via Nginx upstream change, or:
+   pm2 restart inventory-app-legacy
+   ```
+5. After 3+ stable days, decommission the legacy process:
+   ```bash
+   pm2 stop inventory-app-legacy
+   pm2 delete inventory-app-legacy
+   pm2 save
+   ```
+
+---
+
 ## 1. Server setup (Ubuntu 22.04)
 
 ```bash

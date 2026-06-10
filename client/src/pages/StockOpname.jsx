@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { getWarehouses, getInventory, createStockOpname, getStockOpname } from '../api';
 
 const idr = (v) =>
@@ -34,29 +34,6 @@ function groupInventory(inventory) {
     g.lots.push(rec);
   }
   return Array.from(map.values()).sort((a, b) => a.item_name.localeCompare(b.item_name));
-}
-
-// Distribute actualQty across lots FIFO (oldest first).
-// Returns array of { inventory_id, item_id, unit_index, actual_quantity }
-function fifoDistribute(group, actualQty) {
-  const result = [];
-  let remaining = actualQty;
-  for (const lot of group.lots) {  // oldest first
-    const lotQty = Number(lot.quantity);
-    if (remaining <= 0) {
-      // This entire lot is consumed — set to 0 (backend will delete)
-      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: 0 });
-    } else if (remaining >= lotQty) {
-      // Lot fully remains unchanged or partially consumed
-      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: lotQty });
-      remaining -= lotQty;
-    } else {
-      // Lot partially consumed
-      result.push({ inventory_id: lot.id, item_id: lot.item_id, unit_index: lot.unit_index, actual_quantity: remaining });
-      remaining = 0;
-    }
-  }
-  return result;
 }
 
 // Compute waste value for a group given an actual qty (FIFO deduction from oldest lots)
@@ -130,90 +107,118 @@ export default function StockOpname() {
 
   const downloadTemplate = () => {
     const warehouseName = warehouses.find(w => w.id === warehouseId)?.name ?? 'Warehouse';
-    const today = new Date().toLocaleDateString('id-ID', { dateStyle: 'long' });
+    const todayStr = new Date().toLocaleDateString('id-ID', { dateStyle: 'long' });
+    const COLS = 4;
 
-    // Columns: No. | Item Name | Unit | Actual Qty
-    const headerRow  = ['No.', 'Item Name', 'Unit', 'Actual Qty'];
-    const dataRows   = groups.map((g, i) => [i + 1, g.item_name, g.unit_name, '']);
+    const headerRow = ['No.', 'Nama Barang', 'Satuan', 'Qty Aktual'];
+    const dataRows  = groups.map((g, i) => [i + 1, g.item_name, g.unit_name ?? '', '']);
 
     const aoa = [
-      [`Stock Opname — ${warehouseName}`],
-      [`Tanggal: ${today}`],
-      [`Person in Charge: _______________________________   Executor: _______________________________`],
-      [],
+      [`Stock Opname — ${warehouseName}`, '', '', ''],
+      [`Tanggal: ${todayStr}`, '', '', ''],
+      [`Person in Charge: _______________________________   Pelaksana: _______________________________`, '', '', ''],
+      ['', '', '', ''],
       headerRow,
       ...dataRows,
     ];
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 5 }, { wch: 34 }, { wch: 12 }, { wch: 14 }];
 
-    // Merge title cell across all columns
+    ws['!cols'] = [{ wch: 5 }, { wch: 32 }, { wch: 12 }, { wch: 14 }];
+
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 3 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 3 } },
-      { s: { r: 2, c: 0 }, e: { r: 2, c: 3 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: COLS - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: COLS - 1 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: COLS - 1 } },
     ];
 
-    const thin = { style: 'thin', color: { rgb: '000000' } };
+    // ── style helpers ───────────────────────────────────────────────────
+    const thin   = { style: 'thin',   color: { rgb: 'AAAAAA' } };
+    const medium = { style: 'medium', color: { rgb: '000000' } };
     const border = { top: thin, bottom: thin, left: thin, right: thin };
+    const outerBorder = { top: medium, bottom: medium, left: medium, right: medium };
 
+    const setCell = (addr, t, v, s) => { ws[addr] = { t, v, s }; };
+
+    // ── title rows (no table border, just text) ──────────────────────────
+    setCell('A1', 's', `Stock Opname — ${warehouseName}`, {
+      font:      { bold: true, sz: 13 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    });
+    setCell('A2', 's', `Tanggal: ${todayStr}`, {
+      font:      { sz: 10 },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    });
+    setCell('A3', 's', 'Person in Charge: _______________________________   Pelaksana: _______________________________', {
+      font:      { sz: 9 },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    });
+
+    // ── header row (row index 4) ─────────────────────────────────────────
     const headerStyle = {
-      font:      { bold: true },
-      fill:      { fgColor: { rgb: 'D9E1F2' }, patternType: 'solid' },
+      font:      { bold: true, sz: 10 },
       alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-      border,
+      border: outerBorder,
     };
-    const cellStyle = {
-      alignment: { vertical: 'center', wrapText: false },
-      border,
-    };
-    const numStyle  = { ...cellStyle, alignment: { ...cellStyle.alignment, horizontal: 'center' } };
-
-    // Apply styles to header row (row index 4)
-    headerRow.forEach((_, c) => {
+    headerRow.forEach((v, c) => {
       const addr = XLSX.utils.encode_cell({ r: 4, c });
-      if (!ws[addr]) ws[addr] = { t: 's', v: headerRow[c] };
-      ws[addr].s = headerStyle;
+      setCell(addr, 's', v, headerStyle);
     });
 
-    // Apply styles to data rows
+    // ── column styles for data rows ──────────────────────────────────────
+    const base = { font: { sz: 10 }, border };
+    const colStyles = [
+      { ...base, alignment: { horizontal: 'center', vertical: 'center' } },                  // No.
+      { ...base, alignment: { horizontal: 'left',   vertical: 'center', wrapText: true } },  // Nama Barang
+      { ...base, alignment: { horizontal: 'center', vertical: 'center' } },                  // Satuan
+      { ...base, alignment: { horizontal: 'right',  vertical: 'center' } },                  // Qty Aktual
+    ];
+
     dataRows.forEach((row, ri) => {
-      row.forEach((_, c) => {
+      for (let c = 0; c < COLS; c++) {
         const addr = XLSX.utils.encode_cell({ r: 5 + ri, c });
-        if (!ws[addr]) ws[addr] = { t: 's', v: '' };
-        ws[addr].s = c === 0 ? numStyle : cellStyle;
-      });
+        const val  = row[c];
+        const type = c === 0 ? 'n' : 's';
+        if (!ws[addr]) ws[addr] = { t: type, v: val ?? '' };
+        ws[addr].s = colStyles[c];
+      }
     });
 
-    // Row heights
+    // ── row heights ──────────────────────────────────────────────────────
     ws['!rows'] = [
-      { hpt: 22 }, { hpt: 18 }, { hpt: 18 }, { hpt: 6 }, { hpt: 22 },
+      { hpt: 26 }, { hpt: 16 }, { hpt: 16 }, { hpt: 6 }, { hpt: 22 },
       ...dataRows.map(() => ({ hpt: 20 })),
     ];
 
+    // ── A4 page setup ────────────────────────────────────────────────────
+    ws['!pageSetup'] = {
+      paperSize:   9,           // A4
+      orientation: 'portrait',
+      fitToPage:   true,
+      fitToWidth:  1,
+      fitToHeight: 0,
+    };
+    ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Stock Opname');
-    XLSX.writeFile(wb, `opname-template-${warehouseName.replace(/\s+/g, '-')}.xlsx`, { cellStyles: true });
+    XLSX.writeFile(wb, `opname-${warehouseName.replace(/\s+/g, '-')}.xlsx`);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    // For each group with a change, distribute the actual qty FIFO across its lots
     const changedItems = groups
       .filter(g => {
         const d = diff(g);
         return d !== null && d !== 0;
       })
-      .flatMap(g => {
-        const actualQty = Number(actuals[g.key]);
-        const distributed = fifoDistribute(g, actualQty);
-        return distributed.filter(d => {
-          const originalLot = g.lots.find(l => l.id === d.inventory_id);
-          return originalLot && d.actual_quantity !== Number(originalLot.quantity);
-        });
-      });
+      .map(g => ({
+        item_id: g.item_id,
+        unit_index: g.unit_index,
+        unit_name: g.unit_name,
+        actual_quantity: Number(actuals[g.key]),
+      }));
 
     if (!changedItems.length) { setError('Tidak ada perubahan — semua aktual sesuai dengan catatan.'); return; }
 

@@ -81,7 +81,7 @@ export default function Invoices() {
   };
 
   const openPay = (inv) => {
-    const invTotal = Number(inv.total);
+    const invTotal = Number(inv.total_amount);
     const amountPaid = Number(inv.amount_paid ?? 0);
     setPayTarget(inv);
     setPayForm({ cash_account_id: '', amount: String(invTotal - amountPaid) });
@@ -190,7 +190,8 @@ export default function Invoices() {
           </div>
         </div>
 
-        <table>
+        <div style={{overflowX: 'auto'}}>
+        <table style={{minWidth: '900px'}}>
           <thead>
             <tr>
               <th>No. Invoice</th>
@@ -245,10 +246,10 @@ export default function Invoices() {
                 <td style={{color:'#888',fontSize:'0.85rem'}}>{inv.vendor_name ?? '—'}</td>
                 <td style={{color:'#888'}}>{inv.account_name ?? '—'}</td>
                 <td style={{fontWeight:600}}>
-                  {idr(inv.total)}
+                  {idr(inv.total_amount)}
                   {inv.payment_status === 'partial' && Number(inv.amount_paid) > 0 && (
                     <div style={{fontSize:'0.75rem',color:'#e67e22',fontWeight:400}}>
-                      Sisa {idr(Number(inv.total) - Number(inv.amount_paid))}
+                      Sisa {idr(Number(inv.total_amount) - Number(inv.amount_paid))}
                     </div>
                   )}
                 </td>
@@ -257,7 +258,7 @@ export default function Invoices() {
                     {STATUS_LABEL[inv.payment_status]}
                   </span>
                 </td>
-                <td>
+                <td style={{whiteSpace:'nowrap'}}>
                   <div className="actions">
                     <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
                     {inv.payment_status !== 'paid' && (
@@ -272,6 +273,7 @@ export default function Invoices() {
             })}
           </tbody>
         </table>
+        </div>
 
         {totalPages > 1 && (
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0.75rem 1.5rem',borderTop:'1px solid #f0f0f0'}}>
@@ -330,7 +332,7 @@ export default function Invoices() {
 
       {payTarget && (() => {
         const cashAccounts = accounts.filter(a => a.account_type === 'asset' && !a.is_system);
-        const invTotal = Number(payTarget.total);
+        const invTotal = Number(payTarget.total_amount);
         const amountPaid = Number(payTarget.amount_paid ?? 0);
         const remaining = invTotal - amountPaid;
         return (

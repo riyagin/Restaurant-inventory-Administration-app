@@ -55,7 +55,7 @@ export default function ActivityLog() {
   const load = useCallback(() => {
     setLoading(true);
     getActivityLog(buildParams())
-      .then(r => { setLogs(r.data.rows); setTotal(r.data.total); })
+      .then(r => { setLogs(r.data.rows ?? r.data.data ?? []); setTotal(r.data.total ?? 0); })
       .finally(() => setLoading(false));
   }, [buildParams]);
 

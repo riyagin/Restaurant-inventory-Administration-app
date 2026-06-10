@@ -95,7 +95,11 @@ export default function Dispatch() {
         division_id: header.division_id,
         notes: header.notes || null,
         dispatch_date: header.dispatch_date || today(),
-        items: rows.map(r => ({ item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index) })),
+        items: rows.map(r => {
+          const item = allItems.find(it => it.id === r.item_id);
+          const unitName = item?.units[Number(r.unit_index)]?.name ?? '';
+          return { item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index), unit_name: unitName };
+        }),
       });
       setHeader(emptyHeader);
       setRows([emptyRow()]);

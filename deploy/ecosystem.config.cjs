@@ -2,36 +2,59 @@ module.exports = {
   apps: [
     {
       name: 'inventory-app',
-      script: './server/index.js',
+      script: './server-go/api',
       cwd: '/var/www/inventory-app',
 
-      // Restart automatically on crash
       autorestart: true,
       watch: false,
       max_restarts: 10,
       restart_delay: 3000,
+      max_memory_restart: '200M',
 
-      // Environment variables for production
-      env_production: {
-        NODE_ENV: 'production',
+      env: {
         PORT: 5000,
-        JWT_SECRET: 'CHANGE_THIS_TO_A_LONG_RANDOM_STRING',
         DB_HOST: 'localhost',
         DB_PORT: 5432,
         DB_NAME: 'inventory_app',
         DB_USER: 'postgres',
         DB_PASSWORD: 'CHANGE_THIS_TO_YOUR_DB_PASSWORD',
+        JWT_SECRET: 'CHANGE_THIS_TO_A_LONG_RANDOM_STRING',
+        UPLOADS_DIR: '/var/www/inventory-app/server/uploads',
       },
 
-      // Log files
       out_file: '/var/log/inventory-app/out.log',
       error_file: '/var/log/inventory-app/error.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       merge_logs: true,
 
-      // Rotate logs when they reach 10MB, keep last 7 days
       max_size: '10M',
       retain: 7,
+    },
+    {
+      name: 'inventory-app-legacy',
+      script: './server/index.js',
+      cwd: '/var/www/inventory-app',
+
+      autorestart: true,
+      watch: false,
+      max_restarts: 5,
+      restart_delay: 3000,
+
+      env: {
+        NODE_ENV: 'production',
+        PORT: 5001,
+        DB_HOST: 'localhost',
+        DB_PORT: 5432,
+        DB_NAME: 'inventory_app',
+        DB_USER: 'postgres',
+        DB_PASSWORD: 'CHANGE_THIS_TO_YOUR_DB_PASSWORD',
+        JWT_SECRET: 'CHANGE_THIS_TO_A_LONG_RANDOM_STRING',
+      },
+
+      out_file: '/var/log/inventory-app/legacy-out.log',
+      error_file: '/var/log/inventory-app/legacy-error.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      merge_logs: true,
     },
   ],
 };
