@@ -2,8 +2,8 @@ module.exports = {
   apps: [
     {
       name: 'inventory-app',
-      script: './server-go/api',
-      cwd: '/var/www/inventory-app',
+      script: './api',
+      cwd: '/var/www/inventory-app/server-go',
 
       autorestart: true,
       watch: false,

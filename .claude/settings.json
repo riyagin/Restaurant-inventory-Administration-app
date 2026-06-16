@@ -31,7 +31,11 @@
       "Bash(python -c \"import sys,json; [print\\(r['type'], r['quantity_change'], r['unit_name'], r['vendor'], r['reference']\\) for r in json.load\\(sys.stdin\\)]\")",
       "Bash(taskkill //PID 23592 //F)",
       "Bash(taskkill //PID 19480 //F)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "PowerShell(python --version 2>&1)",
+      "PowerShell(python -c \"import paramiko; print\\('paramiko ok'\\)\" 2>&1)",
+      "PowerShell(pip install paramiko -q 2>&1)",
+      "PowerShell(python \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Temp\\\\vps_migrate.py\" 2>&1)"
     ]
   }
 }
