@@ -40,6 +40,34 @@ type ActivityLog struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type AttendanceDevice struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	BranchID   pgtype.UUID        `json:"branch_id"`
+	ApiKeyHash string             `json:"api_key_hash"`
+	IsActive   bool               `json:"is_active"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type AttendanceRecord struct {
+	ID                pgtype.UUID        `json:"id"`
+	EmployeeID        pgtype.UUID        `json:"employee_id"`
+	Date              pgtype.Date        `json:"date"`
+	CheckIn           pgtype.Timestamptz `json:"check_in"`
+	CheckOut          pgtype.Timestamptz `json:"check_out"`
+	CheckInSource     pgtype.Text        `json:"check_in_source"`
+	CheckOutSource    pgtype.Text        `json:"check_out_source"`
+	CheckInPhotoPath  pgtype.Text        `json:"check_in_photo_path"`
+	DeviceID          pgtype.UUID        `json:"device_id"`
+	Status            string             `json:"status"`
+	IsLate            bool               `json:"is_late"`
+	LateMinutes       int32              `json:"late_minutes"`
+	IsEarlyLeave      bool               `json:"is_early_leave"`
+	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
+	IsMissingCheckout bool               `json:"is_missing_checkout"`
+	Note              pgtype.Text        `json:"note"`
+}
+
 type Branch struct {
 	ID               pgtype.UUID        `json:"id"`
 	Name             string             `json:"name"`
@@ -83,6 +111,35 @@ type DivisionCategory struct {
 	Name       string      `json:"name"`
 }
 
+type Employee struct {
+	ID                pgtype.UUID        `json:"id"`
+	EmployeeCode      string             `json:"employee_code"`
+	FullName          string             `json:"full_name"`
+	Dob               pgtype.Date        `json:"dob"`
+	JoinDate          pgtype.Date        `json:"join_date"`
+	PositionID        pgtype.UUID        `json:"position_id"`
+	BranchID          pgtype.UUID        `json:"branch_id"`
+	Phone             pgtype.Text        `json:"phone"`
+	Email             pgtype.Text        `json:"email"`
+	Address           pgtype.Text        `json:"address"`
+	NationalID        pgtype.Text        `json:"national_id"`
+	BankName          pgtype.Text        `json:"bank_name"`
+	BankAccountNumber pgtype.Text        `json:"bank_account_number"`
+	BankAccountHolder pgtype.Text        `json:"bank_account_holder"`
+	PhotoPath         pgtype.Text        `json:"photo_path"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	Status            string             `json:"status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EmployeeWageComponent struct {
+	ID              pgtype.UUID `json:"id"`
+	WageStructureID pgtype.UUID `json:"wage_structure_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+	Amount          int64       `json:"amount"`
+}
+
 type Enumeration struct {
 	ID               pgtype.UUID        `json:"id"`
 	SourceItemID     pgtype.UUID        `json:"source_item_id"`
@@ -97,6 +154,34 @@ type Enumeration struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	TransferredValue int64              `json:"transferred_value"`
 	Date             pgtype.Date        `json:"date"`
+}
+
+type FingerprintImport struct {
+	ID           pgtype.UUID        `json:"id"`
+	Filename     pgtype.Text        `json:"filename"`
+	ImportedBy   pgtype.UUID        `json:"imported_by"`
+	RowCount     pgtype.Int4        `json:"row_count"`
+	MatchedCount pgtype.Int4        `json:"matched_count"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type HrImportBatch struct {
+	ID         pgtype.UUID        `json:"id"`
+	UploadedBy pgtype.UUID        `json:"uploaded_by"`
+	Filename   string             `json:"filename"`
+	Payload    []byte             `json:"payload"`
+	RowCount   int32              `json:"row_count"`
+	Status     string             `json:"status"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type HrSetting struct {
+	ID            int32              `json:"id"`
+	CompanyName   string             `json:"company_name"`
+	Address       string             `json:"address"`
+	LogoPath      pgtype.Text        `json:"logo_path"`
+	PayslipFooter string             `json:"payslip_footer"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Inventory struct {
@@ -166,6 +251,68 @@ type Item struct {
 	IsStock bool        `json:"is_stock"`
 }
 
+type Kasbon struct {
+	ID                  pgtype.UUID        `json:"id"`
+	KasbonNumber        string             `json:"kasbon_number"`
+	EmployeeID          pgtype.UUID        `json:"employee_id"`
+	Amount              int64              `json:"amount"`
+	Details             string             `json:"details"`
+	SendingMethod       string             `json:"sending_method"`
+	FundSourceAccountID pgtype.UUID        `json:"fund_source_account_id"`
+	RequestDate         pgtype.Date        `json:"request_date"`
+	ResolutionMonth     pgtype.Date        `json:"resolution_month"`
+	Status              string             `json:"status"`
+	ApprovedBy          pgtype.UUID        `json:"approved_by"`
+	ApprovedAt          pgtype.Timestamptz `json:"approved_at"`
+	ApprovalNote        pgtype.Text        `json:"approval_note"`
+	ProcessedBy         pgtype.UUID        `json:"processed_by"`
+	ProcessedAt         pgtype.Timestamptz `json:"processed_at"`
+	EvidencePhotoPath   pgtype.Text        `json:"evidence_photo_path"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type KasbonInstallment struct {
+	ID            pgtype.UUID `json:"id"`
+	KasbonID      pgtype.UUID `json:"kasbon_id"`
+	DueMonth      pgtype.Date `json:"due_month"`
+	Amount        int64       `json:"amount"`
+	PayrollLineID pgtype.UUID `json:"payroll_line_id"`
+	Status        string      `json:"status"`
+}
+
+type LeaveBalance struct {
+	ID         pgtype.UUID `json:"id"`
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Year       int32       `json:"year"`
+	QuotaDays  int32       `json:"quota_days"`
+	UsedDays   int32       `json:"used_days"`
+}
+
+type LeaveRequest struct {
+	ID           pgtype.UUID        `json:"id"`
+	EmployeeID   pgtype.UUID        `json:"employee_id"`
+	LeaveTypeID  pgtype.UUID        `json:"leave_type_id"`
+	StartDate    pgtype.Date        `json:"start_date"`
+	EndDate      pgtype.Date        `json:"end_date"`
+	DayCount     int32              `json:"day_count"`
+	Reason       pgtype.Text        `json:"reason"`
+	Status       string             `json:"status"`
+	DecidedBy    pgtype.UUID        `json:"decided_by"`
+	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
+	DecisionNote pgtype.Text        `json:"decision_note"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type LeaveType struct {
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	IsPaid    bool        `json:"is_paid"`
+	UsesQuota bool        `json:"uses_quota"`
+	IsActive  bool        `json:"is_active"`
+}
+
 type PosImport struct {
 	ID          pgtype.UUID        `json:"id"`
 	Description pgtype.Text        `json:"description"`
@@ -185,6 +332,97 @@ type PosImportLine struct {
 	LineType  string      `json:"line_type"`
 }
 
+type PayrollLine struct {
+	ID                      pgtype.UUID        `json:"id"`
+	PayrollPeriodID         pgtype.UUID        `json:"payroll_period_id"`
+	EmployeeID              pgtype.UUID        `json:"employee_id"`
+	WageStructureID         pgtype.UUID        `json:"wage_structure_id"`
+	BaseSalary              int64              `json:"base_salary"`
+	DailyRate               int64              `json:"daily_rate"`
+	OvertimeDays            pgtype.Numeric     `json:"overtime_days"`
+	PublicHolidayDays       pgtype.Numeric     `json:"public_holiday_days"`
+	OvertimeAmount          int64              `json:"overtime_amount"`
+	PublicHolidayAmount     int64              `json:"public_holiday_amount"`
+	AllowanceTotal          int64              `json:"allowance_total"`
+	BonusTotal              int64              `json:"bonus_total"`
+	ComponentDeductionTotal int64              `json:"component_deduction_total"`
+	KasbonDeduction         int64              `json:"kasbon_deduction"`
+	UnpaidLeaveDays         int32              `json:"unpaid_leave_days"`
+	UnpaidLeaveDeduction    int64              `json:"unpaid_leave_deduction"`
+	GrossPay                int64              `json:"gross_pay"`
+	NetPay                  int64              `json:"net_pay"`
+	PerformanceScore        pgtype.Int4        `json:"performance_score"`
+	Reviewed                bool               `json:"reviewed"`
+	ReviewedBy              pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt              pgtype.Timestamptz `json:"reviewed_at"`
+	ReviewNote              pgtype.Text        `json:"review_note"`
+}
+
+type PayrollLineComponent struct {
+	ID              pgtype.UUID `json:"id"`
+	PayrollLineID   pgtype.UUID `json:"payroll_line_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+	Name            string      `json:"name"`
+	Type            string      `json:"type"`
+	Amount          int64       `json:"amount"`
+}
+
+type PayrollPeriod struct {
+	ID          pgtype.UUID        `json:"id"`
+	PeriodMonth pgtype.Date        `json:"period_month"`
+	StartDate   pgtype.Date        `json:"start_date"`
+	EndDate     pgtype.Date        `json:"end_date"`
+	Status      string             `json:"status"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	ClosedAt    pgtype.Timestamptz `json:"closed_at"`
+	PaidAt      pgtype.Timestamptz `json:"paid_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type PayrollSetting struct {
+	ID                 int32          `json:"id"`
+	OvertimeMultiplier pgtype.Numeric `json:"overtime_multiplier"`
+	HolidayMultiplier  pgtype.Numeric `json:"holiday_multiplier"`
+}
+
+type PerformancePolicy struct {
+	ID                     pgtype.UUID        `json:"id"`
+	Name                   string             `json:"name"`
+	RuleType               string             `json:"rule_type"`
+	ThresholdMinutes       pgtype.Int4        `json:"threshold_minutes"`
+	Points                 int32              `json:"points"`
+	MaxOccurrencesPerMonth pgtype.Int4        `json:"max_occurrences_per_month"`
+	IsActive               bool               `json:"is_active"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+}
+
+type PerformanceScore struct {
+	ID          pgtype.UUID `json:"id"`
+	EmployeeID  pgtype.UUID `json:"employee_id"`
+	PeriodMonth pgtype.Date `json:"period_month"`
+	Score       int32       `json:"score"`
+}
+
+type PerformanceViolation struct {
+	ID                 pgtype.UUID        `json:"id"`
+	EmployeeID         pgtype.UUID        `json:"employee_id"`
+	PolicyID           pgtype.UUID        `json:"policy_id"`
+	AttendanceRecordID pgtype.UUID        `json:"attendance_record_id"`
+	Date               pgtype.Date        `json:"date"`
+	Points             int32              `json:"points"`
+	Source             string             `json:"source"`
+	Note               pgtype.Text        `json:"note"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type Position struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Production struct {
 	ID             pgtype.UUID        `json:"id"`
 	RecipeID       pgtype.UUID        `json:"recipe_id"`
@@ -195,6 +433,12 @@ type Production struct {
 	Notes          pgtype.Text        `json:"notes"`
 	CreatedBy      pgtype.UUID        `json:"created_by"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type PublicHoliday struct {
+	ID   pgtype.UUID `json:"id"`
+	Date pgtype.Date `json:"date"`
+	Name string      `json:"name"`
 }
 
 type Recipe struct {
@@ -297,8 +541,39 @@ type Vendor struct {
 	Name string      `json:"name"`
 }
 
+type WageComponent struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	Type      string             `json:"type"`
+	IsFixed   bool               `json:"is_fixed"`
+	IsActive  bool               `json:"is_active"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type WageStructure struct {
+	ID                  pgtype.UUID        `json:"id"`
+	EmployeeID          pgtype.UUID        `json:"employee_id"`
+	BaseSalary          int64              `json:"base_salary"`
+	WorkingDaysPerMonth int32              `json:"working_days_per_month"`
+	DailyRate           int64              `json:"daily_rate"`
+	EffectiveDate       pgtype.Date        `json:"effective_date"`
+	EndDate             pgtype.Date        `json:"end_date"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
 type Warehouse struct {
 	ID                 pgtype.UUID `json:"id"`
 	Name               string      `json:"name"`
 	InventoryAccountID pgtype.UUID `json:"inventory_account_id"`
+}
+
+type WorkSchedule struct {
+	ID                pgtype.UUID `json:"id"`
+	BranchID          pgtype.UUID `json:"branch_id"`
+	WorkStart         pgtype.Time `json:"work_start"`
+	WorkEnd           pgtype.Time `json:"work_end"`
+	GraceMinutes      int32       `json:"grace_minutes"`
+	EarlyLeaveMinutes int32       `json:"early_leave_minutes"`
+	WorkDays          []int32     `json:"work_days"`
 }

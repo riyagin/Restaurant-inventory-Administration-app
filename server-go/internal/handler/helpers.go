@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -43,6 +44,16 @@ func numericToFloat64(n pgtype.Numeric) float64 {
 		}
 	}
 	return f
+}
+
+// floatToNumeric converts a float64 to pgtype.Numeric.
+// pgtype.Numeric.Scan only accepts string/[]byte in pgx/v5; passing a float64
+// silently produces an invalid (NULL) Numeric. Use this helper everywhere a
+// float64 needs to be stored in a NUMERIC column.
+func floatToNumeric(f float64) pgtype.Numeric {
+	var n pgtype.Numeric
+	_ = n.Scan(strconv.FormatFloat(f, 'f', 10, 64))
+	return n
 }
 
 // anyNumericToFloat64 handles the interface{} returned by sqlc aggregate queries.

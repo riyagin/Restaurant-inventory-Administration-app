@@ -402,7 +402,7 @@ export default function InvoiceForm() {
               <label>Akun Pembayaran</label>
               <select value={header.account_id} onChange={setHeaderField('account_id')} required>
                 <option value="">Pilih akun kas...</option>
-                {accounts.filter(a => a.parent_number === 11000).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {accounts.filter(a => a.account_number >= 11000 && a.account_number < 12000 && a.account_number !== 11000).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             </div>
           )}

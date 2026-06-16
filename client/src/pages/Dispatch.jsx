@@ -46,8 +46,9 @@ export default function Dispatch() {
   const availableItems = allItems.filter(it => srcInventory.some(inv => inv.item_id === it.id));
 
   const getItemStock = (item_id, unit_index) => {
-    const rec = srcInventory.find(inv => inv.item_id === item_id && String(inv.unit_index) === String(unit_index));
-    return rec ? Number(rec.quantity) : 0;
+    return srcInventory
+      .filter(inv => inv.item_id === item_id && String(inv.unit_index) === String(unit_index))
+      .reduce((sum, inv) => sum + Number(inv.quantity), 0);
   };
 
   const setHeaderField = (field) => (e) => setHeader(h => ({ ...h, [field]: e.target.value }));
@@ -198,6 +199,7 @@ export default function Dispatch() {
                       <td style={{ minWidth: '150px' }}>
                         <input
                           type="number" min="0.001" step="any"
+                          max={available !== null ? available : undefined}
                           value={row.quantity} onChange={setRow(i, 'quantity')}
                           placeholder="0" style={{ width: '100%' }} disabled={!selectedItem}
                         />

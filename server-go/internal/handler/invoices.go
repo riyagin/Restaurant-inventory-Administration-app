@@ -349,14 +349,11 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		lineValue := int64(float64(it.Price) * it.Quantity)
 		grandTotal += lineValue
 
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(it.Quantity)
-
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID:   invoice.ID,
 			ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
 			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
-			Quantity:    qtyNumeric,
+			Quantity:    floatToNumeric(it.Quantity),
 			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: true},
 			Price:       it.Price,
 			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},
@@ -637,14 +634,11 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		lineValue := int64(float64(it.Price) * it.Quantity)
 		grandTotal += lineValue
 
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(it.Quantity)
-
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID:   invoiceUUID,
 			ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
 			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
-			Quantity:    qtyNumeric,
+			Quantity:    floatToNumeric(it.Quantity),
 			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: true},
 			Price:       it.Price,
 			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},

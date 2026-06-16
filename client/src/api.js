@@ -109,6 +109,11 @@ export const getStockOpname = () => api.get('/stock-opname');
 export const getStockOpnameById = (id) => api.get(`/stock-opname/${id}`);
 export const createStockOpname = (data) => api.post('/stock-opname', data);
 
+export const getStockOpnameDrafts = () => api.get('/stock-opname/drafts');
+export const createStockOpnameDraft = (data) => api.post('/stock-opname/drafts', data);
+export const updateStockOpnameDraft = (id, data) => api.put(`/stock-opname/drafts/${id}`, data);
+export const deleteStockOpnameDraft = (id) => api.delete(`/stock-opname/drafts/${id}`);
+
 export const getInvoices = (params) => api.get('/invoices', { params });
 export const getInvoice = (id) => api.get(`/invoices/${id}`);
 export const createInvoice = (data) => api.post('/invoices', data);
@@ -189,3 +194,131 @@ export const createAccountTransfer    = (data)   => api.post('/account-adjustmen
 export const getEnumerations    = ()     => api.get('/enumerations');
 export const createEnumeration  = (data) => api.post('/enumerations', data);
 export const deleteEnumeration  = (id)   => api.delete(`/enumerations/${id}`);
+
+// ── HR: Karyawan & Jabatan ──────────────────────────────────────────────────
+export const getEmployees   = (params) => api.get('/hr/employees', { params });
+export const getEmployee    = (id)     => api.get(`/hr/employees/${id}`);
+export const createEmployee = (data)   => api.post('/hr/employees', data);
+export const updateEmployee = (id, data) => api.put(`/hr/employees/${id}`, data);
+export const deleteEmployee = (id)     => api.delete(`/hr/employees/${id}`);
+export const uploadEmployeePhoto = (id, file) => {
+  const form = new FormData();
+  form.append('photo', file);
+  return api.post(`/hr/employees/${id}/photo`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+export const deleteEmployeePhoto = (id) => api.delete(`/hr/employees/${id}/photo`);
+
+export const getPositions   = () => api.get('/hr/positions');
+export const createPosition = (data) => api.post('/hr/positions', data);
+export const updatePosition = (id, data) => api.put(`/hr/positions/${id}`, data);
+export const deletePosition = (id) => api.delete(`/hr/positions/${id}`);
+
+// ── HR: Komponen & Struktur Gaji ────────────────────────────────────────────
+export const getWageComponents   = (params) => api.get('/hr/wage-components', { params });
+export const createWageComponent = (data)    => api.post('/hr/wage-components', data);
+export const updateWageComponent = (id, data) => api.put(`/hr/wage-components/${id}`, data);
+export const deleteWageComponent = (id)      => api.delete(`/hr/wage-components/${id}`);
+
+export const getEmployeeWage        = (id) => api.get(`/hr/employees/${id}/wage`);
+export const getEmployeeWageHistory = (id) => api.get(`/hr/employees/${id}/wage/history`);
+export const createEmployeeWage     = (id, data) => api.post(`/hr/employees/${id}/wage`, data);
+
+// ── HR: Impor Massal Karyawan ───────────────────────────────────────────────
+export const downloadHrImportTemplate = () => api.get('/hr/import/template', { responseType: 'blob' });
+export const parseHrImport             = (formData) => api.post('/hr/import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const confirmHrImport           = (data) => api.post('/hr/import/confirm', data);
+
+// ── HR: Absensi / Kehadiran ─────────────────────────────────────────────────
+export const getAttendance        = (params) => api.get('/hr/attendance', { params });
+export const updateAttendance     = (id, data) => api.put(`/hr/attendance/${id}`, data);
+export const reconcileAttendance  = (date) => api.post('/hr/attendance/reconcile', null, { params: { date } });
+
+export const parseFingerprintImport   = (formData) => api.post('/hr/attendance/fingerprint-import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const confirmFingerprintImport = (formData) => api.post('/hr/attendance/fingerprint-import/confirm', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+
+// Work schedules
+export const getWorkSchedules   = () => api.get('/hr/attendance/work-schedules');
+export const saveWorkSchedule   = (data) => api.post('/hr/attendance/work-schedules', data);
+
+// Public holidays
+export const getPublicHolidays  = () => api.get('/hr/attendance/holidays');
+export const createPublicHoliday = (data) => api.post('/hr/attendance/holidays', data);
+export const deletePublicHoliday = (id) => api.delete(`/hr/attendance/holidays/${id}`);
+
+// Attendance devices
+export const getAttendanceDevices  = () => api.get('/hr/attendance/devices');
+export const createAttendanceDevice = (data) => api.post('/hr/attendance/devices', data);
+export const setAttendanceDeviceActive = (id, data) => api.put(`/hr/attendance/devices/${id}`, data);
+export const deleteAttendanceDevice = (id) => api.delete(`/hr/attendance/devices/${id}`);
+
+// ── HR: Penilaian Kinerja ───────────────────────────────────────────────────
+// Performance policies
+export const getPerformancePolicies   = () => api.get('/hr/performance/policies');
+export const createPerformancePolicy  = (data) => api.post('/hr/performance/policies', data);
+export const updatePerformancePolicy  = (id, data) => api.put(`/hr/performance/policies/${id}`, data);
+export const deletePerformancePolicy  = (id) => api.delete(`/hr/performance/policies/${id}`);
+
+// Scores & breakdown
+export const getPerformanceScores     = (params) => api.get('/hr/performance/scores', { params });
+export const getEmployeePerformance   = (id, params) => api.get(`/hr/employees/${id}/performance`, { params });
+
+// Violations & evaluation
+export const createPerformanceViolation = (data) => api.post('/hr/performance/violations', data);
+export const deletePerformanceViolation = (id, reason) => api.delete(`/hr/performance/violations/${id}`, { params: { reason } });
+export const evaluatePerformance        = (from, to) => api.post('/hr/performance/evaluate', null, { params: { from, to } });
+
+// ── HR: Cuti (Leave Management) ─────────────────────────────────────────────
+// Leave types
+export const getLeaveTypes    = (params) => api.get('/hr/leave-types', { params });
+export const createLeaveType  = (data) => api.post('/hr/leave-types', data);
+export const updateLeaveType  = (id, data) => api.put(`/hr/leave-types/${id}`, data);
+export const deleteLeaveType  = (id) => api.delete(`/hr/leave-types/${id}`);
+
+// Manpower planning
+export const getManpowerPlanning  = (params) => api.get('/hr/manpower-planning', { params });
+
+// Leave requests
+export const getLeaveRequests     = (params) => api.get('/hr/leave-requests', { params });
+export const createLeaveRequest   = (data) => api.post('/hr/leave-requests', data);
+export const approveLeaveRequest  = (id, note) => api.post(`/hr/leave-requests/${id}/approve`, { note });
+export const rejectLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/reject`, { note });
+export const cancelLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/cancel`, { note });
+
+// Per-employee balance + history
+export const getLeaveBalance        = (id, year) => api.get(`/hr/employees/${id}/leave-balance`, { params: { year } });
+export const setLeaveBalanceQuota   = (id, data) => api.put(`/hr/employees/${id}/leave-balance`, data);
+export const getEmployeeLeaveRequests = (id) => api.get(`/hr/employees/${id}/leave-requests`);
+
+// ── HR: Kasbon (Cash Advance) ───────────────────────────────────────────────
+export const getKasbons      = (params) => api.get('/hr/kasbons', { params });
+export const getKasbon       = (id) => api.get(`/hr/kasbons/${id}`);
+export const createKasbon    = (data) => api.post('/hr/kasbons', data);
+export const updateKasbon    = (id, data) => api.put(`/hr/kasbons/${id}`, data);
+export const approveKasbon   = (id, data) => api.post(`/hr/kasbons/${id}/approve`, data);
+export const rejectKasbon    = (id, note) => api.post(`/hr/kasbons/${id}/reject`, { note });
+export const cancelKasbon    = (id) => api.post(`/hr/kasbons/${id}/cancel`);
+export const processKasbon   = (id, formData) => api.post(`/hr/kasbons/${id}/process`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+
+// For the kasbon detail page: a kasbon's own employee kasbon history is fetched via
+// the list filtered by employee_id.
+export const getEmployeeKasbons = (employeeId) => api.get('/hr/kasbons', { params: { employee_id: employeeId } });
+
+// ── HR: Payroll (Penggajian) ────────────────────────────────────────────────
+export const getPayrollPeriods   = () => api.get('/hr/payroll/periods');
+export const createPayrollPeriod = (data) => api.post('/hr/payroll/periods', data);
+export const getPayrollPeriod    = (id) => api.get(`/hr/payroll/periods/${id}`);
+export const getPayrollLines     = (id, params) => api.get(`/hr/payroll/periods/${id}/lines`, { params });
+export const getPayrollLineReview = (lineId) => api.get(`/hr/payroll/lines/${lineId}/review`);
+export const reviewPayrollLine   = (lineId, data) => api.post(`/hr/payroll/lines/${lineId}/review`, data);
+export const unreviewPayrollLine = (lineId) => api.post(`/hr/payroll/lines/${lineId}/unreview`);
+export const regeneratePayrollLine = (id, employeeId) => api.post(`/hr/payroll/periods/${id}/regenerate-line/${employeeId}`);
+export const closePayrollPeriod  = (id) => api.post(`/hr/payroll/periods/${id}/close`);
+export const markPayrollPeriodPaid = (id) => api.post(`/hr/payroll/periods/${id}/mark-paid`);
+
+// ── HR: Slip Gaji (Payslips) + Pengaturan HR ────────────────────────────────
+export const downloadPayslip        = (lineId)   => api.get(`/hr/payroll/lines/${lineId}/payslip`, { responseType: 'blob' });
+export const downloadPeriodPayslips = (periodId) => api.get(`/hr/payroll/periods/${periodId}/payslips`, { responseType: 'blob' });
+
+export const getHRSettings    = () => api.get('/hr/settings');
+export const updateHRSettings = (data) => api.put('/hr/settings', data);
+export const uploadHRLogo     = (formData) => api.post('/hr/settings/logo', formData, { headers: { 'Content-Type': 'multipart/form-data' } });

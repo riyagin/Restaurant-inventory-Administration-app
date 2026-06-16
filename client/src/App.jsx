@@ -36,6 +36,25 @@ import InvoiceTemplates from './pages/InvoiceTemplates';
 import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
 import Profile from './pages/Profile';
+import Employees from './pages/hr/Employees';
+import EmployeeForm from './pages/hr/EmployeeForm';
+import EmployeeDetail from './pages/hr/EmployeeDetail';
+import Positions from './pages/hr/Positions';
+import WageComponents from './pages/hr/WageComponents';
+import HRImport from './pages/hr/HRImport';
+import AttendanceDashboard from './pages/hr/AttendanceDashboard';
+import FingerprintImport from './pages/hr/FingerprintImport';
+import AttendanceSettings from './pages/hr/AttendanceSettings';
+import PerformanceDashboard from './pages/hr/PerformanceDashboard';
+import PerformancePolicies from './pages/hr/PerformancePolicies';
+import LeaveRequests from './pages/hr/LeaveRequests';
+import KasbonDashboard from './pages/hr/KasbonDashboard';
+import KasbonForm from './pages/hr/KasbonForm';
+import KasbonDetail from './pages/hr/KasbonDetail';
+import PayrollDashboard from './pages/hr/PayrollDashboard';
+import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
+import HRSettings from './pages/hr/HRSettings';
+import ManpowerPlanning from './pages/hr/ManpowerPlanning';
 import './App.css';
 
 function getUser() {
@@ -51,6 +70,12 @@ function RequireAuth({ children }) {
 function RequireAdmin({ children }) {
   const user = getUser();
   if (user?.role !== 'admin') return <Navigate to="/" replace />;
+  return children;
+}
+
+function RequireManagerOrAdmin({ children }) {
+  const user = getUser();
+  if (user?.role !== 'admin' && user?.role !== 'manager') return <Navigate to="/" replace />;
   return children;
 }
 
@@ -99,6 +124,7 @@ function Nav() {
   const navigate = useNavigate();
   const user = getUser();
   const isAdmin = user?.role === 'admin';
+  const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isActive = (to) => to === '/' ? pathname === '/' : pathname.startsWith(to);
 
@@ -160,6 +186,22 @@ function Nav() {
           {menuLink('/sales', 'Catatan Penjualan')}
           {menuLink('/sales/import', 'Import dari POS')}
         </NavDropdown>
+
+        {isAdminOrManager && (
+          <NavDropdown label="HR" paths={['/hr']}>
+            {menuLink('/hr/employees', 'Karyawan')}
+            {menuLink('/hr/attendance', 'Absensi')}
+            {menuLink('/hr/performance', 'Kinerja')}
+            {menuLink('/hr/leave', 'Cuti')}
+            {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
+            {menuLink('/hr/kasbon', 'Kasbon')}
+            {menuLink('/hr/payroll', 'Penggajian')}
+            {menuLink('/hr/import', 'Impor Karyawan')}
+            {menuLink('/hr/positions', 'Jabatan')}
+            {menuLink('/hr/wage-components', 'Komponen Gaji')}
+            {isAdmin && menuLink('/hr/settings', 'Pengaturan')}
+          </NavDropdown>
+        )}
 
         {isAdmin && (
           <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
@@ -224,6 +266,21 @@ function Nav() {
             <Link to="/sales" className={isActive('/sales') && !isActive('/sales/import') ? 'active' : ''}>Catatan Penjualan</Link>
             <Link to="/sales/import" className={isActive('/sales/import') ? 'active' : ''}>Import dari POS</Link>
           </MobileSection>
+
+          {isAdminOrManager && (
+            <MobileSection label="HR" paths={['/hr']}>
+              <Link to="/hr/employees" className={isActive('/hr/employees') ? 'active' : ''}>Karyawan</Link>
+              <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
+              <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Kinerja</Link>
+              <Link to="/hr/leave" className={isActive('/hr/leave') ? 'active' : ''}>Cuti</Link>
+              <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
+              <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>
+              <Link to="/hr/import" className={isActive('/hr/import') ? 'active' : ''}>Impor Karyawan</Link>
+              <Link to="/hr/positions" className={isActive('/hr/positions') ? 'active' : ''}>Jabatan</Link>
+              <Link to="/hr/wage-components" className={isActive('/hr/wage-components') ? 'active' : ''}>Komponen Gaji</Link>
+              {isAdmin && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
+            </MobileSection>
+          )}
 
           {isAdmin && (
             <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
@@ -316,6 +373,26 @@ export default function App() {
                 <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
                 <Route path="/activity" element={<RequireAdmin><ActivityLog /></RequireAdmin>} />
                 <Route path="/profile" element={<Profile />} />
+                <Route path="/hr/employees" element={<Employees />} />
+                <Route path="/hr/employees/new" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
+                <Route path="/hr/employees/:id" element={<EmployeeDetail />} />
+                <Route path="/hr/employees/:id/edit" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
+                <Route path="/hr/import" element={<RequireManagerOrAdmin><HRImport /></RequireManagerOrAdmin>} />
+                <Route path="/hr/positions" element={<RequireManagerOrAdmin><Positions /></RequireManagerOrAdmin>} />
+                <Route path="/hr/wage-components" element={<RequireManagerOrAdmin><WageComponents /></RequireManagerOrAdmin>} />
+                <Route path="/hr/attendance" element={<RequireManagerOrAdmin><AttendanceDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/attendance/import" element={<RequireManagerOrAdmin><FingerprintImport /></RequireManagerOrAdmin>} />
+                <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
+                <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/performance/policies" element={<RequireManagerOrAdmin><PerformancePolicies /></RequireManagerOrAdmin>} />
+                <Route path="/hr/leave" element={<RequireManagerOrAdmin><LeaveRequests /></RequireManagerOrAdmin>} />
+                <Route path="/hr/manpower" element={<RequireManagerOrAdmin><ManpowerPlanning /></RequireManagerOrAdmin>} />
+                <Route path="/hr/kasbon" element={<RequireManagerOrAdmin><KasbonDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/kasbon/new" element={<RequireManagerOrAdmin><KasbonForm /></RequireManagerOrAdmin>} />
+                <Route path="/hr/kasbon/:id" element={<RequireManagerOrAdmin><KasbonDetail /></RequireManagerOrAdmin>} />
+                <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
+                <Route path="/hr/settings" element={<RequireAdmin><HRSettings /></RequireAdmin>} />
               </Routes>
             </Layout>
           </RequireAuth>

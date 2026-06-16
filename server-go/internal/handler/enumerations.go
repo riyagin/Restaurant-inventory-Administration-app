@@ -192,17 +192,13 @@ func (h *EnumerationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Insert enumeration record
-	var srcQtyNumeric, outQtyNumeric pgtype.Numeric
-	_ = srcQtyNumeric.Scan(body.SourceQty)
-	_ = outQtyNumeric.Scan(body.OutputQty)
-
 	result, err := qtx.InsertEnumeration(ctx, &db.InsertEnumerationParams{
 		WarehouseID:      pgtype.UUID{Bytes: warehouseID, Valid: true},
 		SourceItemID:     pgtype.UUID{Bytes: sourceItemID, Valid: true},
 		OutputItemID:     pgtype.UUID{Bytes: outputItemID, Valid: true},
-		SourceQty:        srcQtyNumeric,
+		SourceQty:        floatToNumeric(body.SourceQty),
 		SourceUnitIdx:    body.SourceUnitIdx,
-		OutputQty:        outQtyNumeric,
+		OutputQty:        floatToNumeric(body.OutputQty),
 		OutputUnitIdx:    body.OutputUnitIdx,
 		TransferredValue: transferredValue,
 		Date:             pgtype.Date{Time: enumDate, Valid: true},

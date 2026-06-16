@@ -1,0 +1,664 @@
+import { useEffect, useState, Fragment } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import {
+  getEmployee, deleteEmployee,
+  getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents,
+  getAttendance, getEmployeePerformance,
+  getLeaveBalance, getEmployeeLeaveRequests,
+  getEmployeeKasbons,
+} from '../../api';
+import CurrencyInput from '../../components/CurrencyInput';
+import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
+
+const SERVER = 'http://localhost:5000';
+
+const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan' };
+const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
+
+// Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
+function monthlyProjection(structure) {
+  if (!structure) return 0;
+  let total = Number(structure.base_salary || 0);
+  for (const c of structure.components || []) {
+    if (!c.component_is_fixed) continue;
+    if (c.component_type === 'allowance') total += Number(c.amount || 0);
+    else if (c.component_type === 'deduction') total -= Number(c.amount || 0);
+  }
+  return total;
+}
+
+function getUser() {
+  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
+}
+const canEdit = () => {
+  const role = getUser()?.role;
+  return role === 'admin' || role === 'manager';
+};
+
+const TABS = [
+  { key: 'profil', label: 'Profil' },
+  { key: 'gaji', label: 'Gaji' },
+  { key: 'absensi', label: 'Absensi' },
+  { key: 'kasbon', label: 'Kasbon' },
+  { key: 'cuti', label: 'Cuti' },
+];
+
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '-';
+
+function Field({ label, value }) {
+  return (
+    <div style={{ marginBottom: '0.85rem' }}>
+      <div style={{ fontSize: '0.75rem', color: '#8a93a6', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+      <div style={{ fontWeight: 500 }}>{value || '-'}</div>
+    </div>
+  );
+}
+
+function perfScoreColor(score) {
+  if (score >= 90) return { bg: '#e6f4ea', color: '#1e7e34' };
+  if (score >= 70) return { bg: '#fff8e1', color: '#a06800' };
+  return { bg: '#fce8e6', color: '#c5221f' };
+}
+
+function AttendanceTab({ employeeId }) {
+  const now = new Date();
+  const [month, setMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [perf, setPerf] = useState(null);
+
+  useEffect(() => {
+    const [y, m] = month.split('-').map(Number);
+    const from = `${month}-01`;
+    const to = new Date(y, m, 0).toISOString().slice(0, 10); // last day of month
+    setLoading(true);
+    getAttendance({ employee_id: employeeId, date_from: from, date_to: to })
+      .then(r => setRows(r.data?.data || []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+    getEmployeePerformance(employeeId, { month })
+      .then(r => setPerf(r.data))
+      .catch(() => setPerf(null));
+  }, [employeeId, month]);
+
+  const score = perf?.score ?? 100;
+  const violCount = perf?.violations?.length ?? 0;
+  const sc = perfScoreColor(score);
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem' }}>Kehadiran Bulanan</h3>
+        <input type="month" value={month} onChange={e => setMonth(e.target.value)} />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.85rem 1rem', borderRadius: '6px', background: sc.bg, marginBottom: '1rem' }}>
+        <div>
+          <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Skor Kinerja Bulan Ini</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: sc.color }}>{score}<span style={{ fontSize: '0.85rem', color: '#999' }}> / 100</span></div>
+        </div>
+        <div style={{ fontSize: '0.85rem', color: '#667' }}>{violCount} pelanggaran</div>
+        <Link to="/hr/performance" style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>Lihat rincian kinerja →</Link>
+      </div>
+      {loading ? (
+        <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
+      ) : rows.length === 0 ? (
+        <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Tidak ada catatan kehadiran pada bulan ini.</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table>
+            <thead>
+              <tr><th>Tanggal</th><th>Masuk</th><th>Sumber</th><th>Pulang</th><th>Sumber</th><th>Status</th><th>Anomali</th></tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id}>
+                  <td>{new Date(r.date).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short' })}</td>
+                  <td>{fmtTime(r.check_in)}</td>
+                  <td><SourceBadge source={r.check_in_source} /></td>
+                  <td>{fmtTime(r.check_out)}</td>
+                  <td><SourceBadge source={r.check_out_source} /></td>
+                  <td><StatusChip status={r.status} /></td>
+                  <td><AnomalyChips record={r} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const LEAVE_STATUS_LABELS = { pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak', cancelled: 'Dibatalkan' };
+const LEAVE_STATUS_COLORS = {
+  pending: { bg: '#fff8e1', color: '#a06800' },
+  approved: { bg: '#e6f4ea', color: '#1e7e34' },
+  rejected: { bg: '#fce8e6', color: '#c5221f' },
+  cancelled: { bg: '#eef1f6', color: '#667' },
+};
+function LeaveStatusChip({ status }) {
+  const c = LEAVE_STATUS_COLORS[status] || LEAVE_STATUS_COLORS.cancelled;
+  return <span style={{ background: c.bg, color: c.color, padding: '0.15rem 0.55rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem' }}>{LEAVE_STATUS_LABELS[status] || status}</span>;
+}
+
+function CutiTab({ employeeId }) {
+  const year = new Date().getFullYear();
+  const [balance, setBalance] = useState(null);
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      getLeaveBalance(employeeId, year).then(r => setBalance(r.data)).catch(() => setBalance(null)),
+      getEmployeeLeaveRequests(employeeId).then(r => setRequests(r.data || [])).catch(() => setRequests([])),
+    ]).finally(() => setLoading(false));
+  }, [employeeId, year]);
+
+  const quota = balance?.quota_days ?? 0;
+  const used = balance?.used_days ?? 0;
+  const remaining = quota - used;
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Saldo Cuti Tahunan {year}</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+          <BalanceStat label="Kuota" value={quota} color="#2563eb" />
+          <BalanceStat label="Terpakai" value={used} color="#a06800" />
+          <BalanceStat label="Sisa" value={remaining} color={remaining > 0 ? '#1e7e34' : '#c5221f'} />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Riwayat Pengajuan Cuti</h3>
+        {loading ? (
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
+        ) : requests.length === 0 ? (
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Belum ada pengajuan cuti.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%' }}>
+              <thead>
+                <tr><th>Jenis</th><th>Mulai</th><th>Selesai</th><th style={{ textAlign: 'center' }}>Hari Kerja</th><th>Status</th><th>Alasan</th></tr>
+              </thead>
+              <tbody>
+                {requests.map(rq => (
+                  <tr key={rq.id}>
+                    <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}</td>
+                    <td>{fmtDateShort(rq.start_date)}</td>
+                    <td>{fmtDateShort(rq.end_date)}</td>
+                    <td style={{ textAlign: 'center' }}>{rq.day_count}</td>
+                    <td><LeaveStatusChip status={rq.status} /></td>
+                    <td style={{ fontSize: '0.85rem', color: '#667' }}>{rq.reason || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BalanceStat({ label, value, color }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '0.85rem', background: '#fafbfc', borderRadius: '6px' }}>
+      <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+      <div style={{ fontSize: '1.8rem', fontWeight: 700, color }}>{value}<span style={{ fontSize: '0.8rem', color: '#999' }}> hari</span></div>
+    </div>
+  );
+}
+
+const KASBON_STATUS_LABELS = {
+  pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
+  processed: 'Diproses', resolved: 'Lunas', cancelled: 'Dibatalkan',
+};
+const KASBON_STATUS_COLORS = {
+  pending: { bg: '#fff8e1', color: '#a06800' },
+  approved: { bg: '#e8f0fe', color: '#1967d2' },
+  rejected: { bg: '#fce8e6', color: '#c5221f' },
+  processed: { bg: '#e6f4ea', color: '#1e7e34' },
+  resolved: { bg: '#eef1f6', color: '#445' },
+  cancelled: { bg: '#eef1f6', color: '#667' },
+};
+function KasbonStatusChip({ status }) {
+  const c = KASBON_STATUS_COLORS[status] || KASBON_STATUS_COLORS.cancelled;
+  return <span style={{ background: c.bg, color: c.color, padding: '0.15rem 0.55rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem' }}>{KASBON_STATUS_LABELS[status] || status}</span>;
+}
+
+function KasbonTab({ employeeId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getEmployeeKasbons(employeeId)
+      .then(r => setRows(r.data || []))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [employeeId]);
+
+  // Outstanding balance = sum of amounts for kasbons that are approved/processed
+  // (disbursed but not yet fully resolved).
+  const outstanding = rows
+    .filter(k => k.status === 'approved' || k.status === 'processed')
+    .reduce((s, k) => s + Number(k.amount || 0), 0);
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Saldo Kasbon Berjalan</div>
+          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: outstanding > 0 ? '#c5221f' : '#1e7e34' }}>{fmtIDR(outstanding)}</div>
+        </div>
+        <Link to="/hr/kasbon/new" className="btn btn-primary btn-sm">+ Pengajuan Kasbon</Link>
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Riwayat Kasbon</h3>
+        {loading ? (
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
+        ) : rows.length === 0 ? (
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Belum ada kasbon.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%' }}>
+              <thead>
+                <tr><th>Nomor</th><th style={{ textAlign: 'right' }}>Jumlah</th><th>Penyelesaian</th><th>Status</th></tr>
+              </thead>
+              <tbody>
+                {rows.map(k => (
+                  <tr key={k.id}>
+                    <td><Link to={`/hr/kasbon/${k.id}`}>{k.kasbon_number}</Link></td>
+                    <td style={{ textAlign: 'right' }}>{fmtIDR(k.amount)}</td>
+                    <td>{k.resolution_month ? new Date(k.resolution_month).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-'}</td>
+                    <td><KasbonStatusChip status={k.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function fmtDateShort(d) { return d ? new Date(d).toLocaleDateString('id-ID') : '-'; }
+
+function ComponentRows({ components }) {
+  if (!components || components.length === 0) {
+    return <div style={{ color: '#999', fontSize: '0.85rem' }}>Tidak ada komponen.</div>;
+  }
+  return (
+    <table style={{ width: '100%' }}>
+      <thead>
+        <tr><th>Komponen</th><th>Tipe</th><th>Sifat</th><th style={{ textAlign: 'right' }}>Nominal</th></tr>
+      </thead>
+      <tbody>
+        {components.map(c => (
+          <tr key={c.id}>
+            <td>{c.component_name}</td>
+            <td>{TYPE_LABELS[c.component_type] || c.component_type}</td>
+            <td>{c.component_is_fixed ? 'Tetap' : 'Variabel'}</td>
+            <td style={{ textAlign: 'right' }}>{fmtIDR(c.amount)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function WageTab({ employeeId, editable }) {
+  const [current, setCurrent] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [expanded, setExpanded] = useState({});
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const [form, setForm] = useState({ base_salary: '', working_days_per_month: '26', effective_date: today });
+  const [picked, setPicked] = useState([]); // [{ component_id, amount }]
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      getEmployeeWage(employeeId).then(r => r.data).catch(() => null),
+      getEmployeeWageHistory(employeeId).then(r => r.data || []).catch(() => []),
+    ]).then(([cur, hist]) => {
+      setCurrent(cur);
+      setHistory(hist);
+    }).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, [employeeId]);
+
+  const openForm = () => {
+    setError('');
+    getWageComponents({ active: 1 }).then(r => setCatalog(r.data || [])).catch(() => setCatalog([]));
+    // Prefill from current open version for convenience.
+    if (current) {
+      setForm({
+        base_salary: String(current.base_salary || ''),
+        working_days_per_month: String(current.working_days_per_month || '26'),
+        effective_date: today,
+      });
+      setPicked((current.components || []).map(c => ({ component_id: c.wage_component_id, amount: String(c.amount) })));
+    } else {
+      setForm({ base_salary: '', working_days_per_month: '26', effective_date: today });
+      setPicked([]);
+    }
+    setShowForm(true);
+  };
+
+  const dailyRatePreview = () => {
+    const base = Number(form.base_salary || 0);
+    const wd = Number(form.working_days_per_month || 0);
+    if (!wd || wd < 1) return 0;
+    return Math.round(base / wd);
+  };
+
+  const addComponent = (id) => {
+    if (!id || picked.some(p => p.component_id === id)) return;
+    setPicked(p => [...p, { component_id: id, amount: '' }]);
+  };
+  const removeComponent = (id) => setPicked(p => p.filter(x => x.component_id !== id));
+  const setComponentAmount = (id, amount) => setPicked(p => p.map(x => x.component_id === id ? { ...x, amount } : x));
+
+  const componentMeta = (id) => catalog.find(c => c.id === id) || {};
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (form.base_salary === '' || Number(form.base_salary) < 0) { setError('Gaji pokok wajib diisi'); return; }
+    const wd = Number(form.working_days_per_month);
+    if (!wd || wd < 1 || wd > 31) { setError('Hari kerja per bulan harus antara 1 dan 31'); return; }
+    if (!form.effective_date) { setError('Tanggal berlaku wajib diisi'); return; }
+    for (const p of picked) {
+      if (p.amount === '' || Number(p.amount) < 0) { setError('Nominal komponen tidak boleh kosong/negatif'); return; }
+    }
+    setSubmitting(true);
+    try {
+      await createEmployeeWage(employeeId, {
+        base_salary: Math.round(Number(form.base_salary)),
+        working_days_per_month: wd,
+        effective_date: form.effective_date,
+        components: picked.map(p => ({ component_id: p.component_id, amount: Math.round(Number(p.amount)) })),
+      });
+      setShowForm(false);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Gagal menyimpan struktur gaji');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (loading) return <div style={{ color: '#999', padding: '2rem' }}>Memuat struktur gaji...</div>;
+
+  const projection = monthlyProjection(current);
+
+  return (
+    <div style={{ display: 'grid', gap: '1rem' }}>
+      {/* Current structure card */}
+      <div className="card">
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2>Struktur Gaji Saat Ini</h2>
+          {editable && <button onClick={openForm} className="btn btn-primary btn-sm">Ubah Struktur Gaji</button>}
+        </div>
+        {!current ? (
+          <div style={{ color: '#999', padding: '1rem 0' }}>Belum ada struktur gaji untuk karyawan ini.</div>
+        ) : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.5rem 1.5rem', marginBottom: '1rem' }}>
+              <Field label="Gaji Pokok" value={fmtIDR(current.base_salary)} />
+              <Field label="Hari Kerja / Bulan" value={current.working_days_per_month} />
+              <Field label="Tarif Harian" value={fmtIDR(current.daily_rate)} />
+              <Field label="Berlaku Sejak" value={fmtDateShort(current.effective_date)} />
+            </div>
+            <h3 style={{ fontSize: '0.95rem', margin: '0 0 0.5rem' }}>Komponen</h3>
+            <ComponentRows components={current.components} />
+            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
+              <span>Proyeksi Gaji Bulanan (pokok + tunjangan tetap − potongan tetap)</span>
+              <span>{fmtIDR(projection)}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* History */}
+      <div className="card">
+        <div className="card-header"><h2>Riwayat Struktur Gaji</h2></div>
+        {history.length === 0 ? (
+          <div style={{ color: '#999', padding: '0.5rem 0' }}>Belum ada riwayat.</div>
+        ) : (
+          <table style={{ width: '100%' }}>
+            <thead>
+              <tr><th>Berlaku</th><th>Berakhir</th><th style={{ textAlign: 'right' }}>Gaji Pokok</th><th style={{ textAlign: 'right' }}>Tarif Harian</th><th></th></tr>
+            </thead>
+            <tbody>
+              {history.map(v => (
+                <Fragment key={v.id}>
+                  <tr>
+                    <td>{fmtDateShort(v.effective_date)}</td>
+                    <td>{v.end_date ? fmtDateShort(v.end_date) : <span className="badge" style={{ background: '#e6f4ea', color: '#1e7e34' }}>Aktif</span>}</td>
+                    <td style={{ textAlign: 'right' }}>{fmtIDR(v.base_salary)}</td>
+                    <td style={{ textAlign: 'right' }}>{fmtIDR(v.daily_rate)}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => setExpanded(e => ({ ...e, [v.id]: !e[v.id] }))}>
+                        {expanded[v.id] ? 'Tutup' : 'Detail'}
+                      </button>
+                    </td>
+                  </tr>
+                  {expanded[v.id] && (
+                    <tr>
+                      <td colSpan={5} style={{ background: '#f8f9fb' }}>
+                        <div style={{ padding: '0.5rem' }}>
+                          <ComponentRows components={v.components} />
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* New version form modal */}
+      {showForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '2rem 1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 560, padding: '2rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Ubah Struktur Gaji</h2>
+              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#aaa' }}>✕</button>
+            </div>
+            <p style={{ color: '#667', fontSize: '0.85rem', marginTop: 0 }}>
+              Menyimpan akan membuat <strong>versi baru</strong>. Versi sebelumnya tetap tersimpan sebagai riwayat (tidak diubah).
+            </p>
+            {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
+            <form onSubmit={handleSubmit}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Gaji Pokok (Rp)</label>
+                  <CurrencyInput value={form.base_salary} onChange={e => setForm(f => ({ ...f, base_salary: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label>Hari Kerja / Bulan</label>
+                  <input type="number" min="1" max="31" value={form.working_days_per_month} onChange={e => setForm(f => ({ ...f, working_days_per_month: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label>Tanggal Berlaku</label>
+                  <input type="date" value={form.effective_date} onChange={e => setForm(f => ({ ...f, effective_date: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label>Tarif Harian (otomatis)</label>
+                  <input value={fmtIDR(dailyRatePreview())} readOnly style={{ background: '#f3f4f6' }} />
+                </div>
+              </div>
+
+              <h3 style={{ fontSize: '0.95rem', margin: '0.5rem 0' }}>Komponen</h3>
+              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                <select value="" onChange={e => { addComponent(e.target.value); e.target.value = ''; }}>
+                  <option value="">+ Tambah komponen dari katalog aktif...</option>
+                  {catalog.filter(c => !picked.some(p => p.component_id === c.id)).map(c => (
+                    <option key={c.id} value={c.id}>{c.name} — {TYPE_LABELS[c.type]} ({c.is_fixed ? 'Tetap' : 'Variabel'})</option>
+                  ))}
+                </select>
+              </div>
+
+              {picked.length === 0 ? (
+                <div style={{ color: '#999', fontSize: '0.85rem', marginBottom: '0.75rem' }}>Belum ada komponen dipilih.</div>
+              ) : (
+                <table style={{ width: '100%', marginBottom: '0.75rem' }}>
+                  <thead>
+                    <tr><th>Komponen</th><th>Tipe</th><th style={{ textAlign: 'right' }}>Nominal (Rp)</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    {picked.map(p => {
+                      const meta = componentMeta(p.component_id);
+                      return (
+                        <tr key={p.component_id}>
+                          <td>{meta.name || '-'}</td>
+                          <td>{TYPE_LABELS[meta.type] || '-'}</td>
+                          <td>
+                            <CurrencyInput value={p.amount} onChange={e => setComponentAmount(p.component_id, e.target.value)} />
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button type="button" className="btn btn-danger btn-sm" onClick={() => removeComponent(p.component_id)}>Hapus</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                <button type="submit" className="btn btn-primary" disabled={submitting} style={{ flex: 1, justifyContent: 'center' }}>
+                  {submitting ? 'Menyimpan...' : 'Simpan Versi Baru'}
+                </button>
+                <button type="button" onClick={() => setShowForm(false)} className="btn btn-secondary">Batal</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function EmployeeDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [emp, setEmp]   = useState(null);
+  const [tab, setTab]   = useState('profil');
+  const [error, setError] = useState('');
+
+  const editable = canEdit();
+
+  useEffect(() => {
+    getEmployee(id)
+      .then(r => setEmp(r.data))
+      .catch(() => setError('Karyawan tidak ditemukan'));
+  }, [id]);
+
+  const handleDelete = async () => {
+    if (!confirm('Yakin hapus karyawan ini? Sebaiknya ubah status menjadi nonaktif jika sudah ada data terkait.')) return;
+    try {
+      await deleteEmployee(id);
+      navigate('/hr/employees');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Gagal menghapus karyawan');
+    }
+  };
+
+  if (error) return <div className="error-msg">{error}</div>;
+  if (!emp) return <div style={{ color: '#999', padding: '2rem' }}>Memuat...</div>;
+
+  return (
+    <>
+      <div className="page-header">
+        <h1>{emp.full_name}</h1>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={() => navigate('/hr/employees')} className="btn btn-secondary">Kembali</button>
+          {editable && <Link to={`/hr/employees/${id}/edit`} className="btn btn-primary">Edit</Link>}
+          {editable && <button onClick={handleDelete} className="btn btn-danger">Hapus</button>}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid #e8e8e8', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={tab === t.key ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+            style={{ borderRadius: '6px 6px 0 0' }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'profil' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1rem', alignItems: 'start' }}>
+          <div>
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <div className="card-header"><h2>Identitas</h2></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem 1.5rem' }}>
+                <Field label="Kode Karyawan" value={emp.employee_code} />
+                <Field label="Nama Lengkap" value={emp.full_name} />
+                <Field label="Jabatan" value={emp.position_name} />
+                <Field label="Cabang" value={emp.branch_name} />
+                <Field label="Tanggal Lahir" value={fmtDate(emp.dob)} />
+                <Field label="Tanggal Bergabung" value={fmtDate(emp.join_date)} />
+                <Field label="NIK / KTP" value={emp.national_id} />
+                <Field label="Status" value={emp.status === 'active' ? 'Aktif' : 'Nonaktif'} />
+              </div>
+            </div>
+
+            <div className="card" style={{ marginBottom: '1rem' }}>
+              <div className="card-header"><h2>Kontak</h2></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem 1.5rem' }}>
+                <Field label="Telepon" value={emp.phone} />
+                <Field label="Email" value={emp.email} />
+                <Field label="Alamat" value={emp.address} />
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-header"><h2>Rekening Bank</h2></div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem 1.5rem' }}>
+                <Field label="Nama Bank" value={emp.bank_name} />
+                <Field label="Nomor Rekening" value={emp.bank_account_number} />
+                <Field label="Atas Nama" value={emp.bank_account_holder} />
+              </div>
+            </div>
+          </div>
+
+          <div className="card" style={{ textAlign: 'center' }}>
+            {emp.photo_path ? (
+              <img src={`${SERVER}/uploads/${emp.photo_path}`} alt={emp.full_name} style={{ width: '100%', maxWidth: 220, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }} />
+            ) : (
+              <div style={{ width: '100%', height: 200, borderRadius: '8px', background: '#eef1f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a93a6', fontSize: '3rem' }}>
+                {(emp.full_name || '?').charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'gaji' && <WageTab employeeId={id} editable={editable} />}
+      {tab === 'absensi' && <AttendanceTab employeeId={id} />}
+      {tab === 'kasbon' && <KasbonTab employeeId={id} />}
+      {tab === 'cuti' && <CutiTab employeeId={id} />}
+    </>
+  );
+}

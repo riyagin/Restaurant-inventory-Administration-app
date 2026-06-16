@@ -67,6 +67,9 @@ psql -U postgres -d inventory_app -f server/schema.sql
 # Reset admin password
 go run ./server-go/cmd/reset-password <username> <new-password>
 # or legacy: node server/reset-password.js
+
+# Seed HR dev data (positions, employees, wage structures, work schedule, holidays, policy)
+go run ./server-go/cmd/seed-hr
 ```
 
 ---
@@ -92,6 +95,7 @@ server-go/
   cmd/
     api/main.go            # Entry point, router wiring, server startup
     reset-password/main.go # Admin password reset utility
+    seed-hr/main.go        # Dev-only HR seed (positions, employees, wage structures, holidays, policy)
   internal/
     db/                    # sqlc-generated query functions (do not edit manually)
     handler/               # HTTP handlers, one file per domain
@@ -117,13 +121,37 @@ server-go/
       invoice_templates.go
       vendors.go
       warehouses.go
+      hr_employees.go
+      hr_wages.go
+      hr_import.go
+      attendance.go
+      attendance_device.go
+      attendance_fingerprint.go
+      attendance_settings.go
+      performance.go
+      leave.go
+      kasbon.go
+      payroll.go
+      payslip.go
     middleware/
-      auth.go              # JWT validation, requireAdmin
+      auth.go              # JWT validation, requireAdmin, requireManager
+      device_auth.go       # X-Device-Key auth for fingerprint/face devices
       ratelimit.go
     service/               # Business logic (FIFO deduction, CoA updates, unit conversion)
       inventory.go
       accounts.go
       pos_import.go
+      hr_employees.go
+      hr_import.go
+      attendance.go
+      attendance_reconcile.go
+      attendance_state.go
+      fingerprint_parser.go
+      kasbon.go
+      leave.go
+      payroll.go
+      payslip.go
+      performance.go
   migrations/              # 001_initial.up.sql / .down.sql, etc.
   queries/                 # Raw .sql files that sqlc reads
   sqlc.yaml
@@ -193,6 +221,24 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | InventoryValueReport | `/reports/inventory-value` | Yes |
 | AccountAdjustments | `/account-adjustments` | Yes |
 | NonStockItemDetail | `/items/:id/non-stock` | Yes |
+| Employees | `/hr/employees` | Manager+ |
+| EmployeeForm | `/hr/employees/new`, `/hr/employees/:id/edit` | Manager+ |
+| EmployeeDetail | `/hr/employees/:id` | Manager+ |
+| Positions | `/hr/positions` | Manager+ |
+| WageComponents | `/hr/wage-components` | Manager+ |
+| HRImport | `/hr/import` | Manager+ |
+| AttendanceDashboard | `/hr/attendance` | Manager+ |
+| FingerprintImport | `/hr/attendance/import` | Manager+ |
+| AttendanceSettings | `/hr/attendance/settings` | Manager+ |
+| PerformanceDashboard | `/hr/performance` | Manager+ |
+| PerformancePolicies | `/hr/performance/policies` | Manager+ |
+| LeaveRequests | `/hr/leave` | Manager+ |
+| KasbonDashboard | `/hr/kasbon` | Manager+ |
+| KasbonForm | `/hr/kasbon/new` | Manager+ |
+| KasbonDetail | `/hr/kasbon/:id` | Manager+ |
+| PayrollDashboard | `/hr/payroll` | Manager+ |
+| PayrollPeriodDetail | `/hr/payroll/:id` | Manager+ |
+| HRSettings | `/hr/settings` | Admin only |
 
 ### Components (`client/src/components/`)
 - `CurrencyInput.jsx` — IDR currency input with formatting
@@ -202,7 +248,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 - Base URL loaded from `/config.json` at runtime (allows VPS config without rebuild)
 - Auto-refresh: on 401, queues in-flight requests, refreshes token, replays queue
 - On refresh failure: clears localStorage, redirects to `/login`
-- **67 exported functions** across 23 domains (auth, users, items, inventory, warehouses, vendors, accounts, stock-history, stock-opname, invoices, transfers, branches, divisions, division-categories, dispatches, sales, pos-import, recipes, productions, invoice-templates, activity-log, stats, reports, account-adjustments, enumerations)
+- **67+ exported functions** across 23+ domains (auth, users, items, inventory, warehouses, vendors, accounts, stock-history, stock-opname, invoices, transfers, branches, divisions, division-categories, dispatches, sales, pos-import, recipes, productions, invoice-templates, activity-log, stats, reports, account-adjustments, enumerations, hr-employees, hr-positions, hr-wages, hr-import, attendance, performance, leave, kasbon, payroll, payslip, hr-settings)
 
 ### Frontend Conventions
 - All state is local `useState` — no Redux, Zustand, or Context API
@@ -221,7 +267,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 | Table | Purpose |
 |---|---|
-| `users` | Auth — username, password_hash, role (admin\|staff) |
+| `users` | Auth — username, password_hash, role (admin\|manager\|staff) |
 | `token_blocklist` | Revoked JWT jti values with expiry |
 | `accounts` | Chart of accounts — hierarchical (parent_id), types: asset/liability/equity/revenue/expense, system-protected |
 | `warehouses` | Physical storage locations, linked to an inventory CoA account |
@@ -250,6 +296,26 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `account_adjustments` | Manual journal entries — account, amount, description |
 | `enumerations` | Item breakdowns — source item → output item with value transfer |
 | `activity_log` | Audit trail — user, action (CREATE/UPDATE/DELETE), entity_type, description |
+| `employees` | HR employee master — code, name, position, branch, bank details, status |
+| `positions` | Job positions catalog (Kasir, Koki, etc.) |
+| `wage_components` | Catalog of wage component types (allowance/bonus/deduction, fixed/variable) |
+| `employee_wage_structures` | Versioned wage structures per employee — base_salary, daily_rate, effective_date |
+| `employee_wage_components` | Components attached to a wage structure version — amount |
+| `attendance_records` | Daily attendance per employee — check_in/out times, source (manual/fingerprint/face), status, anomaly flags |
+| `attendance_devices` | Registered fingerprint/face devices — device_key, name, active |
+| `work_schedules` | Weekly work schedule — day_of_week, start_time, end_time, late_grace_minutes |
+| `public_holidays` | Public holiday dates — skipped during attendance reconciliation |
+| `performance_policies` | Rules that trigger violations — violation_type, threshold_minutes, deduction_points |
+| `performance_violations` | Per-employee violations (auto from attendance or manual) |
+| `performance_scores` | Monthly rolled-up score per employee (100 − deductions) |
+| `leave_types` | Leave type catalog — name, is_paid |
+| `leave_requests` | Employee leave requests — dates, day_count, status (pending/approved/rejected/cancelled) |
+| `leave_balances` | Annual leave quota and used days per employee |
+| `kasbons` | Cash advance records — amount, installments, fund_source_account, status |
+| `kasbon_installments` | Per-installment schedule for a kasbon (deducted on payroll close) |
+| `payroll_periods` | Payroll period header — month, status (open/closed/paid) |
+| `payroll_lines` | Per-employee line within a period — gross, deductions, net, reviewed flag |
+| `hr_settings` | Company-level HR config — company_name, logo_path, payslip footer text |
 
 ### Key DB Rules
 - Hard deletes only (no soft delete)
@@ -314,13 +380,37 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Expense Report** (1): GET /api/expense-report
 
+**HR Employees & Positions** (11): CRUD /api/hr/employees + photo upload/delete; CRUD /api/hr/positions
+
+**HR Wages** (6): GET/POST /api/hr/wage-components (CRUD); GET/POST /api/hr/employees/:id/wage + GET history
+
+**HR Import** (3): GET template, POST parse, POST confirm — /api/hr/import
+
+**HR Attendance — JWT** (14): GET/PUT /api/hr/attendance; POST reconcile; fingerprint parse/confirm; work-schedules GET/POST; holidays GET/POST/DELETE; devices CRUD
+
+**HR Attendance — Device key** (2): POST /api/hr/attendance/device/event, GET /api/hr/attendance/device/employees
+
+**HR Performance** (9): policies CRUD; GET scores; GET employee performance; POST/DELETE violations; POST evaluate
+
+**HR Leave** (11): leave-types CRUD; leave-requests GET/POST/cancel/approve/reject; employee leave-balance GET/PUT; employee leave-requests GET
+
+**HR Kasbon** (8): GET/POST /api/hr/kasbons; GET/:id; PUT/:id; POST process/cancel/approve/reject
+
+**HR Payroll** (11): periods GET/POST/:id/lines/regenerate-line/close/mark-paid; lines review/unreview/payslip; period payslips ZIP
+
+**HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo
+
+_(HR total: ~78 endpoints; grand total: ~174)_
+
 ---
 
 ## Role-Based Access
 
-- **admin**: Full access to all routes
-- **staff**: Read-only on most resources; blocked from items CRUD, warehouses, vendors, accounts, users, activity log, reports, account adjustments, invoice templates, branches, divisions
-- Enforced at the route level via `requireAdmin` middleware; also reflected in frontend navigation
+- **admin**: Full access to all routes including HR settings mutations
+- **manager**: Full access to HR module (employees, wages, attendance, performance, leave, kasbon, payroll); exclusive rights to approve/reject kasbon and leave requests; same access as admin on non-HR routes (the `RequireAdmin` middleware also accepts `manager` for backward-compatibility)
+- **staff**: Read-only on most resources; blocked from items CRUD, warehouses, vendors, accounts, users, activity log, reports, account adjustments, invoice templates, branches, divisions; no access to HR wage/payroll/kasbon/leave data
+- **device-key**: Machine accounts for fingerprint/face attendance devices; authenticated via `X-Device-Key` header (no JWT); access only to `/api/hr/attendance/device/*` endpoints
+- Enforced at the route level via `RequireAdmin`, `RequireAdminOrManager`, `RequireManager`, and `DeviceAuth` middleware; also reflected in frontend navigation (`isAdminOrManager` guard on HR nav group)
 
 ---
 

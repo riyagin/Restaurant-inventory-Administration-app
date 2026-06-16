@@ -235,13 +235,11 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 8. Insert stock_transfer record
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(it.Quantity)
 		rec, err := qtx.InsertStockTransfer(ctx, &db.InsertStockTransferParams{
 			ItemID:          pgtype.UUID{Bytes: itemID, Valid: true},
 			FromWarehouseID: pgtype.UUID{Bytes: fromID, Valid: true},
 			ToWarehouseID:   pgtype.UUID{Bytes: toID, Valid: true},
-			Quantity:        qtyNumeric,
+			Quantity:        floatToNumeric(it.Quantity),
 			UnitIndex:       it.UnitIndex,
 			UnitName:        it.UnitName,
 			Notes:           pgtype.Text{String: body.Notes, Valid: body.Notes != ""},

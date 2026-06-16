@@ -129,13 +129,10 @@ func (h *RecipesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	var batchSizeNumeric pgtype.Numeric
-	_ = batchSizeNumeric.Scan(body.BatchSize)
-
 	recipe, err := qtx.CreateRecipe(ctx, &db.CreateRecipeParams{
 		Name:           body.Name,
 		OutputItemID:   pgtype.UUID{Bytes: outputItemID, Valid: true},
-		BatchSize:      batchSizeNumeric,
+		BatchSize:      floatToNumeric(body.BatchSize),
 		BatchUnitIndex: body.BatchUnitIndex,
 	})
 	if err != nil {
@@ -149,12 +146,10 @@ func (h *RecipesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("item_id tidak valid: %s", ing.ItemID))
 			return
 		}
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(ing.Quantity)
 		if err := qtx.CreateRecipeIngredient(ctx, &db.CreateRecipeIngredientParams{
 			RecipeID:  recipe.ID,
 			ItemID:    pgtype.UUID{Bytes: itemID, Valid: true},
-			Quantity:  qtyNumeric,
+			Quantity:  floatToNumeric(ing.Quantity),
 			UnitIndex: ing.UnitIndex,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan bahan resep")
@@ -234,13 +229,10 @@ func (h *RecipesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	var batchSizeNumeric pgtype.Numeric
-	_ = batchSizeNumeric.Scan(body.BatchSize)
-
 	recipe, err := qtx.UpdateRecipe(ctx, &db.UpdateRecipeParams{
 		Name:           body.Name,
 		OutputItemID:   pgtype.UUID{Bytes: outputItemID, Valid: true},
-		BatchSize:      batchSizeNumeric,
+		BatchSize:      floatToNumeric(body.BatchSize),
 		BatchUnitIndex: body.BatchUnitIndex,
 		ID:             pgtype.UUID{Bytes: id, Valid: true},
 	})
@@ -264,12 +256,10 @@ func (h *RecipesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("item_id tidak valid: %s", ing.ItemID))
 			return
 		}
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(ing.Quantity)
 		if err := qtx.CreateRecipeIngredient(ctx, &db.CreateRecipeIngredientParams{
 			RecipeID:  recipe.ID,
 			ItemID:    pgtype.UUID{Bytes: itemID, Valid: true},
-			Quantity:  qtyNumeric,
+			Quantity:  floatToNumeric(ing.Quantity),
 			UnitIndex: ing.UnitIndex,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan bahan resep")

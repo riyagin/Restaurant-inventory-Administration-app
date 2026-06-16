@@ -21,6 +21,7 @@ import (
 	"inventory-app/server-go/internal/db"
 	"inventory-app/server-go/internal/handler"
 	appmiddleware "inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 func main() {
@@ -66,6 +67,37 @@ func main() {
 		}
 	}()
 
+	// Nightly attendance reconciliation goroutine. Mirrors the token-cleanup
+	// pattern (time.Ticker). Every 24h it inserts 'absent' rows for the previous
+	// day for scheduled work days with no record (skipping holidays/non-work
+	// days). The same service.ReconcileAbsent function backs the manual
+	// POST /api/hr/attendance/reconcile endpoint.
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				yesterday := time.Now().AddDate(0, 0, -1)
+				bg := context.Background()
+				if _, err := service.ReconcileAbsent(bg, queries, yesterday); err != nil {
+					log.Printf("attendance reconcile error: %v", err)
+				} else {
+					log.Printf("attendance reconcile completed for %s", yesterday.Format("2006-01-02"))
+				}
+				// After absent rows are inserted, evaluate performance for the same
+				// day so violations/scores reflect the now-finalized records.
+				if err := service.EvaluateDay(bg, queries, yesterday); err != nil {
+					log.Printf("performance evaluation error: %v", err)
+				} else {
+					log.Printf("performance evaluation completed for %s", yesterday.Format("2006-01-02"))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	authHandler := handler.NewAuthHandler(queries, cfg.JWTSecret)
 	usersHandler := handler.NewUsersHandler(queries)
 	warehousesHandler := handler.NewWarehousesHandler(pool, queries)
@@ -91,6 +123,20 @@ func main() {
 	adjustmentsHandler := handler.NewAccountAdjustmentsHandler(pool, queries)
 	reportsHandler := handler.NewReportsHandler(pool, queries)
 	statsHandler := handler.NewStatsHandler(pool)
+	hrEmployeesHandler := handler.NewHREmployeesHandler(pool, queries)
+	hrEmployeesHandler.SetUploadsDir(cfg.UploadsDir)
+	hrWagesHandler := handler.NewHRWagesHandler(pool, queries)
+	hrImportHandler := handler.NewHRImportHandler(pool, queries)
+	attendanceHandler := handler.NewAttendanceHandler(pool, queries)
+	attendanceDeviceHandler := handler.NewAttendanceDeviceHandler(pool, queries)
+	attendanceDeviceHandler.SetUploadsDir(cfg.UploadsDir)
+	performanceHandler := handler.NewPerformanceHandler(pool, queries)
+	leaveHandler := handler.NewLeaveHandler(pool, queries)
+	kasbonHandler := handler.NewKasbonHandler(pool, queries)
+	kasbonHandler.SetUploadsDir(cfg.UploadsDir)
+	payrollHandler := handler.NewPayrollHandler(pool, queries)
+	payslipHandler := handler.NewPayslipHandler(pool, queries)
+	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -119,6 +165,14 @@ func main() {
 	// Public auth routes
 	r.With(appmiddleware.LoginRateLimit()).Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
+
+	// Device API — NOT JWT. Authenticated by X-Device-Key, rate-limited per key.
+	// Lives OUTSIDE the JWT group so the Android face app can push events.
+	r.Group(func(r chi.Router) {
+		r.Use(appmiddleware.DeviceAuth(queries))
+		r.Post("/api/hr/attendance/device/event", attendanceDeviceHandler.Event)
+		r.Get("/api/hr/attendance/device/employees", attendanceDeviceHandler.Employees)
+	})
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
@@ -223,8 +277,12 @@ func main() {
 
 		// Stock Opname — all authenticated
 		r.Get("/api/stock-opname", stockOpnameHandler.List)
-		r.Get("/api/stock-opname/{id}", stockOpnameHandler.Get)
 		r.Post("/api/stock-opname", stockOpnameHandler.Create)
+		r.Get("/api/stock-opname/drafts", stockOpnameHandler.ListDrafts)
+		r.Post("/api/stock-opname/drafts", stockOpnameHandler.SaveDraft)
+		r.Put("/api/stock-opname/drafts/{id}", stockOpnameHandler.UpdateDraft)
+		r.Delete("/api/stock-opname/drafts/{id}", stockOpnameHandler.DeleteDraft)
+		r.Get("/api/stock-opname/{id}", stockOpnameHandler.Get)
 
 		// Invoices — all authenticated; delete admin only
 		r.Get("/api/invoices", invoicesHandler.List)
@@ -292,6 +350,162 @@ func main() {
 			r.Get("/api/account-adjustments", adjustmentsHandler.List)
 			r.Post("/api/account-adjustments", adjustmentsHandler.Create)
 			r.Post("/api/account-adjustments/transfer", adjustmentsHandler.Transfer)
+		})
+
+		// HR Employees & Positions
+		// Read (list + detail) allowed for all authenticated users incl. staff.
+		r.Get("/api/hr/employees", hrEmployeesHandler.List)
+		r.Get("/api/hr/employees/{id}", hrEmployeesHandler.Get)
+		r.Get("/api/hr/positions", hrEmployeesHandler.ListPositions)
+		// Mutations require admin or manager.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Post("/api/hr/employees", hrEmployeesHandler.Create)
+			r.Put("/api/hr/employees/{id}", hrEmployeesHandler.Update)
+			r.Delete("/api/hr/employees/{id}", hrEmployeesHandler.Delete)
+			r.Post("/api/hr/employees/{id}/photo", hrEmployeesHandler.UploadPhoto)
+			r.Delete("/api/hr/employees/{id}/photo", hrEmployeesHandler.DeletePhoto)
+			r.Post("/api/hr/positions", hrEmployeesHandler.CreatePosition)
+			r.Put("/api/hr/positions/{id}", hrEmployeesHandler.UpdatePosition)
+			r.Delete("/api/hr/positions/{id}", hrEmployeesHandler.DeletePosition)
+		})
+
+		// HR Wage module — admin/manager only (staff has NO access).
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			// Wage component catalog
+			r.Get("/api/hr/wage-components", hrWagesHandler.ListComponents)
+			r.Post("/api/hr/wage-components", hrWagesHandler.CreateComponent)
+			r.Put("/api/hr/wage-components/{id}", hrWagesHandler.UpdateComponent)
+			r.Delete("/api/hr/wage-components/{id}", hrWagesHandler.DeleteComponent)
+			// Per-employee wage structures (versioned)
+			r.Get("/api/hr/employees/{id}/wage", hrWagesHandler.GetCurrentWage)
+			r.Get("/api/hr/employees/{id}/wage/history", hrWagesHandler.GetWageHistory)
+			r.Post("/api/hr/employees/{id}/wage", hrWagesHandler.CreateWageVersion)
+		})
+
+		// HR bulk import (employees + initial wage structures) — admin/manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Get("/api/hr/import/template", hrImportHandler.Template)
+			r.Post("/api/hr/import/parse", hrImportHandler.Parse)
+			r.Post("/api/hr/import/confirm", hrImportHandler.Confirm)
+		})
+
+		// HR Attendance (admin/manager). Device endpoints are wired separately
+		// outside this JWT group.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Get("/api/hr/attendance", attendanceHandler.List)
+			r.Put("/api/hr/attendance/{id}", attendanceHandler.Update)
+			r.Post("/api/hr/attendance/reconcile", attendanceHandler.Reconcile)
+			// Fingerprint import (two-phase)
+			r.Post("/api/hr/attendance/fingerprint-import/parse", attendanceHandler.FingerprintParse)
+			r.Post("/api/hr/attendance/fingerprint-import/confirm", attendanceHandler.FingerprintConfirm)
+			// Work schedules
+			r.Get("/api/hr/attendance/work-schedules", attendanceHandler.ListWorkSchedules)
+			r.Post("/api/hr/attendance/work-schedules", attendanceHandler.UpsertWorkSchedule)
+			// Public holidays
+			r.Get("/api/hr/attendance/holidays", attendanceHandler.ListPublicHolidays)
+			r.Post("/api/hr/attendance/holidays", attendanceHandler.CreatePublicHoliday)
+			r.Delete("/api/hr/attendance/holidays/{id}", attendanceHandler.DeletePublicHoliday)
+			// Attendance devices
+			r.Get("/api/hr/attendance/devices", attendanceHandler.ListDevices)
+			r.Post("/api/hr/attendance/devices", attendanceHandler.CreateDevice)
+			r.Put("/api/hr/attendance/devices/{id}", attendanceHandler.SetDeviceActive)
+			r.Delete("/api/hr/attendance/devices/{id}", attendanceHandler.DeleteDevice)
+		})
+
+		// HR Performance scoring — admin/manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			// Policies (CRUD; delete deactivates when referenced)
+			r.Get("/api/hr/performance/policies", performanceHandler.ListPolicies)
+			r.Post("/api/hr/performance/policies", performanceHandler.CreatePolicy)
+			r.Put("/api/hr/performance/policies/{id}", performanceHandler.UpdatePolicy)
+			r.Delete("/api/hr/performance/policies/{id}", performanceHandler.DeletePolicy)
+			// Scores & breakdown
+			r.Get("/api/hr/performance/scores", performanceHandler.ListScores)
+			r.Get("/api/hr/employees/{id}/performance", performanceHandler.EmployeePerformance)
+			// Violations
+			r.Post("/api/hr/performance/violations", performanceHandler.CreateManualViolation)
+			r.Delete("/api/hr/performance/violations/{id}", performanceHandler.DeleteViolation)
+			// Manual backfill
+			r.Post("/api/hr/performance/evaluate", performanceHandler.Evaluate)
+		})
+
+		// HR Leave management.
+		// Most endpoints admin/manager; approval/rejection are manager-only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			// Manpower planning grid
+			r.Get("/api/hr/manpower-planning", leaveHandler.GetManpowerPlanning)
+			// Leave types (CRUD; delete deactivates when referenced)
+			r.Get("/api/hr/leave-types", leaveHandler.ListLeaveTypes)
+			r.Post("/api/hr/leave-types", leaveHandler.CreateLeaveType)
+			r.Put("/api/hr/leave-types/{id}", leaveHandler.UpdateLeaveType)
+			r.Delete("/api/hr/leave-types/{id}", leaveHandler.DeleteLeaveType)
+			// Leave requests
+			r.Get("/api/hr/leave-requests", leaveHandler.ListLeaveRequests)
+			r.Post("/api/hr/leave-requests", leaveHandler.CreateLeaveRequest)
+			r.Post("/api/hr/leave-requests/{id}/cancel", leaveHandler.CancelLeaveRequest)
+			// Balances + per-employee history
+			r.Get("/api/hr/employees/{id}/leave-balance", leaveHandler.GetLeaveBalance)
+			r.Put("/api/hr/employees/{id}/leave-balance", leaveHandler.SetLeaveBalanceQuota)
+			r.Get("/api/hr/employees/{id}/leave-requests", leaveHandler.ListEmployeeLeaveRequests)
+		})
+		// HR Leave approval / rejection — manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/leave-requests/{id}/approve", leaveHandler.ApproveLeaveRequest)
+			r.Post("/api/hr/leave-requests/{id}/reject", leaveHandler.RejectLeaveRequest)
+		})
+
+		// HR Kasbon (cash advance) management.
+		// Most endpoints admin/manager; approval/rejection are manager-only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Get("/api/hr/kasbons", kasbonHandler.List)
+			r.Post("/api/hr/kasbons", kasbonHandler.Create)
+			r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
+			r.Put("/api/hr/kasbons/{id}", kasbonHandler.Update)
+			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
+			r.Post("/api/hr/kasbons/{id}/cancel", kasbonHandler.Cancel)
+		})
+		// HR Kasbon approval / rejection — manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/kasbons/{id}/approve", kasbonHandler.Approve)
+			r.Post("/api/hr/kasbons/{id}/reject", kasbonHandler.Reject)
+		})
+
+		// HR Payroll (penggajian) — admin/manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Get("/api/hr/payroll/periods", payrollHandler.ListPeriods)
+			r.Post("/api/hr/payroll/periods", payrollHandler.CreatePeriod)
+			r.Get("/api/hr/payroll/periods/{id}", payrollHandler.GetPeriod)
+			r.Get("/api/hr/payroll/periods/{id}/lines", payrollHandler.ListLines)
+			r.Post("/api/hr/payroll/periods/{id}/regenerate-line/{employeeId}", payrollHandler.RegenerateLine)
+			r.Post("/api/hr/payroll/periods/{id}/close", payrollHandler.ClosePeriod)
+			r.Post("/api/hr/payroll/periods/{id}/mark-paid", payrollHandler.MarkPaid)
+			r.Get("/api/hr/payroll/lines/{id}/review", payrollHandler.GetLineReview)
+			r.Post("/api/hr/payroll/lines/{id}/review", payrollHandler.ReviewLine)
+			r.Post("/api/hr/payroll/lines/{id}/unreview", payrollHandler.UnreviewLine)
+
+			// Payslips (slip gaji) — PDF single + ZIP batch. Reject open periods (409).
+			r.Get("/api/hr/payroll/lines/{id}/payslip", payslipHandler.DownloadPayslip)
+			r.Get("/api/hr/payroll/periods/{id}/payslips", payslipHandler.DownloadPeriodPayslips)
+
+			// HR settings — read is admin/manager (header info needed to preview).
+			r.Get("/api/hr/settings", payslipHandler.GetSettings)
+		})
+
+		// HR settings mutations — admin only (company-level configuration).
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Put("/api/hr/settings", payslipHandler.UpdateSettings)
+			r.Post("/api/hr/settings/logo", payslipHandler.UploadLogo)
 		})
 
 		// Reports & Stats — all admin

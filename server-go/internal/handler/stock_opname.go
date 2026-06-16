@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -26,6 +28,8 @@ type StockOpnameHandler struct {
 func NewStockOpnameHandler(pool *pgxpool.Pool, queries *db.Queries) *StockOpnameHandler {
 	return &StockOpnameHandler{pool: pool, queries: queries}
 }
+
+// ─── List submitted opnames ───────────────────────────────────────────────────
 
 func (h *StockOpnameHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -127,12 +131,181 @@ func (h *StockOpnameHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ─── Draft endpoints ──────────────────────────────────────────────────────────
+
+type draftItem struct {
+	ItemID    string  `json:"item_id"`
+	UnitIndex int32   `json:"unit_index"`
+	UnitName  string  `json:"unit_name"`
+	ActualQty float64 `json:"actual_qty"`
+}
+
+func (h *StockOpnameHandler) ListDrafts(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rows, err := h.pool.Query(ctx, `
+		SELECT d.id::text, d.warehouse_id::text, w.name,
+		       d.pic_name, d.operator_name, d.notes, d.items,
+		       d.created_at, d.updated_at
+		FROM stock_opname_drafts d
+		JOIN warehouses w ON w.id = d.warehouse_id
+		ORDER BY d.updated_at DESC
+	`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil draft opname")
+		return
+	}
+	defer rows.Close()
+
+	type draftRow struct {
+		ID            string          `json:"id"`
+		WarehouseID   string          `json:"warehouse_id"`
+		WarehouseName string          `json:"warehouse_name"`
+		PicName       *string         `json:"pic_name"`
+		OperatorName  *string         `json:"operator_name"`
+		Notes         *string         `json:"notes"`
+		Items         json.RawMessage `json:"items"`
+		CreatedAt     time.Time       `json:"created_at"`
+		UpdatedAt     time.Time       `json:"updated_at"`
+	}
+
+	var result []draftRow
+	for rows.Next() {
+		var d draftRow
+		if err := rows.Scan(&d.ID, &d.WarehouseID, &d.WarehouseName,
+			&d.PicName, &d.OperatorName, &d.Notes, &d.Items,
+			&d.CreatedAt, &d.UpdatedAt); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membaca draft")
+			return
+		}
+		result = append(result, d)
+	}
+	if result == nil {
+		result = []draftRow{}
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (h *StockOpnameHandler) SaveDraft(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		WarehouseID  string      `json:"warehouse_id"`
+		PicName      string      `json:"pic_name"`
+		OperatorName string      `json:"operator_name"`
+		Notes        string      `json:"notes"`
+		Items        []draftItem `json:"items"`
+	}
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	if body.WarehouseID == "" {
+		respondError(w, http.StatusBadRequest, "warehouse_id diperlukan")
+		return
+	}
+
+	ctx := r.Context()
+	userID := middleware.UserIDFromCtx(ctx)
+
+	items := body.Items
+	if items == nil {
+		items = []draftItem{}
+	}
+	itemsJSON, err := json.Marshal(items)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan item draft")
+		return
+	}
+
+	var id string
+	err = h.pool.QueryRow(ctx, `
+		INSERT INTO stock_opname_drafts (warehouse_id, pic_name, operator_name, notes, items, created_by)
+		VALUES ($1, NULLIF($2,''), NULLIF($3,''), NULLIF($4,''), $5, $6)
+		RETURNING id::text
+	`,
+		body.WarehouseID,
+		body.PicName, body.OperatorName, body.Notes,
+		itemsJSON,
+		pgtype.UUID{Bytes: userID, Valid: userID != uuid.Nil},
+	).Scan(&id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat draft opname")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]string{"id": id})
+}
+
+func (h *StockOpnameHandler) UpdateDraft(w http.ResponseWriter, r *http.Request) {
+	draftID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(draftID); err != nil {
+		respondError(w, http.StatusBadRequest, "ID draft tidak valid")
+		return
+	}
+
+	var body struct {
+		PicName      string      `json:"pic_name"`
+		OperatorName string      `json:"operator_name"`
+		Notes        string      `json:"notes"`
+		Items        []draftItem `json:"items"`
+	}
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+
+	items := body.Items
+	if items == nil {
+		items = []draftItem{}
+	}
+	itemsJSON, err := json.Marshal(items)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan item draft")
+		return
+	}
+
+	ctx := r.Context()
+	tag, err := h.pool.Exec(ctx, `
+		UPDATE stock_opname_drafts
+		SET pic_name = NULLIF($1,''), operator_name = NULLIF($2,''),
+		    notes = NULLIF($3,''), items = $4, updated_at = NOW()
+		WHERE id = $5
+	`,
+		body.PicName, body.OperatorName, body.Notes,
+		itemsJSON, draftID,
+	)
+	if err != nil || tag.RowsAffected() == 0 {
+		respondError(w, http.StatusNotFound, "draft tidak ditemukan")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"id": draftID})
+}
+
+func (h *StockOpnameHandler) DeleteDraft(w http.ResponseWriter, r *http.Request) {
+	draftID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(draftID); err != nil {
+		respondError(w, http.StatusBadRequest, "ID draft tidak valid")
+		return
+	}
+
+	ctx := r.Context()
+	_, err := h.pool.Exec(ctx, `DELETE FROM stock_opname_drafts WHERE id = $1`, draftID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghapus draft")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── Create (submit final opname) ────────────────────────────────────────────
+
 func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		WarehouseID  string `json:"warehouse_id"`
 		Notes        string `json:"notes"`
 		OperatorName string `json:"operator_name"`
 		PicName      string `json:"pic_name"`
+		DraftID      string `json:"draft_id"`
 		Items        []struct {
 			ItemID         string  `json:"item_id"`
 			UnitIndex      int32   `json:"unit_index"`
@@ -159,7 +332,6 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(ctx)
 	username := middleware.UsernameFromCtx(ctx)
 
-	// Read warehouse info before transaction
 	wh, err := h.queries.GetWarehouseByID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true})
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "gudang tidak ditemukan")
@@ -183,7 +355,6 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal mencari akun stok waste")
 			return
 		}
-		// Create the Stock Waste account if it doesn't exist
 		created, err := qtx.CreateAccount(ctx, &db.CreateAccountParams{
 			Name:        "Stock Waste",
 			AccountType: "expense",
@@ -195,7 +366,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		wasteAccountID = created.ID
 	}
 
-	// 1. Insert stock_opname header
+	// Insert stock_opname header
 	opname, err := qtx.InsertStockOpname(ctx, &db.InsertStockOpnameParams{
 		WarehouseID:  pgtype.UUID{Bytes: warehouseID, Valid: true},
 		Notes:        pgtype.Text{String: body.Notes, Valid: body.Notes != ""},
@@ -208,7 +379,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Process each item
+	// Process each item
 	for _, it := range body.Items {
 		itemID, err := parseUUID(it.ItemID)
 		if err != nil {
@@ -216,7 +387,6 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// a. Get current recorded quantity
 		rawQty, err := qtx.GetCurrentInventoryQuantity(ctx, &db.GetCurrentInventoryQuantityParams{
 			ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
 			WarehouseID: pgtype.UUID{Bytes: warehouseID, Valid: true},
@@ -226,35 +396,26 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		recorded := anyNumericToFloat64(rawQty)
-
-		// b. Calculate difference
 		actual := it.ActualQuantity
 		diff := actual - recorded
 
-		// Skip items with no change
 		if math.Abs(diff) < 0.001 {
-			// Still record for audit
-			var recNum, actNum, diffNum pgtype.Numeric
-			_ = recNum.Scan(recorded)
-			_ = actNum.Scan(actual)
-			_ = diffNum.Scan(0.0)
 			_ = qtx.InsertStockOpnameItem(ctx, &db.InsertStockOpnameItemParams{
 				OpnameID:         opname.ID,
 				ItemID:           pgtype.UUID{Bytes: itemID, Valid: true},
 				UnitIndex:        it.UnitIndex,
 				UnitName:         it.UnitName,
-				RecordedQuantity: recNum,
-				ActualQuantity:   actNum,
-				Difference:       diffNum,
+				RecordedQuantity: floatToNumeric(recorded),
+				ActualQuantity:   floatToNumeric(actual),
+				Difference:       floatToNumeric(0.0),
 				WasteValue:       0,
 			})
 			continue
 		}
 
-		// c & e. Apply stock adjustment and get waste value
 		var wasteValue int64
 		if diff < 0 {
-			// Loss: FIFO deduct returns the value removed (= waste_value)
+			// Loss: FIFO deduct
 			deducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, math.Abs(diff))
 			if err != nil {
 				respondError(w, http.StatusInternalServerError,
@@ -263,34 +424,36 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			}
 			wasteValue = deducted
 		} else {
-			// Surplus: add stock with zero value (cost unknown)
-			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, diff, it.UnitIndex, 0, today); err != nil {
+			// Surplus: add stock at latest known price (prorated for qty)
+			surplusValue := latestItemValue(ctx, qtx, itemID, it.UnitIndex, diff)
+			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, diff, it.UnitIndex, surplusValue, today); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok opname")
 				return
 			}
 			wasteValue = 0
+			// Credit the inventory asset account for the value added
+			if surplusValue > 0 && wh.InventoryAccountID.Valid {
+				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, surplusValue); err != nil {
+					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
+					return
+				}
+			}
 		}
 
-		// d. Insert stock_opname_item
-		var recNum, actNum, diffNum pgtype.Numeric
-		_ = recNum.Scan(recorded)
-		_ = actNum.Scan(actual)
-		_ = diffNum.Scan(diff)
 		if err := qtx.InsertStockOpnameItem(ctx, &db.InsertStockOpnameItemParams{
 			OpnameID:         opname.ID,
 			ItemID:           pgtype.UUID{Bytes: itemID, Valid: true},
 			UnitIndex:        it.UnitIndex,
 			UnitName:         it.UnitName,
-			RecordedQuantity: recNum,
-			ActualQuantity:   actNum,
-			Difference:       diffNum,
+			RecordedQuantity: floatToNumeric(recorded),
+			ActualQuantity:   floatToNumeric(actual),
+			Difference:       floatToNumeric(diff),
 			WasteValue:       wasteValue,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan item opname")
 			return
 		}
 
-		// f. Insert stock history
 		if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 			ItemID:         itemID,
 			WarehouseID:    warehouseID,
@@ -307,16 +470,13 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// g. Update accounts if there was waste
 		if wasteValue > 0 {
-			// Expense account increases (waste incurred)
 			if wasteAccountID.Valid {
 				if err := service.UpdateBalance(ctx, qtx, wasteAccountID.Bytes, wasteValue); err != nil {
 					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun waste")
 					return
 				}
 			}
-			// Inventory asset account decreases
 			if wh.InventoryAccountID.Valid {
 				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, -wasteValue); err != nil {
 					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
@@ -326,13 +486,16 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Commit
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
 	}
 
-	// 4. Log activity after commit
+	// Delete the draft now that the opname is finalised
+	if body.DraftID != "" {
+		_, _ = h.pool.Exec(ctx, `DELETE FROM stock_opname_drafts WHERE id = $1`, body.DraftID)
+	}
+
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
 		UserID:      userID,
 		Username:    username,
@@ -343,4 +506,15 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 
 	respondJSON(w, http.StatusCreated, opname)
+}
+
+// latestItemValue returns the total IDR value to assign to `qty` surplus units
+// using the most recent purchase price for the item+unitIndex. Returns 0 if unknown.
+func latestItemValue(ctx context.Context, qtx *db.Queries, itemID uuid.UUID, unitIndex int32, qty float64) int64 {
+	row, err := qtx.GetItemLastPrice(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
+	if err != nil {
+		return 0
+	}
+	// price is per unit at the recorded unit_index; use it directly
+	return int64(math.Round(float64(row.Price) * qty))
 }

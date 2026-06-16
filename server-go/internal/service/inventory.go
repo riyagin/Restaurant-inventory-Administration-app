@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,15 @@ import (
 
 	"inventory-app/server-go/internal/db"
 )
+
+// floatToNumeric converts a float64 to pgtype.Numeric.
+// pgtype.Numeric.Scan only accepts string/[]byte in pgx/v5; passing a float64
+// silently produces an invalid (NULL) Numeric. This helper avoids that pitfall.
+func floatToNumeric(f float64) pgtype.Numeric {
+	var n pgtype.Numeric
+	_ = n.Scan(strconv.FormatFloat(f, 'f', 10, 64))
+	return n
+}
 
 // StockHistoryParams holds all fields for an InsertStockHistory call.
 type StockHistoryParams struct {
@@ -41,14 +51,20 @@ func FIFODeduct(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.U
 	var valueDeducted int64
 	remaining := qty
 
+	const epsilon = 0.001
 	for _, lot := range lots {
 		if remaining <= 0 {
 			break
 		}
 		lotQty := pgNumericToFloat(lot.Quantity)
-		if lotQty <= remaining {
+		newQty := lotQty - remaining
+		if newQty < epsilon {
+			// Consume the entire lot (handles exact-match and near-zero remainder)
 			valueDeducted += lot.Value
 			remaining -= lotQty
+			if remaining < 0 {
+				remaining = 0
+			}
 			if err := qtx.DeleteInventoryLot(ctx, lot.ID); err != nil {
 				return 0, fmt.Errorf("delete lot: %w", err)
 			}
@@ -56,13 +72,10 @@ func FIFODeduct(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.U
 			proportion := remaining / lotQty
 			deductedValue := int64(float64(lot.Value) * proportion)
 			valueDeducted += deductedValue
-			newQty := lotQty - remaining
 			remaining = 0
-			var newQtyNumeric pgtype.Numeric
-			_ = newQtyNumeric.Scan(newQty)
 			if err := qtx.UpdateInventoryLotQuantity(ctx, &db.UpdateInventoryLotQuantityParams{
 				ID:       lot.ID,
-				Quantity: newQtyNumeric,
+				Quantity: floatToNumeric(newQty),
 				Value:    lot.Value - deductedValue,
 			}); err != nil {
 				return 0, fmt.Errorf("update lot: %w", err)
@@ -78,12 +91,10 @@ func FIFODeduct(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.U
 
 // FIFOAdd creates a new inventory lot. Must be called with a transaction-scoped *db.Queries.
 func FIFOAdd(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.UUID, qty float64, unitIndex int32, value int64, date time.Time) error {
-	var qtyNumeric pgtype.Numeric
-	_ = qtyNumeric.Scan(qty)
 	_, err := qtx.CreateInventoryLot(ctx, &db.CreateInventoryLotParams{
 		ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
 		WarehouseID: pgtype.UUID{Bytes: warehouseID, Valid: true},
-		Quantity:    qtyNumeric,
+		Quantity:    floatToNumeric(qty),
 		UnitIndex:   unitIndex,
 		Value:       value,
 		Date:        pgtype.Date{Time: date, Valid: true},
@@ -93,12 +104,10 @@ func FIFOAdd(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.UUID
 
 // InsertStockHistory writes one stock_history row inside a transaction.
 func InsertStockHistory(ctx context.Context, qtx *db.Queries, p StockHistoryParams) error {
-	var qtyChangeNumeric pgtype.Numeric
-	_ = qtyChangeNumeric.Scan(p.QuantityChange)
 	_, err := qtx.InsertStockHistory(ctx, &db.InsertStockHistoryParams{
 		ItemID:         pgtype.UUID{Bytes: p.ItemID, Valid: true},
 		WarehouseID:    pgtype.UUID{Bytes: p.WarehouseID, Valid: true},
-		QuantityChange: qtyChangeNumeric,
+		QuantityChange: floatToNumeric(p.QuantityChange),
 		UnitName:       p.UnitName,
 		Vendor:         pgtype.Text{String: p.Vendor, Valid: p.Vendor != ""},
 		Type:           p.Type,

@@ -264,12 +264,9 @@ func (h *InventoryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		date = parsed
 	}
 
-	var newQtyNumeric pgtype.Numeric
-	_ = newQtyNumeric.Scan(body.Quantity)
-
 	if err := qtx.UpdateInventoryLot(ctx, &db.UpdateInventoryLotParams{
 		ID:       pgtype.UUID{Bytes: id, Valid: true},
-		Quantity: newQtyNumeric,
+		Quantity: floatToNumeric(body.Quantity),
 		Value:    body.Value,
 		Date:     pgtype.Date{Time: date, Valid: true},
 	}); err != nil {

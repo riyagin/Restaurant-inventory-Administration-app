@@ -249,13 +249,10 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(it.Quantity)
-
 		if err := qtx.InsertDispatchItem(ctx, &db.InsertDispatchItemParams{
 			DispatchID: pgtype.UUID{Bytes: dispatchID, Valid: true},
 			ItemID:     pgtype.UUID{Bytes: itemID, Valid: true},
-			Quantity:   qtyNumeric,
+			Quantity:   floatToNumeric(it.Quantity),
 			UnitIndex:  it.UnitIndex,
 			UnitName:   it.UnitName,
 		}); err != nil {
@@ -340,8 +337,6 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, res := range results {
-		var qtyNumeric pgtype.Numeric
-		_ = qtyNumeric.Scan(res.quantity)
 		unitPrice := int64(0)
 		if res.quantity > 0 {
 			unitPrice = int64(float64(res.valueDeducted) / res.quantity)
@@ -349,7 +344,7 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID: invoice.ID,
 			ItemID:    pgtype.UUID{Bytes: res.itemID, Valid: true},
-			Quantity:  qtyNumeric,
+			Quantity:  floatToNumeric(res.quantity),
 			UnitIndex: pgtype.Int4{Int32: res.unitIndex, Valid: true},
 			Price:     unitPrice,
 		}); err != nil {

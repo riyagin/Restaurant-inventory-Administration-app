@@ -84,9 +84,37 @@ func Authenticate(queries *db.Queries, jwtSecret string) func(http.Handler) http
 	}
 }
 
+// RequireAdmin allows admin and manager (manager = admin permissions +
+// approval responsibilities). Kept named "RequireAdmin" for backward
+// compatibility with existing route wiring.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if RoleFromCtx(r.Context()) != "admin" {
+		role := RoleFromCtx(r.Context())
+		if role != "admin" && role != "manager" {
+			writeAuthError(w, http.StatusForbidden, "akses ditolak")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAdminOrManager allows admin or manager. Semantically identical to
+// RequireAdmin today, exposed under a clearer name for HR routes.
+func RequireAdminOrManager(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := RoleFromCtx(r.Context())
+		if role != "admin" && role != "manager" {
+			writeAuthError(w, http.StatusForbidden, "akses ditolak")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireManager allows only the manager role (approval-only actions).
+func RequireManager(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RoleFromCtx(r.Context()) != "manager" {
 			writeAuthError(w, http.StatusForbidden, "akses ditolak")
 			return
 		}

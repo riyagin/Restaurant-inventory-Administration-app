@@ -145,6 +145,7 @@ export default function Users() {
               <label>Peran</label>
               <select value={createForm.role} onChange={e => setCreateForm(f => ({ ...f, role: e.target.value }))}>
                 <option value="staff">Staff</option>
+                <option value="manager">Manajer</option>
                 <option value="admin">Admin</option>
               </select>
             </div>
@@ -179,6 +180,7 @@ export default function Users() {
               <label>Peran</label>
               <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}>
                 <option value="staff">Staff</option>
+                <option value="manager">Manajer</option>
                 <option value="admin">Admin</option>
               </select>
             </div>

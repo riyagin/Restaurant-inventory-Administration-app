@@ -47,8 +47,8 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "username, password, dan role wajib diisi")
 		return
 	}
-	if body.Role != "admin" && body.Role != "staff" {
-		respondError(w, http.StatusBadRequest, "role harus admin atau staff")
+	if body.Role != "admin" && body.Role != "manager" && body.Role != "staff" {
+		respondError(w, http.StatusBadRequest, "role harus admin, manager, atau staff")
 		return
 	}
 
@@ -92,8 +92,8 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "username dan role wajib diisi")
 		return
 	}
-	if body.Role != "admin" && body.Role != "staff" {
-		respondError(w, http.StatusBadRequest, "role harus admin atau staff")
+	if body.Role != "admin" && body.Role != "manager" && body.Role != "staff" {
+		respondError(w, http.StatusBadRequest, "role harus admin, manager, atau staff")
 		return
 	}
 

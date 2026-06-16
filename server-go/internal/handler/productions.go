@@ -200,15 +200,11 @@ func (h *ProductionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Insert production record
-	var batchesNumeric, outputQtyNumeric pgtype.Numeric
-	_ = batchesNumeric.Scan(body.Batches)
-	_ = outputQtyNumeric.Scan(outputQty)
-
 	prod, err := qtx.InsertProduction(ctx, &db.InsertProductionParams{
 		RecipeID:       recipe.ID,
 		WarehouseID:    pgtype.UUID{Bytes: warehouseID, Valid: true},
-		Batches:        batchesNumeric,
-		OutputQuantity: outputQtyNumeric,
+		Batches:        floatToNumeric(body.Batches),
+		OutputQuantity: floatToNumeric(outputQty),
 		Date:           pgtype.Date{Time: productionDate, Valid: true},
 		Notes:          pgtype.Text{String: body.Notes, Valid: body.Notes != ""},
 		CreatedBy:      pgtype.UUID{Bytes: userID, Valid: userID != uuid.Nil},
