@@ -38,3 +38,6 @@ Thumbs.db
 
 # Local-only assets (per-developer)
 client/public/favicon.local.*
+
+# Production config — contains server IP, must not be overwritten by git pull
+client/public/config.json
