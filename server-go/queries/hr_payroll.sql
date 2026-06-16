@@ -65,27 +65,31 @@ INSERT INTO payroll_lines (
     base_salary, daily_rate, overtime_days, public_holiday_days,
     overtime_amount, public_holiday_amount, allowance_total, bonus_total,
     component_deduction_total, kasbon_deduction, unpaid_leave_days,
-    unpaid_leave_deduction, gross_pay, net_pay, performance_score
+    unpaid_leave_deduction, gross_pay, net_pay, performance_score,
+    overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3,
     $4, $5, $6, $7,
     $8, $9, $10, $11,
     $12, $13, $14,
-    $15, $16, $17, $18
+    $15, $16, $17, $18,
+    $19, $20, $21
 )
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note;
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
 
 -- name: GetPayrollLineByID :one
 SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
        overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
        allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note
+       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 FROM payroll_lines
 WHERE id = $1;
 
@@ -94,7 +98,8 @@ SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily
        overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
        allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note
+       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 FROM payroll_lines
 WHERE payroll_period_id = $1 AND employee_id = $2;
 
@@ -105,6 +110,7 @@ SELECT
     l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay,
     l.performance_score, l.reviewed, l.reviewed_by, l.reviewed_at, l.review_note,
+    l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     e.full_name AS employee_name, e.employee_code,
     e.position_id, pos.name AS position_name,
     e.branch_id, b.name AS branch_name
@@ -113,14 +119,14 @@ JOIN employees e ON e.id = l.employee_id
 LEFT JOIN positions pos ON pos.id = e.position_id
 LEFT JOIN branches b ON b.id = e.branch_id
 WHERE l.payroll_period_id = $1
-  AND ($2::text = '' OR lower(e.full_name) LIKE '%' || lower($2) || '%'
-       OR lower(e.employee_code) LIKE '%' || lower($2) || '%')
-  AND ($3::uuid IS NULL OR e.position_id = $3)
-  AND ($4::uuid IS NULL OR e.branch_id = $4)
+  AND (sqlc.arg('q')::text = '' OR lower(e.full_name) LIKE '%' || lower(sqlc.arg('q')) || '%'
+       OR lower(e.employee_code) LIKE '%' || lower(sqlc.arg('q')) || '%')
+  AND (sqlc.narg('position_id')::uuid IS NULL OR e.position_id = sqlc.narg('position_id'))
+  AND (sqlc.narg('branch_id')::uuid IS NULL OR e.branch_id = sqlc.narg('branch_id'))
 ORDER BY
-    CASE WHEN $5::text = 'net_pay' AND $6::text = 'asc'  THEN l.net_pay END ASC,
-    CASE WHEN $5::text = 'net_pay' AND $6::text = 'desc' THEN l.net_pay END DESC,
-    CASE WHEN $5::text = 'name'    AND $6::text = 'desc' THEN e.full_name END DESC,
+    CASE WHEN sqlc.arg('sort')::text = 'net_pay' AND sqlc.arg('order')::text = 'asc'  THEN l.net_pay END ASC,
+    CASE WHEN sqlc.arg('sort')::text = 'net_pay' AND sqlc.arg('order')::text = 'desc' THEN l.net_pay END DESC,
+    CASE WHEN sqlc.arg('sort')::text = 'name'    AND sqlc.arg('order')::text = 'desc' THEN e.full_name END DESC,
     e.full_name ASC;
 
 -- name: CountUnreviewedLines :one
@@ -140,13 +146,15 @@ UPDATE payroll_lines
 SET overtime_days = $1, public_holiday_days = $2,
     overtime_amount = $3, public_holiday_amount = $4,
     bonus_total = $5, gross_pay = $6, net_pay = $7,
-    reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9
-WHERE id = $10
+    reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9,
+    overtime_hours = $10, overtime_hourly_amount = $11, allowance_total = $12
+WHERE id = $13
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note;
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
 
 -- name: UnreviewPayrollLine :one
 UPDATE payroll_lines
@@ -156,7 +164,8 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note;
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
 
 -- name: DeletePayrollLine :exec
 DELETE FROM payroll_lines WHERE id = $1;
@@ -220,6 +229,7 @@ SELECT
     l.overtime_days, l.public_holiday_days, l.overtime_amount, l.public_holiday_amount,
     l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
+    l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     e.full_name AS employee_name, e.employee_code, e.join_date,
     pos.name AS position_name,
     b.name   AS branch_name,

@@ -82,11 +82,13 @@ func NumericFromFloat(v float64) pgtype.Numeric {
 // ── Pure calculation core (DB-free, unit-tested) ─────────────────────────────
 
 // CalcLineInput carries every value needed to compute a payroll line's derived
-// amounts. Day counts and multipliers are float64; money is int64 whole rupiah.
+// amounts. Day/hour counts and multipliers are float64; money is int64 whole rupiah.
 type CalcLineInput struct {
 	BaseSalary              int64
 	DailyRate               int64
 	OvertimeDays            float64
+	OvertimeHours           float64
+	OvertimeHourlyRate      int64
 	PublicHolidayDays       float64
 	OvertimeMultiplier      float64
 	HolidayMultiplier       float64
@@ -99,31 +101,57 @@ type CalcLineInput struct {
 
 // CalcLineResult holds the derived amounts for a payroll line.
 type CalcLineResult struct {
-	OvertimeAmount      int64
-	PublicHolidayAmount int64
-	GrossPay            int64
-	NetPay              int64
+	OvertimeAmount       int64
+	OvertimeHourlyAmount int64
+	PublicHolidayAmount  int64
+	GrossPay             int64
+	NetPay               int64
 }
 
 // CalcLine applies the spec formulas with half-up rounding on the multiplier math:
 //
-//	overtime_amount       = round(overtime_days × daily_rate × overtime_multiplier)
-//	public_holiday_amount = round(public_holiday_days × daily_rate × holiday_multiplier)
-//	gross_pay = base_salary + allowance_total + bonus_total + overtime_amount + public_holiday_amount
+//	overtime_amount        = round(overtime_days × daily_rate × overtime_multiplier)
+//	overtime_hourly_amount = round(overtime_hours × overtime_hourly_rate × overtime_multiplier)
+//	public_holiday_amount  = round(public_holiday_days × daily_rate × holiday_multiplier)
+//	gross_pay = base_salary + allowance_total + bonus_total + overtime_amount
+//	            + overtime_hourly_amount + public_holiday_amount
 //	net_pay   = gross_pay − component_deduction_total − kasbon_deduction − unpaid_leave_deduction
+//
+// Hourly overtime is tracked alongside the day-based overtime_days field (not a
+// replacement for it) so both can be logged when applicable, e.g. a handful of
+// overtime hours on top of full overtime days in the same period.
 func CalcLine(in CalcLineInput) CalcLineResult {
 	overtime := roundHalfUp(in.OvertimeDays * float64(in.DailyRate) * in.OvertimeMultiplier)
+	overtimeHourly := roundHalfUp(in.OvertimeHours * float64(in.OvertimeHourlyRate) * in.OvertimeMultiplier)
 	holiday := roundHalfUp(in.PublicHolidayDays * float64(in.DailyRate) * in.HolidayMultiplier)
 
-	gross := in.BaseSalary + in.AllowanceTotal + in.BonusTotal + overtime + holiday
+	gross := in.BaseSalary + in.AllowanceTotal + in.BonusTotal + overtime + overtimeHourly + holiday
 	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction
 
 	return CalcLineResult{
-		OvertimeAmount:      overtime,
-		PublicHolidayAmount: holiday,
-		GrossPay:            gross,
-		NetPay:              net,
+		OvertimeAmount:       overtime,
+		OvertimeHourlyAmount: overtimeHourly,
+		PublicHolidayAmount:  holiday,
+		GrossPay:             gross,
+		NetPay:               net,
 	}
+}
+
+// StandardDailyHours returns the standard work hours per day implied by a branch's
+// work schedule (work_end − work_start), falling back to 8 when non-positive.
+func StandardDailyHours(sched Schedule) float64 {
+	minutes := sched.WorkEndMinutes - sched.WorkStartMinutes
+	if minutes <= 0 {
+		return 8
+	}
+	return float64(minutes) / 60
+}
+
+// HourlyRateFromDaily derives a whole-rupiah hourly rate from a daily rate and the
+// branch's standard work hours, used to snapshot overtime_hourly_rate at generation
+// time (kept stable even if the schedule changes afterwards).
+func HourlyRateFromDaily(dailyRate int64, sched Schedule) int64 {
+	return roundHalfUp(float64(dailyRate) / StandardDailyHours(sched))
 }
 
 // AllLinesReviewed reports whether every line in a period has been reviewed. Used by
@@ -182,6 +210,24 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 
 	res := &GenerateLinesResult{SkippedNames: []string{}}
 
+	// Cache per-branch schedules to avoid repeated lookups (mirrors ReconcileAbsent).
+	schedCache := map[string]Schedule{}
+	getSched := func(branchID pgtype.UUID) Schedule {
+		key := string(branchID.Bytes[:])
+		if s, ok := schedCache[key]; ok {
+			return s
+		}
+		ws, err := qtx.GetWorkScheduleByBranch(ctx, branchID)
+		var s Schedule
+		if err != nil || ws == nil {
+			s = DefaultSchedule()
+		} else {
+			s = ScheduleFromRow(ws)
+		}
+		schedCache[key] = s
+		return s
+	}
+
 	for _, emp := range employees {
 		ws, err := GetCurrentWage(ctx, qtx, emp.ID, end)
 		if err != nil {
@@ -191,6 +237,7 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			res.SkippedNames = append(res.SkippedNames, emp.FullName)
 			continue
 		}
+		hourlyRate := HourlyRateFromDaily(ws.DailyRate, getSched(emp.BranchID))
 
 		// Snapshot fixed allowance/bonus totals and fixed deduction total from the
 		// wage structure's components.
@@ -257,6 +304,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			BaseSalary:              ws.BaseSalary,
 			DailyRate:               ws.DailyRate,
 			OvertimeDays:            0, // entered manually during review
+			OvertimeHours:           0, // entered manually during review
+			OvertimeHourlyRate:      hourlyRate,
 			PublicHolidayDays:       float64(holidayCount),
 			OvertimeMultiplier:      mult.Overtime,
 			HolidayMultiplier:       mult.Holiday,
@@ -286,6 +335,9 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			GrossPay:                calc.GrossPay,
 			NetPay:                  calc.NetPay,
 			PerformanceScore:        perfScore,
+			OvertimeHours:           NumericFromFloat(0),
+			OvertimeHourlyRate:      hourlyRate,
+			OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 		})
 		if err != nil {
 			return nil, err
@@ -313,19 +365,24 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 // ReviewLineInput carries the reviewer's adjustments for a single line.
 type ReviewLineInput struct {
 	OvertimeDays      float64
+	OvertimeHours     float64
 	PublicHolidayDays float64
-	// AdjustedBonusTotal is the recomputed bonus total after the reviewer edits
-	// variable bonus/component amounts. The handler computes it from the adjusted
-	// component amounts it persists.
-	AdjustedBonusTotal int64
-	ReviewNote         pgtype.Text
-	ReviewedBy         pgtype.UUID
+	// AdjustedBonusTotal/AdjustedAllowanceTotal are the recomputed totals after the
+	// reviewer edits variable bonus/allowance component amounts. The handler computes
+	// them from the adjusted component amounts it persists.
+	AdjustedBonusTotal     int64
+	AdjustedAllowanceTotal int64
+	ReviewNote             pgtype.Text
+	ReviewedBy             pgtype.UUID
 }
 
-// ReviewLine recomputes a line's amounts from the reviewer's adjusted overtime/holiday
-// days and bonus total, persists them, and marks the line reviewed. Must run inside a
-// transaction. The caller is responsible for persisting any per-component amount edits
-// (and computing AdjustedBonusTotal from them) before/after calling this.
+// ReviewLine recomputes a line's amounts from the reviewer's adjusted overtime
+// days/hours, holiday days, bonus total and allowance total, persists them, and marks
+// the line reviewed. Must run inside a transaction. The caller is responsible for
+// persisting any per-component amount edits (and computing AdjustedBonusTotal /
+// AdjustedAllowanceTotal from them) before/after calling this. The hourly overtime
+// rate stays at its generation-time snapshot (line.OvertimeHourlyRate) — only the
+// hours figure is reviewer-editable.
 func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in ReviewLineInput) (*db.PayrollLine, error) {
 	mult, err := LoadMultipliers(ctx, qtx)
 	if err != nil {
@@ -336,10 +393,12 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 		BaseSalary:              line.BaseSalary,
 		DailyRate:               line.DailyRate,
 		OvertimeDays:            in.OvertimeDays,
+		OvertimeHours:           in.OvertimeHours,
+		OvertimeHourlyRate:      line.OvertimeHourlyRate,
 		PublicHolidayDays:       in.PublicHolidayDays,
 		OvertimeMultiplier:      mult.Overtime,
 		HolidayMultiplier:       mult.Holiday,
-		AllowanceTotal:          line.AllowanceTotal,
+		AllowanceTotal:          in.AdjustedAllowanceTotal,
 		BonusTotal:              in.AdjustedBonusTotal,
 		ComponentDeductionTotal: line.ComponentDeductionTotal,
 		KasbonDeduction:         line.KasbonDeduction,
@@ -347,15 +406,18 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 	})
 
 	return qtx.UpdatePayrollLineReview(ctx, &db.UpdatePayrollLineReviewParams{
-		OvertimeDays:        NumericFromFloat(in.OvertimeDays),
-		PublicHolidayDays:   NumericFromFloat(in.PublicHolidayDays),
-		OvertimeAmount:      calc.OvertimeAmount,
-		PublicHolidayAmount: calc.PublicHolidayAmount,
-		BonusTotal:          in.AdjustedBonusTotal,
-		GrossPay:            calc.GrossPay,
-		NetPay:              calc.NetPay,
-		ReviewedBy:          in.ReviewedBy,
-		ReviewNote:          in.ReviewNote,
+		OvertimeDays:         NumericFromFloat(in.OvertimeDays),
+		PublicHolidayDays:    NumericFromFloat(in.PublicHolidayDays),
+		OvertimeAmount:       calc.OvertimeAmount,
+		PublicHolidayAmount:  calc.PublicHolidayAmount,
+		BonusTotal:           in.AdjustedBonusTotal,
+		AllowanceTotal:       in.AdjustedAllowanceTotal,
+		GrossPay:             calc.GrossPay,
+		NetPay:               calc.NetPay,
+		OvertimeHours:        NumericFromFloat(in.OvertimeHours),
+		OvertimeHourlyAmount: calc.OvertimeHourlyAmount,
+		ReviewedBy:           in.ReviewedBy,
+		ReviewNote:           in.ReviewNote,
 		ID:                  line.ID,
 	})
 }

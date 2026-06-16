@@ -262,6 +262,7 @@ func main() {
 
 		// Inventory — all authenticated
 		r.Get("/api/inventory", inventoryHandler.List)
+		r.Get("/api/inventory/count", inventoryHandler.Count)
 		r.Get("/api/inventory/{id}", inventoryHandler.Get)
 		r.Post("/api/inventory", inventoryHandler.Create)
 		r.Put("/api/inventory/{id}", inventoryHandler.Update)
@@ -459,6 +460,8 @@ func main() {
 			r.Use(appmiddleware.RequireManager)
 			r.Post("/api/hr/leave-requests/{id}/approve", leaveHandler.ApproveLeaveRequest)
 			r.Post("/api/hr/leave-requests/{id}/reject", leaveHandler.RejectLeaveRequest)
+			r.Post("/api/hr/leave-requests/bulk-approve", leaveHandler.BulkApproveLeaveRequests)
+			r.Post("/api/hr/leave-requests/bulk-reject", leaveHandler.BulkRejectLeaveRequests)
 		})
 
 		// HR Kasbon (cash advance) management.

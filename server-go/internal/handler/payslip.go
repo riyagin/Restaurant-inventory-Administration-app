@@ -128,6 +128,12 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 			Amount: line.OvertimeAmount,
 		})
 	}
+	if line.OvertimeHourlyAmount != 0 {
+		earnings = append(earnings, service.PayslipLineItem{
+			Label:  fmt.Sprintf("Lembur (%s jam)", trimDays(line.OvertimeHours)),
+			Amount: line.OvertimeHourlyAmount,
+		})
+	}
 	if line.PublicHolidayAmount != 0 {
 		earnings = append(earnings, service.PayslipLineItem{
 			Label:  fmt.Sprintf("Hari Libur (%s hari)", trimDays(line.PublicHolidayDays)),

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   getLeaveRequests, createLeaveRequest, approveLeaveRequest, rejectLeaveRequest,
   cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches, getLeaveBalance,
+  bulkApproveLeaveRequests, bulkRejectLeaveRequests,
 } from '../../api';
 
 const STATUS_LABELS = {
@@ -174,6 +175,67 @@ function DecisionModal({ action, request, onClose, onDone }) {
   );
 }
 
+// ── Bulk decision modal (approve / reject multiple at once with one note) ────
+function BulkDecisionModal({ action, ids, onClose, onDone }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [results, setResults] = useState(null);
+
+  const titles = { approve: 'Setujui Pengajuan Terpilih', reject: 'Tolak Pengajuan Terpilih' };
+  const fns = { approve: bulkApproveLeaveRequests, reject: bulkRejectLeaveRequests };
+
+  const run = async () => {
+    setBusy(true); setError('');
+    try {
+      const r = await fns[action](ids, note);
+      setResults(r.data?.results || []);
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Gagal memproses.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const successCount = results ? results.filter(res => res.success).length : 0;
+  const failCount = results ? results.filter(res => !res.success).length : 0;
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div className="card" style={modal} onClick={e => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>{titles[action]}</h3>
+        <p style={{ fontSize: '0.9rem', color: '#445' }}>{ids.length} pengajuan dipilih.</p>
+        {error && <div style={errBox}>{error}</div>}
+
+        {!results && (<>
+          <label style={lbl}>Catatan {action === 'reject' ? '(disarankan)' : '(opsional)'}</label>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+            <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Tutup</button>
+            <button className="btn btn-primary" onClick={run} disabled={busy}>{busy ? 'Memproses…' : titles[action]}</button>
+          </div>
+        </>)}
+
+        {results && (<>
+          <div style={{ fontSize: '0.88rem', margin: '0.5rem 0' }}>
+            <strong>{successCount}</strong> berhasil{failCount > 0 && <>, <strong>{failCount}</strong> gagal</>}.
+          </div>
+          {failCount > 0 && (
+            <ul style={{ fontSize: '0.82rem', color: '#c5221f', paddingLeft: '1.1rem', margin: '0 0 0.5rem' }}>
+              {results.filter(res => !res.success).map(res => (
+                <li key={res.id}>{res.error}</li>
+              ))}
+            </ul>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+            <button className="btn btn-primary" onClick={() => onDone()}>Tutup</button>
+          </div>
+        </>)}
+      </div>
+    </div>
+  );
+}
+
 export default function LeaveRequests() {
   const [tab, setTab] = useState('pending');
   const [rows, setRows] = useState([]);
@@ -182,6 +244,8 @@ export default function LeaveRequests() {
   const [filters, setFilters] = useState({ status: '', branch_id: '', year: '' });
   const [showCreate, setShowCreate] = useState(false);
   const [decision, setDecision] = useState(null); // { action, request }
+  const [bulkDecision, setBulkDecision] = useState(null); // { action, ids }
+  const [selected, setSelected] = useState(new Set());
   const manager = isManager();
 
   useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => setBranches([])); }, []);
@@ -200,7 +264,25 @@ export default function LeaveRequests() {
 
   useEffect(() => { load(); }, [load]);
 
+  const switchTab = (t) => { setTab(t); setSelected(new Set()); };
+
   const onDecision = () => { setDecision(null); load(); };
+  const onBulkDecision = () => { setBulkDecision(null); setSelected(new Set()); load(); };
+
+  const pendingRows = rows.filter(rq => rq.status === 'pending');
+  const allPendingSelected = pendingRows.length > 0 && pendingRows.every(rq => selected.has(rq.id));
+
+  const toggleSelected = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelected(allPendingSelected ? new Set() : new Set(pendingRows.map(rq => rq.id)));
+  };
 
   return (
     <div>
@@ -210,8 +292,8 @@ export default function LeaveRequests() {
       </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid #e3e6ec' }}>
-        <TabBtn active={tab === 'pending'} onClick={() => setTab('pending')}>Menunggu Persetujuan</TabBtn>
-        <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>Semua Pengajuan</TabBtn>
+        <TabBtn active={tab === 'pending'} onClick={() => switchTab('pending')}>Menunggu Persetujuan</TabBtn>
+        <TabBtn active={tab === 'all'} onClick={() => switchTab('all')}>Semua Pengajuan</TabBtn>
       </div>
 
       {tab === 'all' && (
@@ -228,19 +310,37 @@ export default function LeaveRequests() {
         </div>
       )}
 
+      {tab === 'pending' && manager && selected.size > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+          <span style={{ fontSize: '0.85rem', color: '#445' }}>{selected.size} dipilih</span>
+          <button className="btn btn-sm btn-primary" onClick={() => setBulkDecision({ action: 'approve', ids: [...selected] })}>Setujui Terpilih</button>
+          <button className="btn btn-sm btn-secondary" onClick={() => setBulkDecision({ action: 'reject', ids: [...selected] })}>Tolak Terpilih</button>
+        </div>
+      )}
+
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%' }}>
           <thead>
             <tr>
+              {tab === 'pending' && manager && (
+                <th style={{ width: 36, textAlign: 'center' }}>
+                  <input type="checkbox" checked={allPendingSelected} onChange={toggleSelectAll} disabled={pendingRows.length === 0} />
+                </th>
+              )}
               <th>Karyawan</th><th>Jenis</th><th>Periode</th>
               <th style={{ textAlign: 'center', width: 60 }}>Hari</th><th style={{ width: 100 }}>Status</th><th style={{ width: 1 }}>Aksi</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6} style={{ textAlign: 'center', color: '#888', padding: '1.5rem' }}>Memuat…</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', color: '#888', padding: '1.5rem' }}>Tidak ada pengajuan.</td></tr>}
+            {loading && <tr><td colSpan={7} style={{ textAlign: 'center', color: '#888', padding: '1.5rem' }}>Memuat…</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={7} style={{ textAlign: 'center', color: '#888', padding: '1.5rem' }}>Tidak ada pengajuan.</td></tr>}
             {!loading && rows.map(rq => (
               <tr key={rq.id}>
+                {tab === 'pending' && manager && (
+                  <td style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={selected.has(rq.id)} onChange={() => toggleSelected(rq.id)} />
+                  </td>
+                )}
                 <td>{rq.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{rq.employee_code}</div></td>
                 <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}</td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{fmtDate(rq.start_date)} – {fmtDate(rq.end_date)}</td>
@@ -265,6 +365,7 @@ export default function LeaveRequests() {
 
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
       {decision && <DecisionModal action={decision.action} request={decision.request} onClose={() => setDecision(null)} onDone={onDecision} />}
+      {bulkDecision && <BulkDecisionModal action={bulkDecision.action} ids={bulkDecision.ids} onClose={() => setBulkDecision(null)} onDone={onBulkDecision} />}
     </div>
   );
 }

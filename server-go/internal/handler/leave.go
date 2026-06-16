@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -429,61 +430,38 @@ type decisionBody struct {
 	Note string `json:"note"`
 }
 
-// ApproveLeaveRequest — POST /api/hr/leave-requests/:id/approve (manager only)
-func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	var body decisionBody
-	_ = parseBody(r, &body)
-
-	ctx := r.Context()
+// approveOne approves a single pending leave request inside its own transaction.
+// Shared by ApproveLeaveRequest (single) and BulkApproveLeaveRequests.
+func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.Text) (*service.ApproveResult, error) {
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
 	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
-			return
+			return nil, errLeaveRequestNotFound
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
-		return
+		return nil, err
 	}
 	if req.Status != "pending" {
-		respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat disetujui")
-		return
+		return nil, errLeaveRequestNotPending
 	}
 
 	leaveType, err := h.queries.GetLeaveTypeByID(ctx, req.LeaveTypeID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
-		return
+		return nil, err
 	}
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
-		return
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
 	deciderID := middleware.UserIDFromCtx(ctx)
-	note := pgtype.Text{}
-	if s := strings.TrimSpace(body.Note); s != "" {
-		note = pgtype.Text{String: s, Valid: true}
-	}
-
 	res, err := service.ApproveLeave(ctx, qtx, req, leaveType, pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}}, note)
 	if err != nil {
-		if errors.Is(err, service.ErrQuotaExceeded) {
-			respondError(w, http.StatusBadRequest, "kuota cuti tahunan tidak mencukupi untuk pengajuan ini")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal menyetujui pengajuan cuti")
-		return
+		return nil, err
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
@@ -496,7 +474,77 @@ func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Reques
 	})
 
 	if err := tx.Commit(ctx); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
+		return nil, err
+	}
+	return res, nil
+}
+
+// rejectOne rejects a single pending leave request.
+// Shared by RejectLeaveRequest (single) and BulkRejectLeaveRequests.
+func (h *LeaveHandler) rejectOne(ctx context.Context, id [16]byte, note pgtype.Text) (*db.LeaveRequest, error) {
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errLeaveRequestNotFound
+		}
+		return nil, err
+	}
+	if req.Status != "pending" {
+		return nil, errLeaveRequestNotPending
+	}
+
+	deciderID := middleware.UserIDFromCtx(ctx)
+	updated, err := h.queries.SetLeaveRequestStatus(ctx, &db.SetLeaveRequestStatusParams{
+		Status:       "rejected",
+		DecidedBy:    pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}},
+		DecisionNote: note,
+		ID:           pgID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      deciderID,
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "leave_request",
+		EntityID:    id,
+		Description: "Menolak pengajuan cuti",
+	})
+
+	return updated, nil
+}
+
+// ApproveLeaveRequest — POST /api/hr/leave-requests/:id/approve (manager only)
+func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	var body decisionBody
+	_ = parseBody(r, &body)
+
+	note := pgtype.Text{}
+	if s := strings.TrimSpace(body.Note); s != "" {
+		note = pgtype.Text{String: s, Valid: true}
+	}
+
+	res, err := h.approveOne(r.Context(), id, note)
+	if err != nil {
+		switch {
+		case errors.Is(err, errLeaveRequestNotFound):
+			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+		case errors.Is(err, errLeaveRequestNotPending):
+			respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat disetujui")
+		case errors.Is(err, service.ErrQuotaExceeded):
+			respondError(w, http.StatusBadRequest, "kuota cuti tahunan tidak mencukupi untuk pengajuan ini")
+		default:
+			respondError(w, http.StatusInternalServerError, "gagal menyetujui pengajuan cuti")
+		}
 		return
 	}
 
@@ -513,50 +561,115 @@ func (h *LeaveHandler) RejectLeaveRequest(w http.ResponseWriter, r *http.Request
 	var body decisionBody
 	_ = parseBody(r, &body)
 
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
-		return
-	}
-	if req.Status != "pending" {
-		respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat ditolak")
-		return
-	}
-
-	deciderID := middleware.UserIDFromCtx(ctx)
 	note := pgtype.Text{}
 	if s := strings.TrimSpace(body.Note); s != "" {
 		note = pgtype.Text{String: s, Valid: true}
 	}
 
-	updated, err := h.queries.SetLeaveRequestStatus(ctx, &db.SetLeaveRequestStatusParams{
-		Status:       "rejected",
-		DecidedBy:    pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}},
-		DecisionNote: note,
-		ID:           pgID,
-	})
+	updated, err := h.rejectOne(r.Context(), id, note)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menolak pengajuan cuti")
+		switch {
+		case errors.Is(err, errLeaveRequestNotFound):
+			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+		case errors.Is(err, errLeaveRequestNotPending):
+			respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat ditolak")
+		default:
+			respondError(w, http.StatusInternalServerError, "gagal menolak pengajuan cuti")
+		}
 		return
 	}
 
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      deciderID,
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "leave_request",
-		EntityID:    id,
-		Description: "Menolak pengajuan cuti",
-	})
-
 	respondJSON(w, http.StatusOK, updated)
+}
+
+type bulkDecisionBody struct {
+	IDs  []string `json:"ids"`
+	Note string   `json:"note"`
+}
+
+type bulkDecisionResult struct {
+	ID      string `json:"id"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// BulkApproveLeaveRequests — POST /api/hr/leave-requests/bulk-approve (manager only)
+// Approves each pending request independently (each in its own transaction) so one
+// failure (e.g. insufficient quota) doesn't block approval of the rest of the batch.
+func (h *LeaveHandler) BulkApproveLeaveRequests(w http.ResponseWriter, r *http.Request) {
+	var body bulkDecisionBody
+	if err := parseBody(r, &body); err != nil || len(body.IDs) == 0 {
+		respondError(w, http.StatusBadRequest, "daftar ID pengajuan cuti wajib diisi")
+		return
+	}
+
+	note := pgtype.Text{}
+	if s := strings.TrimSpace(body.Note); s != "" {
+		note = pgtype.Text{String: s, Valid: true}
+	}
+
+	ctx := r.Context()
+	results := make([]bulkDecisionResult, 0, len(body.IDs))
+	for _, idStr := range body.IDs {
+		id, err := parseUUID(idStr)
+		if err != nil {
+			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: "ID tidak valid"})
+			continue
+		}
+		if _, err := h.approveOne(ctx, id, note); err != nil {
+			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: bulkErrorMessage(err)})
+			continue
+		}
+		results = append(results, bulkDecisionResult{ID: idStr, Success: true})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// BulkRejectLeaveRequests — POST /api/hr/leave-requests/bulk-reject (manager only)
+func (h *LeaveHandler) BulkRejectLeaveRequests(w http.ResponseWriter, r *http.Request) {
+	var body bulkDecisionBody
+	if err := parseBody(r, &body); err != nil || len(body.IDs) == 0 {
+		respondError(w, http.StatusBadRequest, "daftar ID pengajuan cuti wajib diisi")
+		return
+	}
+
+	note := pgtype.Text{}
+	if s := strings.TrimSpace(body.Note); s != "" {
+		note = pgtype.Text{String: s, Valid: true}
+	}
+
+	ctx := r.Context()
+	results := make([]bulkDecisionResult, 0, len(body.IDs))
+	for _, idStr := range body.IDs {
+		id, err := parseUUID(idStr)
+		if err != nil {
+			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: "ID tidak valid"})
+			continue
+		}
+		if _, err := h.rejectOne(ctx, id, note); err != nil {
+			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: bulkErrorMessage(err)})
+			continue
+		}
+		results = append(results, bulkDecisionResult{ID: idStr, Success: true})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+var (
+	errLeaveRequestNotFound   = errors.New("pengajuan cuti tidak ditemukan")
+	errLeaveRequestNotPending = errors.New("pengajuan cuti sudah tidak menunggu persetujuan")
+)
+
+func bulkErrorMessage(err error) string {
+	if errors.Is(err, service.ErrQuotaExceeded) {
+		return "kuota cuti tahunan tidak mencukupi"
+	}
+	if errors.Is(err, errLeaveRequestNotFound) || errors.Is(err, errLeaveRequestNotPending) {
+		return err.Error()
+	}
+	return "gagal memproses pengajuan cuti"
 }
 
 // CancelLeaveRequest — POST /api/hr/leave-requests/:id/cancel (admin/manager)
@@ -720,7 +833,7 @@ func (h *LeaveHandler) ListEmployeeLeaveRequests(w http.ResponseWriter, r *http.
 
 type manpowerDay struct {
 	Date      string `json:"date"`
-	Status    string `json:"status"` // "hadir" | "cuti"
+	Status    string `json:"status"` // "hadir" | "cuti" | "pending"
 	LeaveType string `json:"leave_type,omitempty"`
 }
 
@@ -743,9 +856,10 @@ type manpowerPlanningResponse struct {
 	Branches  []manpowerBranch `json:"branches"`
 }
 
-// GetManpowerPlanning — GET /api/hr/manpower-planning?date=YYYY-MM-DD
-// Returns all active employees grouped by branch with their leave status for
-// the 7 days starting from the given date (default: today UTC).
+// GetManpowerPlanning — GET /api/hr/manpower-planning?date=YYYY-MM-DD&days=N
+// Returns all active employees grouped by branch with their leave status for N days
+// starting from the given date (default: today UTC). N is clamped to [7, 31]
+// (default 7) — a flexible view range from one week up to one month.
 func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -760,9 +874,23 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 	} else {
 		startDate = time.Now().UTC().Truncate(24 * time.Hour)
 	}
-	endDate := startDate.AddDate(0, 0, 6)
 
-	dates := make([]string, 7)
+	numDays := 7
+	if v := strings.TrimSpace(r.URL.Query().Get("days")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			numDays = n
+		}
+	}
+	if numDays < 7 {
+		numDays = 7
+	}
+	if numDays > 31 {
+		numDays = 31
+	}
+
+	endDate := startDate.AddDate(0, 0, numDays-1)
+
+	dates := make([]string, numDays)
 	for i := range dates {
 		dates[i] = startDate.AddDate(0, 0, i).Format("2006-01-02")
 	}
@@ -799,14 +927,14 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 2. Approved leave requests overlapping the date window.
+	// 2. Approved + pending leave requests overlapping the date window.
 	startPg := pgtype.Date{Time: startDate, Valid: true}
 	endPg := pgtype.Date{Time: endDate, Valid: true}
 	leaveRows, err := h.pool.Query(ctx, `
-		SELECT lr.employee_id::text, lr.start_date, lr.end_date, lt.name
+		SELECT lr.employee_id::text, lr.start_date, lr.end_date, lt.name, lr.status
 		FROM leave_requests lr
 		JOIN leave_types lt ON lt.id = lr.leave_type_id
-		WHERE lr.status = 'approved'
+		WHERE lr.status IN ('approved', 'pending')
 		  AND lr.start_date <= $2
 		  AND lr.end_date   >= $1
 	`, startPg, endPg)
@@ -816,20 +944,33 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 	}
 	defer leaveRows.Close()
 
-	// Build lookup: employeeID → date string → leave type name.
-	leaveLookup := map[string]map[string]string{}
+	// Build lookup: employeeID → date string → {leave type name, status}.
+	// Approved requests take priority over pending ones on the same date.
+	type leaveEntry struct {
+		leaveType string
+		status    string // "cuti" | "pending"
+	}
+	leaveLookup := map[string]map[string]leaveEntry{}
 	for leaveRows.Next() {
-		var empID, leaveTypeName string
+		var empID, leaveTypeName, status string
 		var sd, ed pgtype.Date
-		if err := leaveRows.Scan(&empID, &sd, &ed, &leaveTypeName); err != nil {
+		if err := leaveRows.Scan(&empID, &sd, &ed, &leaveTypeName, &status); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data cuti")
 			return
 		}
+		entryStatus := "pending"
+		if status == "approved" {
+			entryStatus = "cuti"
+		}
 		if leaveLookup[empID] == nil {
-			leaveLookup[empID] = map[string]string{}
+			leaveLookup[empID] = map[string]leaveEntry{}
 		}
 		for cur := sd.Time; !cur.After(ed.Time); cur = cur.AddDate(0, 0, 1) {
-			leaveLookup[empID][cur.Format("2006-01-02")] = leaveTypeName
+			d := cur.Format("2006-01-02")
+			if existing, ok := leaveLookup[empID][d]; ok && existing.status == "cuti" {
+				continue // approved already recorded for this date — don't downgrade to pending
+			}
+			leaveLookup[empID][d] = leaveEntry{leaveType: leaveTypeName, status: entryStatus}
 		}
 	}
 	if err := leaveRows.Err(); err != nil {
@@ -845,12 +986,12 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 			branchMap[e.branchID] = &manpowerBranch{ID: e.branchID, Name: e.branchName}
 			branchOrder = append(branchOrder, e.branchID)
 		}
-		days := make([]manpowerDay, 7)
+		days := make([]manpowerDay, numDays)
 		for i, d := range dates {
 			day := manpowerDay{Date: d, Status: "hadir"}
-			if lt, onLeave := leaveLookup[e.id][d]; onLeave {
-				day.Status = "cuti"
-				day.LeaveType = lt
+			if entry, onLeave := leaveLookup[e.id][d]; onLeave {
+				day.Status = entry.status
+				day.LeaveType = entry.leaveType
 			}
 			days[i] = day
 		}

@@ -313,25 +313,6 @@ type LeaveType struct {
 	IsActive  bool        `json:"is_active"`
 }
 
-type PosImport struct {
-	ID          pgtype.UUID        `json:"id"`
-	Description pgtype.Text        `json:"description"`
-	Date        pgtype.Date        `json:"date"`
-	SourceFile  pgtype.Text        `json:"source_file"`
-	TotalAmount int64              `json:"total_amount"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type PosImportLine struct {
-	ID        pgtype.UUID `json:"id"`
-	ImportID  pgtype.UUID `json:"import_id"`
-	AccountID pgtype.UUID `json:"account_id"`
-	Label     string      `json:"label"`
-	Amount    int64       `json:"amount"`
-	LineType  string      `json:"line_type"`
-}
-
 type PayrollLine struct {
 	ID                      pgtype.UUID        `json:"id"`
 	PayrollPeriodID         pgtype.UUID        `json:"payroll_period_id"`
@@ -356,6 +337,9 @@ type PayrollLine struct {
 	ReviewedBy              pgtype.UUID        `json:"reviewed_by"`
 	ReviewedAt              pgtype.Timestamptz `json:"reviewed_at"`
 	ReviewNote              pgtype.Text        `json:"review_note"`
+	OvertimeHours           pgtype.Numeric     `json:"overtime_hours"`
+	OvertimeHourlyRate      int64              `json:"overtime_hourly_rate"`
+	OvertimeHourlyAmount    int64              `json:"overtime_hourly_amount"`
 }
 
 type PayrollLineComponent struct {
@@ -414,6 +398,25 @@ type PerformanceViolation struct {
 	Note               pgtype.Text        `json:"note"`
 	CreatedBy          pgtype.UUID        `json:"created_by"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+}
+
+type PosImport struct {
+	ID          pgtype.UUID        `json:"id"`
+	Description pgtype.Text        `json:"description"`
+	Date        pgtype.Date        `json:"date"`
+	SourceFile  pgtype.Text        `json:"source_file"`
+	TotalAmount int64              `json:"total_amount"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type PosImportLine struct {
+	ID        pgtype.UUID `json:"id"`
+	ImportID  pgtype.UUID `json:"import_id"`
+	AccountID pgtype.UUID `json:"account_id"`
+	Label     string      `json:"label"`
+	Amount    int64       `json:"amount"`
+	LineType  string      `json:"line_type"`
 }
 
 type Position struct {
@@ -494,6 +497,18 @@ type StockOpname struct {
 	PerformedAt  pgtype.Timestamptz `json:"performed_at"`
 	OperatorName pgtype.Text        `json:"operator_name"`
 	PicName      pgtype.Text        `json:"pic_name"`
+}
+
+type StockOpnameDraft struct {
+	ID           pgtype.UUID        `json:"id"`
+	WarehouseID  pgtype.UUID        `json:"warehouse_id"`
+	PicName      pgtype.Text        `json:"pic_name"`
+	OperatorName pgtype.Text        `json:"operator_name"`
+	Notes        pgtype.Text        `json:"notes"`
+	Items        []byte             `json:"items"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type StockOpnameItem struct {

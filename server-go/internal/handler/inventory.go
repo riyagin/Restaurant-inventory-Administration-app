@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,46 @@ import (
 	"inventory-app/server-go/internal/middleware"
 	"inventory-app/server-go/internal/service"
 )
+
+const (
+	defaultInventoryPageSize = 25
+	maxInventoryPageSize     = 200
+)
+
+// inventoryFilters builds the common filter params shared by the list and count queries.
+func inventoryFilters(q map[string][]string) (warehouseFilter, itemFilter pgtype.UUID, search pgtype.Text, dateFromPg, dateToPg pgtype.Date) {
+	get := func(key string) string {
+		if v, ok := q[key]; ok && len(v) > 0 {
+			return v[0]
+		}
+		return ""
+	}
+
+	if idStr := get("warehouse_id"); idStr != "" && idStr != "all" {
+		if id, err := parseUUID(idStr); err == nil {
+			warehouseFilter = pgtype.UUID{Bytes: id, Valid: true}
+		}
+	}
+	if idStr := get("item_id"); idStr != "" && idStr != "all" {
+		if id, err := parseUUID(idStr); err == nil {
+			itemFilter = pgtype.UUID{Bytes: id, Valid: true}
+		}
+	}
+	if s := strings.TrimSpace(get("search")); s != "" {
+		search = pgtype.Text{String: s, Valid: true}
+	}
+	if dateFrom := get("date_from"); dateFrom != "" {
+		if t, err := time.Parse("2006-01-02", dateFrom); err == nil {
+			dateFromPg = pgtype.Date{Time: t, Valid: true}
+		}
+	}
+	if dateTo := get("date_to"); dateTo != "" {
+		if t, err := time.Parse("2006-01-02", dateTo); err == nil {
+			dateToPg = pgtype.Date{Time: t, Valid: true}
+		}
+	}
+	return
+}
 
 type InventoryHandler struct {
 	pool    *pgxpool.Pool
@@ -28,70 +69,60 @@ func (h *InventoryHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 
-	search    := strings.ToLower(strings.TrimSpace(q.Get("search")))
-	dateFrom  := q.Get("date_from")
-	dateTo    := q.Get("date_to")
+	warehouseFilter, itemFilter, search, dateFromPg, dateToPg := inventoryFilters(q)
 
-	var warehouseFilter pgtype.UUID
-	if idStr := q.Get("warehouse_id"); idStr != "" && idStr != "all" {
-		id, err := parseUUID(idStr)
-		if err == nil {
-			warehouseFilter = pgtype.UUID{Bytes: id, Valid: true}
-		}
+	pageSize := defaultInventoryPageSize
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 {
+		pageSize = v
+	}
+	if pageSize > maxInventoryPageSize {
+		pageSize = maxInventoryPageSize
 	}
 
-	var itemFilter pgtype.UUID
-	if idStr := q.Get("item_id"); idStr != "" && idStr != "all" {
-		id, err := parseUUID(idStr)
-		if err == nil {
-			itemFilter = pgtype.UUID{Bytes: id, Valid: true}
-		}
+	page := 1
+	if v, err := strconv.Atoi(q.Get("page")); err == nil && v > 0 {
+		page = v
 	}
 
-	var dateFromPg, dateToPg pgtype.Date
-	if dateFrom != "" {
-		if t, err := time.Parse("2006-01-02", dateFrom); err == nil {
-			dateFromPg = pgtype.Date{Time: t, Valid: true}
-		}
-	}
-	if dateTo != "" {
-		if t, err := time.Parse("2006-01-02", dateTo); err == nil {
-			dateToPg = pgtype.Date{Time: t, Valid: true}
-		}
-	}
-
-	rows, err := h.queries.ListInventory(ctx, &db.ListInventoryParams{
-		Column1: warehouseFilter,
-		Column2: itemFilter,
+	rows, err := h.queries.ListInventoryPage(ctx, &db.ListInventoryPageParams{
+		WarehouseID: warehouseFilter,
+		ItemID:      itemFilter,
+		Search:      search,
+		DateFrom:    dateFromPg,
+		DateTo:      dateToPg,
+		Limit:       int32(pageSize),
+		Offset:      int32((page - 1) * pageSize),
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data inventori")
 		return
 	}
 	if rows == nil {
-		rows = []*db.ListInventoryRow{}
+		rows = []*db.ListInventoryPageRow{}
 	}
+	respondJSON(w, http.StatusOK, rows)
+}
 
-	var result []*db.ListInventoryRow
-	for _, row := range rows {
-		if search != "" {
-			if !strings.Contains(strings.ToLower(row.ItemName), search) &&
-				!strings.Contains(strings.ToLower(row.ItemCode), search) {
-				continue
-			}
-		}
-		if dateFromPg.Valid && row.Date.Valid && row.Date.Time.Before(dateFromPg.Time) {
-			continue
-		}
-		if dateToPg.Valid && row.Date.Valid && row.Date.Time.After(dateToPg.Time) {
-			continue
-		}
-		result = append(result, row)
+// Count returns the total number of inventory lots matching the given filters,
+// independent of the page of rows fetched by List.
+func (h *InventoryHandler) Count(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+
+	warehouseFilter, itemFilter, search, dateFromPg, dateToPg := inventoryFilters(q)
+
+	count, err := h.queries.CountInventory(ctx, &db.CountInventoryParams{
+		WarehouseID: warehouseFilter,
+		ItemID:      itemFilter,
+		Search:      search,
+		DateFrom:    dateFromPg,
+		DateTo:      dateToPg,
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung data inventori")
+		return
 	}
-	if result == nil {
-		result = []*db.ListInventoryRow{}
-	}
-	respondJSON(w, http.StatusOK, result)
+	respondJSON(w, http.StatusOK, map[string]int64{"count": count})
 }
 
 func (h *InventoryHandler) Get(w http.ResponseWriter, r *http.Request) {

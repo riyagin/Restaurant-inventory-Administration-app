@@ -275,8 +275,9 @@ type reviewComponentInput struct {
 
 type reviewLineBody struct {
 	OvertimeDays      float64                `json:"overtime_days"`
+	OvertimeHours     float64                `json:"overtime_hours"`
 	PublicHolidayDays float64                `json:"public_holiday_days"`
-	Components        []reviewComponentInput `json:"components"` // adjusted bonus/variable amounts
+	Components        []reviewComponentInput `json:"components"` // adjusted bonus/allowance variable amounts
 	ReviewNote        string                 `json:"review_note"`
 }
 
@@ -292,8 +293,8 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
 		return
 	}
-	if body.OvertimeDays < 0 || body.PublicHolidayDays < 0 {
-		respondError(w, http.StatusBadRequest, "jumlah hari tidak boleh negatif")
+	if body.OvertimeDays < 0 || body.OvertimeHours < 0 || body.PublicHolidayDays < 0 {
+		respondError(w, http.StatusBadRequest, "jumlah hari/jam tidak boleh negatif")
 		return
 	}
 
@@ -322,8 +323,9 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	// Persist adjusted component amounts and recompute the bonus total from the
-	// updated component snapshots.
+	// Persist adjusted component amounts and recompute the bonus/allowance totals from
+	// the updated component snapshots (deduction-type components stay fixed-only, as
+	// before — only bonus and allowance are reviewer-editable here).
 	adjusted := map[string]int64{}
 	for _, c := range body.Components {
 		adjusted[c.ID] = c.Amount
@@ -333,7 +335,7 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil komponen baris")
 		return
 	}
-	var bonusTotal int64
+	var bonusTotal, allowanceTotal int64
 	for _, c := range components {
 		amt := c.Amount
 		if v, ok := adjusted[c.ID.String()]; ok {
@@ -346,8 +348,11 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if c.Type == "bonus" {
+		switch c.Type {
+		case "bonus":
 			bonusTotal += amt
+		case "allowance":
+			allowanceTotal += amt
 		}
 	}
 
@@ -358,11 +363,13 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := service.ReviewLine(ctx, qtx, line, service.ReviewLineInput{
-		OvertimeDays:       body.OvertimeDays,
-		PublicHolidayDays:  body.PublicHolidayDays,
-		AdjustedBonusTotal: bonusTotal,
-		ReviewNote:         note,
-		ReviewedBy:         pgtype.UUID{Bytes: reviewedBy, Valid: reviewedBy != [16]byte{}},
+		OvertimeDays:           body.OvertimeDays,
+		OvertimeHours:          body.OvertimeHours,
+		PublicHolidayDays:      body.PublicHolidayDays,
+		AdjustedBonusTotal:     bonusTotal,
+		AdjustedAllowanceTotal: allowanceTotal,
+		ReviewNote:             note,
+		ReviewedBy:             pgtype.UUID{Bytes: reviewedBy, Valid: reviewedBy != [16]byte{}},
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mereview baris penggajian")
@@ -654,6 +661,18 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return errNoWageStructure
 	}
 
+	emp, err := qtx.GetEmployeeByID(ctx, empID)
+	if err != nil {
+		return err
+	}
+	var sched service.Schedule
+	if branchWS, err := qtx.GetWorkScheduleByBranch(ctx, emp.BranchID); err == nil && branchWS != nil {
+		sched = service.ScheduleFromRow(branchWS)
+	} else {
+		sched = service.DefaultSchedule()
+	}
+	hourlyRate := service.HourlyRateFromDaily(ws.DailyRate, sched)
+
 	components, err := qtx.ListEmployeeWageComponents(ctx, ws.ID)
 	if err != nil {
 		return err
@@ -712,6 +731,8 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		BaseSalary:              ws.BaseSalary,
 		DailyRate:               ws.DailyRate,
 		OvertimeDays:            0,
+		OvertimeHours:           0,
+		OvertimeHourlyRate:      hourlyRate,
 		PublicHolidayDays:       float64(holidayCount),
 		OvertimeMultiplier:      mult.Overtime,
 		HolidayMultiplier:       mult.Holiday,
@@ -741,6 +762,9 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		GrossPay:                calc.GrossPay,
 		NetPay:                  calc.NetPay,
 		PerformanceScore:        perfScore,
+		OvertimeHours:           service.NumericFromFloat(0),
+		OvertimeHourlyRate:      hourlyRate,
+		OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 	})
 	if err != nil {
 		return err

@@ -11,40 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countPresentOnHolidays = `-- name: CountPresentOnHolidays :one
-SELECT COUNT(*)::int AS cnt
-FROM attendance_records ar
-JOIN public_holidays ph ON ph.date = ar.date
-WHERE ar.employee_id = $1
-  AND ar.date >= $2 AND ar.date <= $3
-  AND ar.status = 'present'
-`
-
-type CountPresentOnHolidaysParams struct {
-	EmployeeID pgtype.UUID `json:"employee_id"`
-	Date       pgtype.Date `json:"date"`
-	Date_2     pgtype.Date `json:"date_2"`
-}
-
-func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentOnHolidaysParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countPresentOnHolidays, arg.EmployeeID, arg.Date, arg.Date_2)
-	var cnt int32
-	err := row.Scan(&cnt)
-	return cnt, err
-}
-
-const countUnreviewedLines = `-- name: CountUnreviewedLines :one
-SELECT COUNT(*) FROM payroll_lines
-WHERE payroll_period_id = $1 AND reviewed = false
-`
-
-func (q *Queries) CountUnreviewedLines(ctx context.Context, payrollPeriodID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countUnreviewedLines, payrollPeriodID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const closePayrollPeriod = `-- name: ClosePayrollPeriod :one
 UPDATE payroll_periods
 SET status = 'closed', closed_at = now()
@@ -69,26 +35,66 @@ func (q *Queries) ClosePayrollPeriod(ctx context.Context, id pgtype.UUID) (*Payr
 	return &i, err
 }
 
+const countPresentOnHolidays = `-- name: CountPresentOnHolidays :one
+
+SELECT COUNT(*)::int AS cnt
+FROM attendance_records ar
+JOIN public_holidays ph ON ph.date = ar.date
+WHERE ar.employee_id = $1
+  AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+`
+
+type CountPresentOnHolidaysParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+// ── Attendance helper: present-on-holiday prefill ────────────────────────────
+func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentOnHolidaysParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countPresentOnHolidays, arg.EmployeeID, arg.Date, arg.Date_2)
+	var cnt int32
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
+const countUnreviewedLines = `-- name: CountUnreviewedLines :one
+SELECT COUNT(*) FROM payroll_lines
+WHERE payroll_period_id = $1 AND reviewed = false
+`
+
+func (q *Queries) CountUnreviewedLines(ctx context.Context, payrollPeriodID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreviewedLines, payrollPeriodID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createPayrollLine = `-- name: CreatePayrollLine :one
+
 INSERT INTO payroll_lines (
     id, payroll_period_id, employee_id, wage_structure_id,
     base_salary, daily_rate, overtime_days, public_holiday_days,
     overtime_amount, public_holiday_amount, allowance_total, bonus_total,
     component_deduction_total, kasbon_deduction, unpaid_leave_days,
-    unpaid_leave_deduction, gross_pay, net_pay, performance_score
+    unpaid_leave_deduction, gross_pay, net_pay, performance_score,
+    overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3,
     $4, $5, $6, $7,
     $8, $9, $10, $11,
     $12, $13, $14,
-    $15, $16, $17, $18
+    $15, $16, $17, $18,
+    $19, $20, $21
 )
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 `
 
 type CreatePayrollLineParams struct {
@@ -110,8 +116,12 @@ type CreatePayrollLineParams struct {
 	GrossPay                int64          `json:"gross_pay"`
 	NetPay                  int64          `json:"net_pay"`
 	PerformanceScore        pgtype.Int4    `json:"performance_score"`
+	OvertimeHours           pgtype.Numeric `json:"overtime_hours"`
+	OvertimeHourlyRate      int64          `json:"overtime_hourly_rate"`
+	OvertimeHourlyAmount    int64          `json:"overtime_hourly_amount"`
 }
 
+// ── Payroll Lines ────────────────────────────────────────────────────────────
 func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineParams) (*PayrollLine, error) {
 	row := q.db.QueryRow(ctx, createPayrollLine,
 		arg.PayrollPeriodID,
@@ -132,6 +142,9 @@ func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineP
 		arg.GrossPay,
 		arg.NetPay,
 		arg.PerformanceScore,
+		arg.OvertimeHours,
+		arg.OvertimeHourlyRate,
+		arg.OvertimeHourlyAmount,
 	)
 	var i PayrollLine
 	err := row.Scan(
@@ -158,11 +171,15 @@ func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineP
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
 	)
 	return &i, err
 }
 
 const createPayrollLineComponent = `-- name: CreatePayrollLineComponent :one
+
 INSERT INTO payroll_line_components (id, payroll_line_id, wage_component_id, name, type, amount)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
 RETURNING id, payroll_line_id, wage_component_id, name, type, amount
@@ -176,6 +193,7 @@ type CreatePayrollLineComponentParams struct {
 	Amount          int64       `json:"amount"`
 }
 
+// ── Payroll Line Components ──────────────────────────────────────────────────
 func (q *Queries) CreatePayrollLineComponent(ctx context.Context, arg *CreatePayrollLineComponentParams) (*PayrollLineComponent, error) {
 	row := q.db.QueryRow(ctx, createPayrollLineComponent,
 		arg.PayrollLineID,
@@ -197,6 +215,7 @@ func (q *Queries) CreatePayrollLineComponent(ctx context.Context, arg *CreatePay
 }
 
 const createPayrollPeriod = `-- name: CreatePayrollPeriod :one
+
 INSERT INTO payroll_periods (id, period_month, start_date, end_date, status, created_by)
 VALUES (gen_random_uuid(), $1, $2, $3, 'open', $4)
 RETURNING id, period_month, start_date, end_date, status, created_by, closed_at, paid_at, created_at
@@ -209,6 +228,7 @@ type CreatePayrollPeriodParams struct {
 	CreatedBy   pgtype.UUID `json:"created_by"`
 }
 
+// ── Payroll Periods ──────────────────────────────────────────────────────────
 func (q *Queries) CreatePayrollPeriod(ctx context.Context, arg *CreatePayrollPeriodParams) (*PayrollPeriod, error) {
 	row := q.db.QueryRow(ctx, createPayrollPeriod,
 		arg.PeriodMonth,
@@ -285,92 +305,13 @@ func (q *Queries) GetAttendanceSummaryForMonth(ctx context.Context, arg *GetAtte
 	return &i, err
 }
 
-const getPayrollLineForPayslip = `-- name: GetPayrollLineForPayslip :one
-SELECT
-    l.id, l.payroll_period_id, l.employee_id,
-    l.base_salary, l.daily_rate,
-    l.overtime_days, l.public_holiday_days, l.overtime_amount, l.public_holiday_amount,
-    l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
-    l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
-    e.full_name AS employee_name, e.employee_code, e.join_date,
-    pos.name AS position_name,
-    b.name   AS branch_name,
-    p.period_month, p.status AS period_status
-FROM payroll_lines l
-JOIN payroll_periods p ON p.id = l.payroll_period_id
-JOIN employees e       ON e.id = l.employee_id
-LEFT JOIN positions pos ON pos.id = e.position_id
-LEFT JOIN branches  b   ON b.id  = e.branch_id
-WHERE l.id = $1
-`
-
-type GetPayrollLineForPayslipRow struct {
-	ID                      pgtype.UUID    `json:"id"`
-	PayrollPeriodID         pgtype.UUID    `json:"payroll_period_id"`
-	EmployeeID              pgtype.UUID    `json:"employee_id"`
-	BaseSalary              int64          `json:"base_salary"`
-	DailyRate               int64          `json:"daily_rate"`
-	OvertimeDays            pgtype.Numeric `json:"overtime_days"`
-	PublicHolidayDays       pgtype.Numeric `json:"public_holiday_days"`
-	OvertimeAmount          int64          `json:"overtime_amount"`
-	PublicHolidayAmount     int64          `json:"public_holiday_amount"`
-	AllowanceTotal          int64          `json:"allowance_total"`
-	BonusTotal              int64          `json:"bonus_total"`
-	ComponentDeductionTotal int64          `json:"component_deduction_total"`
-	KasbonDeduction         int64          `json:"kasbon_deduction"`
-	UnpaidLeaveDays         int32          `json:"unpaid_leave_days"`
-	UnpaidLeaveDeduction    int64          `json:"unpaid_leave_deduction"`
-	GrossPay                int64          `json:"gross_pay"`
-	NetPay                  int64          `json:"net_pay"`
-	ReviewNote              pgtype.Text    `json:"review_note"`
-	EmployeeName            string         `json:"employee_name"`
-	EmployeeCode            string         `json:"employee_code"`
-	JoinDate                pgtype.Date    `json:"join_date"`
-	PositionName            pgtype.Text    `json:"position_name"`
-	BranchName              pgtype.Text    `json:"branch_name"`
-	PeriodMonth             pgtype.Date    `json:"period_month"`
-	PeriodStatus            string         `json:"period_status"`
-}
-
-func (q *Queries) GetPayrollLineForPayslip(ctx context.Context, id pgtype.UUID) (*GetPayrollLineForPayslipRow, error) {
-	row := q.db.QueryRow(ctx, getPayrollLineForPayslip, id)
-	var i GetPayrollLineForPayslipRow
-	err := row.Scan(
-		&i.ID,
-		&i.PayrollPeriodID,
-		&i.EmployeeID,
-		&i.BaseSalary,
-		&i.DailyRate,
-		&i.OvertimeDays,
-		&i.PublicHolidayDays,
-		&i.OvertimeAmount,
-		&i.PublicHolidayAmount,
-		&i.AllowanceTotal,
-		&i.BonusTotal,
-		&i.ComponentDeductionTotal,
-		&i.KasbonDeduction,
-		&i.UnpaidLeaveDays,
-		&i.UnpaidLeaveDeduction,
-		&i.GrossPay,
-		&i.NetPay,
-		&i.ReviewNote,
-		&i.EmployeeName,
-		&i.EmployeeCode,
-		&i.JoinDate,
-		&i.PositionName,
-		&i.BranchName,
-		&i.PeriodMonth,
-		&i.PeriodStatus,
-	)
-	return &i, err
-}
-
 const getPayrollLineByID = `-- name: GetPayrollLineByID :one
 SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
        overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
        allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note
+       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 FROM payroll_lines
 WHERE id = $1
 `
@@ -402,6 +343,9 @@ func (q *Queries) GetPayrollLineByID(ctx context.Context, id pgtype.UUID) (*Payr
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
 	)
 	return &i, err
 }
@@ -411,7 +355,8 @@ SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily
        overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
        allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note
+       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 FROM payroll_lines
 WHERE payroll_period_id = $1 AND employee_id = $2
 `
@@ -448,6 +393,101 @@ func (q *Queries) GetPayrollLineByPeriodEmployee(ctx context.Context, arg *GetPa
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
+	)
+	return &i, err
+}
+
+const getPayrollLineForPayslip = `-- name: GetPayrollLineForPayslip :one
+
+SELECT
+    l.id, l.payroll_period_id, l.employee_id,
+    l.base_salary, l.daily_rate,
+    l.overtime_days, l.public_holiday_days, l.overtime_amount, l.public_holiday_amount,
+    l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
+    l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
+    l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
+    e.full_name AS employee_name, e.employee_code, e.join_date,
+    pos.name AS position_name,
+    b.name   AS branch_name,
+    p.period_month, p.status AS period_status
+FROM payroll_lines l
+JOIN payroll_periods p ON p.id = l.payroll_period_id
+JOIN employees e       ON e.id = l.employee_id
+LEFT JOIN positions pos ON pos.id = e.position_id
+LEFT JOIN branches  b   ON b.id  = e.branch_id
+WHERE l.id = $1
+`
+
+type GetPayrollLineForPayslipRow struct {
+	ID                      pgtype.UUID    `json:"id"`
+	PayrollPeriodID         pgtype.UUID    `json:"payroll_period_id"`
+	EmployeeID              pgtype.UUID    `json:"employee_id"`
+	BaseSalary              int64          `json:"base_salary"`
+	DailyRate               int64          `json:"daily_rate"`
+	OvertimeDays            pgtype.Numeric `json:"overtime_days"`
+	PublicHolidayDays       pgtype.Numeric `json:"public_holiday_days"`
+	OvertimeAmount          int64          `json:"overtime_amount"`
+	PublicHolidayAmount     int64          `json:"public_holiday_amount"`
+	AllowanceTotal          int64          `json:"allowance_total"`
+	BonusTotal              int64          `json:"bonus_total"`
+	ComponentDeductionTotal int64          `json:"component_deduction_total"`
+	KasbonDeduction         int64          `json:"kasbon_deduction"`
+	UnpaidLeaveDays         int32          `json:"unpaid_leave_days"`
+	UnpaidLeaveDeduction    int64          `json:"unpaid_leave_deduction"`
+	GrossPay                int64          `json:"gross_pay"`
+	NetPay                  int64          `json:"net_pay"`
+	ReviewNote              pgtype.Text    `json:"review_note"`
+	OvertimeHours           pgtype.Numeric `json:"overtime_hours"`
+	OvertimeHourlyRate      int64          `json:"overtime_hourly_rate"`
+	OvertimeHourlyAmount    int64          `json:"overtime_hourly_amount"`
+	EmployeeName            string         `json:"employee_name"`
+	EmployeeCode            string         `json:"employee_code"`
+	JoinDate                pgtype.Date    `json:"join_date"`
+	PositionName            pgtype.Text    `json:"position_name"`
+	BranchName              pgtype.Text    `json:"branch_name"`
+	PeriodMonth             pgtype.Date    `json:"period_month"`
+	PeriodStatus            string         `json:"period_status"`
+}
+
+// ── Payslip rendering (prompt 09) ────────────────────────────────────────────
+// One denormalised row with everything the PDF payslip needs: the line snapshot
+// plus employee identity (name/code/join date), position name, branch name and the
+// period month. Components are fetched separately via ListPayrollLineComponents.
+func (q *Queries) GetPayrollLineForPayslip(ctx context.Context, id pgtype.UUID) (*GetPayrollLineForPayslipRow, error) {
+	row := q.db.QueryRow(ctx, getPayrollLineForPayslip, id)
+	var i GetPayrollLineForPayslipRow
+	err := row.Scan(
+		&i.ID,
+		&i.PayrollPeriodID,
+		&i.EmployeeID,
+		&i.BaseSalary,
+		&i.DailyRate,
+		&i.OvertimeDays,
+		&i.PublicHolidayDays,
+		&i.OvertimeAmount,
+		&i.PublicHolidayAmount,
+		&i.AllowanceTotal,
+		&i.BonusTotal,
+		&i.ComponentDeductionTotal,
+		&i.KasbonDeduction,
+		&i.UnpaidLeaveDays,
+		&i.UnpaidLeaveDeduction,
+		&i.GrossPay,
+		&i.NetPay,
+		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
+		&i.EmployeeName,
+		&i.EmployeeCode,
+		&i.JoinDate,
+		&i.PositionName,
+		&i.BranchName,
+		&i.PeriodMonth,
+		&i.PeriodStatus,
 	)
 	return &i, err
 }
@@ -531,11 +571,13 @@ func (q *Queries) GetPayrollPeriodSummary(ctx context.Context, payrollPeriodID p
 }
 
 const getPayrollSettings = `-- name: GetPayrollSettings :one
+
 SELECT id, overtime_multiplier, holiday_multiplier
 FROM payroll_settings
 WHERE id = 1
 `
 
+// ── Payroll Settings ─────────────────────────────────────────────────────────
 func (q *Queries) GetPayrollSettings(ctx context.Context) (*PayrollSetting, error) {
 	row := q.db.QueryRow(ctx, getPayrollSettings)
 	var i PayrollSetting
@@ -592,6 +634,9 @@ WHERE ki.payroll_line_id = $1
 ORDER BY k.kasbon_number
 `
 
+// Kasbon numbers whose installments were deducted on this payroll line. Populated
+// only after the period is closed (installments are marked deducted at close), so a
+// payslip may legitimately show none and fall back to a generic "Kasbon" label.
 func (q *Queries) ListLineKasbonNumbers(ctx context.Context, payrollLineID pgtype.UUID) ([]string, error) {
 	rows, err := q.db.Query(ctx, listLineKasbonNumbers, payrollLineID)
 	if err != nil {
@@ -688,6 +733,7 @@ SELECT
     l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay,
     l.performance_score, l.reviewed, l.reviewed_by, l.reviewed_at, l.review_note,
+    l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     e.full_name AS employee_name, e.employee_code,
     e.position_id, pos.name AS position_name,
     e.branch_id, b.name AS branch_name
@@ -740,6 +786,9 @@ type ListPayrollLinesForPeriodRow struct {
 	ReviewedBy              pgtype.UUID        `json:"reviewed_by"`
 	ReviewedAt              pgtype.Timestamptz `json:"reviewed_at"`
 	ReviewNote              pgtype.Text        `json:"review_note"`
+	OvertimeHours           pgtype.Numeric     `json:"overtime_hours"`
+	OvertimeHourlyRate      int64              `json:"overtime_hourly_rate"`
+	OvertimeHourlyAmount    int64              `json:"overtime_hourly_amount"`
 	EmployeeName            string             `json:"employee_name"`
 	EmployeeCode            string             `json:"employee_code"`
 	PositionID              pgtype.UUID        `json:"position_id"`
@@ -788,6 +837,9 @@ func (q *Queries) ListPayrollLinesForPeriod(ctx context.Context, arg *ListPayrol
 			&i.ReviewedBy,
 			&i.ReviewedAt,
 			&i.ReviewNote,
+			&i.OvertimeHours,
+			&i.OvertimeHourlyRate,
+			&i.OvertimeHourlyAmount,
 			&i.EmployeeName,
 			&i.EmployeeCode,
 			&i.PositionID,
@@ -901,7 +953,8 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 `
 
 func (q *Queries) UnreviewPayrollLine(ctx context.Context, id pgtype.UUID) (*PayrollLine, error) {
@@ -931,6 +984,9 @@ func (q *Queries) UnreviewPayrollLine(ctx context.Context, id pgtype.UUID) (*Pay
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
 	)
 	return &i, err
 }
@@ -956,26 +1012,31 @@ UPDATE payroll_lines
 SET overtime_days = $1, public_holiday_days = $2,
     overtime_amount = $3, public_holiday_amount = $4,
     bonus_total = $5, gross_pay = $6, net_pay = $7,
-    reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9
-WHERE id = $10
+    reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9,
+    overtime_hours = $10, overtime_hourly_amount = $11, allowance_total = $12
+WHERE id = $13
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note
+          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount
 `
 
 type UpdatePayrollLineReviewParams struct {
-	OvertimeDays        pgtype.Numeric `json:"overtime_days"`
-	PublicHolidayDays   pgtype.Numeric `json:"public_holiday_days"`
-	OvertimeAmount      int64          `json:"overtime_amount"`
-	PublicHolidayAmount int64          `json:"public_holiday_amount"`
-	BonusTotal          int64          `json:"bonus_total"`
-	GrossPay            int64          `json:"gross_pay"`
-	NetPay              int64          `json:"net_pay"`
-	ReviewedBy          pgtype.UUID    `json:"reviewed_by"`
-	ReviewNote          pgtype.Text    `json:"review_note"`
-	ID                  pgtype.UUID    `json:"id"`
+	OvertimeDays         pgtype.Numeric `json:"overtime_days"`
+	PublicHolidayDays    pgtype.Numeric `json:"public_holiday_days"`
+	OvertimeAmount       int64          `json:"overtime_amount"`
+	PublicHolidayAmount  int64          `json:"public_holiday_amount"`
+	BonusTotal           int64          `json:"bonus_total"`
+	GrossPay             int64          `json:"gross_pay"`
+	NetPay               int64          `json:"net_pay"`
+	ReviewedBy           pgtype.UUID    `json:"reviewed_by"`
+	ReviewNote           pgtype.Text    `json:"review_note"`
+	OvertimeHours        pgtype.Numeric `json:"overtime_hours"`
+	OvertimeHourlyAmount int64          `json:"overtime_hourly_amount"`
+	AllowanceTotal       int64          `json:"allowance_total"`
+	ID                   pgtype.UUID    `json:"id"`
 }
 
 func (q *Queries) UpdatePayrollLineReview(ctx context.Context, arg *UpdatePayrollLineReviewParams) (*PayrollLine, error) {
@@ -989,6 +1050,9 @@ func (q *Queries) UpdatePayrollLineReview(ctx context.Context, arg *UpdatePayrol
 		arg.NetPay,
 		arg.ReviewedBy,
 		arg.ReviewNote,
+		arg.OvertimeHours,
+		arg.OvertimeHourlyAmount,
+		arg.AllowanceTotal,
 		arg.ID,
 	)
 	var i PayrollLine
@@ -1016,6 +1080,9 @@ func (q *Queries) UpdatePayrollLineReview(ctx context.Context, arg *UpdatePayrol
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
+		&i.OvertimeHours,
+		&i.OvertimeHourlyRate,
+		&i.OvertimeHourlyAmount,
 	)
 	return &i, err
 }

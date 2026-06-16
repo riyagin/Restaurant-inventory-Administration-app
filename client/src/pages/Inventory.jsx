@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getInventory, getWarehouses, deleteInventoryRecord, getStockHistory } from '../api';
+import { getInventory, getInventoryCount, getWarehouses, deleteInventoryRecord, getStockHistory } from '../api';
+
+const PAGE_SIZES = [25, 50, 100, 200];
 
 const SOURCE_PATH = {
   invoice:  (id) => `/invoices/view/${id}`,
@@ -40,19 +42,19 @@ function HistoryPanel({ itemId, warehouseId }) {
   }, [itemId, warehouseId]);
 
   if (!rows) return (
-    <td colSpan={8} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
+    <td colSpan={7} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
       <span style={{color:'#999',fontSize:'0.85rem'}}>Memuat riwayat...</span>
     </td>
   );
 
   if (!rows.length) return (
-    <td colSpan={8} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
+    <td colSpan={7} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
       <span style={{color:'#999',fontSize:'0.85rem'}}>Belum ada riwayat</span>
     </td>
   );
 
   return (
-    <td colSpan={8} style={{padding:'0.75rem 1.5rem 1rem',background:'#f8f9ff',borderTop:'none'}}>
+    <td colSpan={7} style={{padding:'0.75rem 1.5rem 1rem',background:'#f8f9ff',borderTop:'none'}}>
       <div style={{fontSize:'0.78rem',fontWeight:600,color:'#666',marginBottom:'0.5rem',textTransform:'uppercase',letterSpacing:'0.4px'}}>
         {rows.length} interaksi terakhir
       </div>
@@ -119,10 +121,24 @@ export default function Inventory() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [expandedId, setExpandedId] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
+  const [totalLots, setTotalLots] = useState(0);
+
+  const filterParams = {
+    search,
+    warehouse_id: warehouseId,
+    date_from: dateFrom || undefined,
+    date_to: dateTo || undefined,
+  };
 
   const load = useCallback(() => {
-    getInventory({ search, warehouse_id: warehouseId, date_from: dateFrom || undefined, date_to: dateTo || undefined })
+    getInventory({ ...filterParams, page, limit: pageSize })
       .then(r => setRecords(r.data));
+  }, [search, warehouseId, dateFrom, dateTo, page, pageSize]);
+
+  const loadCount = useCallback(() => {
+    getInventoryCount(filterParams).then(r => setTotalLots(r.data.count));
   }, [search, warehouseId, dateFrom, dateTo]);
 
   useEffect(() => {
@@ -130,11 +146,19 @@ export default function Inventory() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadCount(); }, [loadCount]);
 
-  const clearDates = () => { setDateFrom(''); setDateTo(''); };
+  // Filter setters that also reset pagination back to page 1.
+  const updateSearch = (v) => { setSearch(v); setPage(1); };
+  const updateWarehouseId = (v) => { setWarehouseId(v); setPage(1); };
+  const updateDateFrom = (v) => { setDateFrom(v); setPage(1); };
+  const updateDateTo = (v) => { setDateTo(v); setPage(1); };
+  const updatePageSize = (v) => { setPageSize(v); setPage(1); };
 
-  const totalValue = records.reduce((s, r) => s + Number(r.value), 0);
+  const clearDates = () => { setDateFrom(''); setDateTo(''); setPage(1); };
+
   const isFiltered = !!(search || warehouseId !== 'all' || dateFrom || dateTo);
+  const totalPages = Math.max(1, Math.ceil(totalLots / pageSize));
 
   const handleDelete = async (e, id) => {
     e.stopPropagation();
@@ -142,6 +166,7 @@ export default function Inventory() {
     await deleteInventoryRecord(id);
     setExpandedId(null);
     load();
+    loadCount();
   };
 
   const toggleRow = (id) => setExpandedId(prev => prev === id ? null : id);
@@ -157,8 +182,7 @@ export default function Inventory() {
         <div className="card-header">
           <div>
             <h2 style={{ marginBottom: '0.2rem' }}>
-              {records.length} lot{isFiltered ? ' (difilter)' : ''}
-              <span style={{ marginLeft: '1rem', color: '#27ae60', fontWeight: 700 }}>{idr(totalValue)}</span>
+              {totalLots.toLocaleString('id-ID')} lot{isFiltered ? ' (difilter)' : ''}
             </h2>
             {(dateFrom || dateTo) && (
               <div style={{ fontSize: '0.8rem', color: '#888' }}>
@@ -172,19 +196,19 @@ export default function Inventory() {
             <input
               placeholder="Cari barang..."
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => updateSearch(e.target.value)}
             />
-            <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>
+            <select value={warehouseId} onChange={e => updateWarehouseId(e.target.value)}>
               <option value="all">Semua Gudang</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <label style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap' }}>Dari</label>
-              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <input type="date" value={dateFrom} onChange={e => updateDateFrom(e.target.value)} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <label style={{ fontSize: '0.8rem', color: '#888', whiteSpace: 'nowrap' }}>s/d</label>
-              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} />
+              <input type="date" value={dateTo} onChange={e => updateDateTo(e.target.value)} />
             </div>
             {(dateFrom || dateTo) && (
               <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
@@ -200,14 +224,13 @@ export default function Inventory() {
               <th>Kode</th>
               <th>Jumlah</th>
               <th>Gudang</th>
-              <th>Nilai (IDR)</th>
               <th>Tanggal</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {records.length === 0 ? (
-              <tr><td colSpan={8} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Tidak ada data</td></tr>
+              <tr><td colSpan={7} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Tidak ada data</td></tr>
             ) : records.map(rec => (
               <>
                 <tr
@@ -223,7 +246,6 @@ export default function Inventory() {
                   <td style={{color:'#888',fontSize:'0.85rem'}}>{rec.item_code}</td>
                   <td><span className="badge">{Number(rec.quantity).toLocaleString('id-ID')} {rec.unit_name}</span></td>
                   <td><span className="badge">{rec.warehouse_name}</span></td>
-                  <td style={{fontWeight:600}}>{idr(rec.value)}</td>
                   <td style={{color:'#888',fontSize:'0.85rem'}}>{fmt(rec.date)}</td>
                   <td onClick={e => e.stopPropagation()}>
                     <div className="actions">
@@ -242,6 +264,35 @@ export default function Inventory() {
             ))}
           </tbody>
         </table>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 0 0', flexWrap: 'wrap', gap: '0.6rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <label style={{ fontSize: '0.8rem', color: '#888' }}>Tampilkan</label>
+            <select value={pageSize} onChange={e => updatePageSize(Number(e.target.value))}>
+              {PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
+            </select>
+            <span style={{ fontSize: '0.8rem', color: '#888' }}>per halaman</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={page <= 1}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+            >
+              Sebelumnya
+            </button>
+            <span style={{ fontSize: '0.8rem', color: '#888' }}>Halaman {page} dari {totalPages}</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={page >= totalPages}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            >
+              Berikutnya
+            </button>
+          </div>
+        </div>
       </div>
     </>
   );

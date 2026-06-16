@@ -234,7 +234,7 @@ export default function PayrollPeriodDetail() {
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(l.base_salary)}</td>
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(l.allowance_total)}</td>
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(l.bonus_total)}</td>
-                <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(numVal(l.overtime_amount) + numVal(l.public_holiday_amount))}</td>
+                <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(numVal(l.overtime_amount) + numVal(l.overtime_hourly_amount) + numVal(l.public_holiday_amount))}</td>
                 <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.kasbon_deduction)}</td>
                 <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.unpaid_leave_deduction)}</td>
                 <td style={{ padding: 10, textAlign: 'right', fontWeight: 700 }}>{fmtIDR(l.net_pay)}</td>
@@ -284,6 +284,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
 
   const [overtimeDays, setOvertimeDays] = useState(0);
+  const [overtimeHours, setOvertimeHours] = useState(0);
   const [holidayDays, setHolidayDays] = useState(0);
   const [components, setComponents] = useState([]);
   const [note, setNote] = useState('');
@@ -295,6 +296,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
         const { data: d } = await getPayrollLineReview(lineId);
         setData(d);
         setOvertimeDays(Number(d.line.overtime_days ?? 0));
+        setOvertimeHours(Number(d.line.overtime_hours ?? 0));
         setHolidayDays(Number(d.line.public_holiday_days ?? 0));
         setNote(d.line.review_note || '');
         setComponents((d.components || []).map((c) => ({ ...c })));
@@ -314,9 +316,10 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
     try {
       await reviewPayrollLine(lineId, {
         overtime_days: Number(overtimeDays) || 0,
+        overtime_hours: Number(overtimeHours) || 0,
         public_holiday_days: Number(holidayDays) || 0,
         components: components
-          .filter((c) => c.type === 'bonus')
+          .filter((c) => c.type === 'bonus' || c.type === 'allowance')
           .map((c) => ({ id: c.id, amount: Number(c.amount) || 0 })),
         review_note: note,
       });
@@ -335,7 +338,8 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
 
   const att = data?.attendance;
   const line = data?.line;
-  const editableComps = components.filter((c) => c.type === 'bonus');
+  const bonusComps = components.filter((c) => c.type === 'bonus');
+  const allowanceComps = components.filter((c) => c.type === 'allowance');
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'flex', justifyContent: 'flex-end', zIndex: 100 }} onClick={onClose}>
@@ -398,15 +402,35 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
               <input type="number" step="0.5" min="0" value={overtimeDays} disabled={!editable}
                 onChange={(e) => setOvertimeDays(e.target.value)}
                 style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd', marginBottom: 10 }} />
+              <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+                Jam Lembur{line.overtime_hourly_rate ? ` (${fmtIDR(line.overtime_hourly_rate)}/jam)` : ''}
+              </label>
+              <input type="number" step="0.5" min="0" value={overtimeHours} disabled={!editable}
+                onChange={(e) => setOvertimeHours(e.target.value)}
+                style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd', marginBottom: 10 }} />
               <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Hari Libur Nasional</label>
               <input type="number" step="0.5" min="0" value={holidayDays} disabled={!editable}
                 onChange={(e) => setHolidayDays(e.target.value)}
                 style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd', marginBottom: 10 }} />
 
-              {editableComps.length > 0 && (
+              {allowanceComps.length > 0 && (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Tunjangan / Variabel</div>
+                  {allowanceComps.map((c) => (
+                    <div key={c.id} style={{ marginBottom: 8 }}>
+                      <label style={{ display: 'block', fontSize: 12, color: '#778' }}>{c.name}</label>
+                      <input type="number" min="0" value={c.amount} disabled={!editable}
+                        onChange={(e) => setCompAmount(c.id, e.target.value)}
+                        style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd' }} />
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {bonusComps.length > 0 && (
                 <>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Bonus / Variabel</div>
-                  {editableComps.map((c) => (
+                  {bonusComps.map((c) => (
                     <div key={c.id} style={{ marginBottom: 8 }}>
                       <label style={{ display: 'block', fontSize: 12, color: '#778' }}>{c.name}</label>
                       <input type="number" min="0" value={c.amount} disabled={!editable}

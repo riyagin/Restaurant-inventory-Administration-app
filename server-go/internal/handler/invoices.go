@@ -332,10 +332,15 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Process items
 	for _, it := range body.Items {
-		itemID, err := parseUUID(it.ItemID)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, "item_id tidak valid")
-			return
+		var itemID uuid.UUID
+		hasItemID := it.ItemID != ""
+		if hasItemID {
+			parsed, err := parseUUID(it.ItemID)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "item_id tidak valid")
+				return
+			}
+			itemID = parsed
 		}
 		itemVendorID := uuid.Nil
 		if it.VendorID != "" {
@@ -352,10 +357,10 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID:   invoice.ID,
-			ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
+			ItemID:      pgtype.UUID{Bytes: itemID, Valid: hasItemID},
 			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
 			Quantity:    floatToNumeric(it.Quantity),
-			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: true},
+			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
 			Price:       it.Price,
 			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},
 		}); err != nil {
@@ -363,7 +368,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if invoiceType == "purchase" {
+		if invoiceType == "purchase" && hasItemID {
 			item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 			if err != nil {
 				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))
@@ -617,10 +622,15 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// 5. Re-insert items and compute new total
 	var grandTotal int64
 	for _, it := range body.Items {
-		itemID, err := parseUUID(it.ItemID)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, "item_id tidak valid")
-			return
+		var itemID uuid.UUID
+		hasItemID := it.ItemID != ""
+		if hasItemID {
+			parsed, err := parseUUID(it.ItemID)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "item_id tidak valid")
+				return
+			}
+			itemID = parsed
 		}
 		itemVendorID := uuid.Nil
 		if it.VendorID != "" {
@@ -637,10 +647,10 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID:   invoiceUUID,
-			ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
+			ItemID:      pgtype.UUID{Bytes: itemID, Valid: hasItemID},
 			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
 			Quantity:    floatToNumeric(it.Quantity),
-			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: true},
+			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
 			Price:       it.Price,
 			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},
 		}); err != nil {
@@ -648,7 +658,7 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if old.InvoiceType == "purchase" {
+		if old.InvoiceType == "purchase" && hasItemID {
 			item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 			if err != nil {
 				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))

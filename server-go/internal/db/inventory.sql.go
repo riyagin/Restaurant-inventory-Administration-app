@@ -11,6 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countInventory = `-- name: CountInventory :one
+SELECT COUNT(*)
+FROM inventory inv
+JOIN items i ON i.id = inv.item_id
+WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
+  AND ($2::uuid IS NULL OR inv.item_id = $2)
+  AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+  AND ($4::date IS NULL OR inv.date >= $4)
+  AND ($5::date IS NULL OR inv.date <= $5)
+`
+
+type CountInventoryParams struct {
+	WarehouseID pgtype.UUID `json:"warehouse_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	Search      pgtype.Text `json:"search"`
+	DateFrom    pgtype.Date `json:"date_from"`
+	DateTo      pgtype.Date `json:"date_to"`
+}
+
+func (q *Queries) CountInventory(ctx context.Context, arg *CountInventoryParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countInventory,
+		arg.WarehouseID,
+		arg.ItemID,
+		arg.Search,
+		arg.DateFrom,
+		arg.DateTo,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createInventoryLot = `-- name: CreateInventoryLot :one
 INSERT INTO inventory (id, item_id, warehouse_id, quantity, unit_index, value, date)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
@@ -250,6 +282,86 @@ func (q *Queries) ListInventory(ctx context.Context, arg *ListInventoryParams) (
 			&i.Quantity,
 			&i.UnitIndex,
 			&i.Value,
+			&i.Date,
+			&i.ItemName,
+			&i.ItemCode,
+			&i.ItemUnits,
+			&i.WarehouseName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryPage = `-- name: ListInventoryPage :many
+SELECT
+    inv.id, inv.item_id, inv.warehouse_id, inv.quantity,
+    inv.unit_index, inv.date,
+    i.name AS item_name, i.code AS item_code, i.units AS item_units,
+    w.name AS warehouse_name
+FROM inventory inv
+JOIN items i ON i.id = inv.item_id
+JOIN warehouses w ON w.id = inv.warehouse_id
+WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
+  AND ($2::uuid IS NULL OR inv.item_id = $2)
+  AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+  AND ($4::date IS NULL OR inv.date >= $4)
+  AND ($5::date IS NULL OR inv.date <= $5)
+ORDER BY i.name, w.name, inv.date ASC
+LIMIT $7 OFFSET $6
+`
+
+type ListInventoryPageParams struct {
+	WarehouseID pgtype.UUID `json:"warehouse_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	Search      pgtype.Text `json:"search"`
+	DateFrom    pgtype.Date `json:"date_from"`
+	DateTo      pgtype.Date `json:"date_to"`
+	Offset      int32       `json:"offset"`
+	Limit       int32       `json:"limit"`
+}
+
+type ListInventoryPageRow struct {
+	ID            pgtype.UUID    `json:"id"`
+	ItemID        pgtype.UUID    `json:"item_id"`
+	WarehouseID   pgtype.UUID    `json:"warehouse_id"`
+	Quantity      pgtype.Numeric `json:"quantity"`
+	UnitIndex     int32          `json:"unit_index"`
+	Date          pgtype.Date    `json:"date"`
+	ItemName      string         `json:"item_name"`
+	ItemCode      string         `json:"item_code"`
+	ItemUnits     []byte         `json:"item_units"`
+	WarehouseName string         `json:"warehouse_name"`
+}
+
+func (q *Queries) ListInventoryPage(ctx context.Context, arg *ListInventoryPageParams) ([]*ListInventoryPageRow, error) {
+	rows, err := q.db.Query(ctx, listInventoryPage,
+		arg.WarehouseID,
+		arg.ItemID,
+		arg.Search,
+		arg.DateFrom,
+		arg.DateTo,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListInventoryPageRow
+	for rows.Next() {
+		var i ListInventoryPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.WarehouseID,
+			&i.Quantity,
+			&i.UnitIndex,
 			&i.Date,
 			&i.ItemName,
 			&i.ItemCode,

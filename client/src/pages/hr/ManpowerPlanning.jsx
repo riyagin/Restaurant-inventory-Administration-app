@@ -13,6 +13,11 @@ function formatDateHeader(dateStr) {
   return `${DAY_NAMES[d.getDay()]}, ${d.getDate()}/${d.getMonth() + 1}`;
 }
 
+function formatDateHeaderCompact(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getDate()}/${d.getMonth() + 1}`;
+}
+
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -179,21 +184,30 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
   );
 }
 
-// ── Info popover for existing leave ──────────────────────────────────────────
+// ── Info popover for existing/pending leave ──────────────────────────────────
 function LeaveInfoModal({ employee, day, onClose }) {
+  const isPending = day.status === 'pending';
+  const boxStyle = isPending
+    ? { background: '#fed7aa', border: '1px solid #fb923c', borderRadius: 6, padding: '12px 14px' }
+    : { background: '#1f2937', border: '1px solid #111827', borderRadius: 6, padding: '12px 14px' };
+  const titleColor = isPending ? '#9a3412' : '#f9fafb';
+  const dateColor = isPending ? '#9a3412' : '#d1d5db';
+
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={{ ...modal, maxWidth: 340 }}>
-        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Detail Cuti</h3>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>
+          {isPending ? 'Pengajuan Cuti (Menunggu)' : 'Detail Cuti'}
+        </h3>
         <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6b7280' }}>
           {employee.name}{employee.position ? ` · ${employee.position}` : ''}
         </p>
-        <div style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 6, padding: '12px 14px' }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: '#92400e' }}>{day.leave_type || 'Cuti'}</div>
-          <div style={{ fontSize: 13, color: '#78350f', marginTop: 4 }}>{formatDateLabel(day.date)}</div>
+        <div style={boxStyle}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: titleColor }}>{day.leave_type || 'Cuti'}</div>
+          <div style={{ fontSize: 13, color: dateColor, marginTop: 4 }}>{formatDateLabel(day.date)}</div>
         </div>
         <p style={{ fontSize: 12, color: '#6b7280', marginTop: 10 }}>
-          Untuk mengubah atau membatalkan cuti ini, buka halaman <strong>Manajemen Cuti</strong>.
+          Untuk {isPending ? 'menyetujui/menolak' : 'mengubah atau membatalkan'} cuti ini, buka halaman <strong>Manajemen Cuti</strong>.
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
           <button
@@ -205,6 +219,15 @@ function LeaveInfoModal({ employee, day, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function LegendItem({ color, label }) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151' }}>
+      <span style={{ width: 14, height: 14, borderRadius: 3, background: color, border: '1px solid rgba(0,0,0,0.1)' }} />
+      {label}
+    </span>
   );
 }
 
@@ -237,6 +260,20 @@ const headerCellStyle = {
   zIndex: 1,
 };
 
+// Compact mode (>10 days in view): narrower cells, no per-cell text — color only.
+const compactCellStyle = {
+  padding: '8px 2px',
+  minWidth: 26,
+  maxWidth: 30,
+};
+
+const compactHeaderCellStyle = {
+  padding: '6px 2px',
+  minWidth: 26,
+  maxWidth: 30,
+  fontSize: 10,
+};
+
 const nameCellStyle = {
   padding: '8px 10px',
   fontSize: 13,
@@ -261,26 +298,41 @@ const nameHeaderStyle = {
   fontSize: 12,
 };
 
+const RANGE_PRESETS = [
+  { label: '1 Minggu', days: 7 },
+  { label: '2 Minggu', days: 14 },
+  { label: '3 Minggu', days: 21 },
+  { label: '1 Bulan', days: 31 },
+];
+const MIN_DAYS = 7;
+const MAX_DAYS = 31;
+const COMPACT_THRESHOLD = 10; // > this many days: hide per-cell text, color-only + legend
+
 export default function ManpowerPlanning() {
   const [date, setDate] = useState(todayLocal());
+  const [days, setDays] = useState(7);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null); // { type: 'create'|'info', employee, day }
 
+  const compact = days > COMPACT_THRESHOLD;
+
   const load = () => {
     setLoading(true);
     setError('');
-    getManpowerPlanning({ date })
+    getManpowerPlanning({ date, days })
       .then(r => setData(r.data))
       .catch(() => setError('Gagal memuat data perencanaan tenaga kerja.'))
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, [date]);
+  useEffect(() => { load(); }, [date, days]);
+
+  const clampDays = (v) => Math.min(MAX_DAYS, Math.max(MIN_DAYS, v));
 
   const handleCellClick = (employee, day) => {
-    if (day.status === 'cuti') {
+    if (day.status === 'cuti' || day.status === 'pending') {
       setModal({ type: 'info', employee, day });
     } else {
       setModal({ type: 'create', employee, day });
@@ -295,12 +347,14 @@ export default function ManpowerPlanning() {
   const totalEmployees = data?.branches.reduce((s, b) => s + b.employees.length, 0) ?? 0;
   const countOnLeave = (employees) =>
     employees.reduce((s, e) => s + e.days.filter(d => d.status === 'cuti').length, 0);
+  const countPending = (employees) =>
+    employees.reduce((s, e) => s + e.days.filter(d => d.status === 'pending').length, 0);
 
   return (
     <div style={{ padding: '1.5rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700 }}>Perencanaan Tenaga Kerja</h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 13, color: '#6b7280' }}>Mulai tanggal:</label>
           <input
             type="date"
@@ -308,11 +362,37 @@ export default function ManpowerPlanning() {
             onChange={e => setDate(e.target.value)}
             style={{ fontSize: 13, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 4 }}
           />
+          <div style={{ display: 'flex', gap: 4 }}>
+            {RANGE_PRESETS.map(p => (
+              <button
+                key={p.days}
+                onClick={() => setDays(p.days)}
+                style={{
+                  fontSize: 12, padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
+                  border: days === p.days ? '1px solid #2563eb' : '1px solid #d1d5db',
+                  background: days === p.days ? '#2563eb' : '#fff',
+                  color: days === p.days ? '#fff' : '#374151',
+                  fontWeight: days === p.days ? 600 : 400,
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <label style={{ fontSize: 13, color: '#6b7280' }}>Hari:</label>
+          <input
+            type="number"
+            min={MIN_DAYS}
+            max={MAX_DAYS}
+            value={days}
+            onChange={e => setDays(clampDays(Number(e.target.value) || MIN_DAYS))}
+            style={{ width: 56, fontSize: 13, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 4 }}
+          />
         </div>
       </div>
 
       <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 1rem' }}>
-        Klik kotak hari untuk mengajukan cuti karyawan.
+        {compact ? 'Arahkan kursor ke kotak untuk detail. ' : ''}Klik kotak hari untuk mengajukan cuti karyawan.
       </p>
 
       {error && <p style={{ color: '#dc2626' }}>{error}</p>}
@@ -321,7 +401,7 @@ export default function ManpowerPlanning() {
       {!loading && data && (
         <>
           <p style={{ fontSize: 13, color: '#6b7280', marginBottom: '1rem' }}>
-            {totalEmployees} karyawan aktif &mdash; {data.dates[0]} s/d {data.dates[6]}
+            {totalEmployees} karyawan aktif &mdash; {data.dates[0]} s/d {data.dates[data.dates.length - 1]}
           </p>
 
           {data.branches.length === 0 && (
@@ -330,6 +410,7 @@ export default function ManpowerPlanning() {
 
           {data.branches.map(branch => {
             const onLeaveCount = countOnLeave(branch.employees);
+            const pendingCount = countPending(branch.employees);
             return (
               <div key={branch.id} style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
@@ -339,8 +420,13 @@ export default function ManpowerPlanning() {
                   <span style={{ fontSize: 12, color: '#6b7280' }}>
                     {branch.employees.length} karyawan
                     {onLeaveCount > 0 && (
-                      <span style={{ color: '#d97706', marginLeft: 6 }}>
+                      <span style={{ color: '#374151', marginLeft: 6 }}>
                         · {onLeaveCount} hari cuti di periode ini
+                      </span>
+                    )}
+                    {pendingCount > 0 && (
+                      <span style={{ color: '#c2410c', marginLeft: 6 }}>
+                        · {pendingCount} hari menunggu persetujuan
                       </span>
                     )}
                   </span>
@@ -352,7 +438,9 @@ export default function ManpowerPlanning() {
                       <tr>
                         <th style={nameHeaderStyle}>Karyawan</th>
                         {data.dates.map(d => (
-                          <th key={d} style={headerCellStyle}>{formatDateHeader(d)}</th>
+                          <th key={d} style={compact ? { ...headerCellStyle, ...compactHeaderCellStyle } : headerCellStyle}>
+                            {compact ? formatDateHeaderCompact(d) : formatDateHeader(d)}
+                          </th>
                         ))}
                       </tr>
                     </thead>
@@ -365,35 +453,43 @@ export default function ManpowerPlanning() {
                               <div style={{ fontSize: 11, color: '#9ca3af' }}>{emp.position}</div>
                             )}
                           </td>
-                          {emp.days.map(day => (
-                            <td
-                              key={day.date}
-                              title={day.status === 'cuti' ? `${day.leave_type} — klik untuk detail` : 'Klik untuk ajukan cuti'}
-                              onClick={() => handleCellClick(emp, day)}
-                              style={{
-                                ...cellStyle,
-                                background: day.status === 'cuti' ? '#fef3c7' : '#dcfce7',
-                                color: day.status === 'cuti' ? '#92400e' : '#15803d',
-                              }}
-                              onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.93)'}
-                              onMouseLeave={e => e.currentTarget.style.filter = ''}
-                            >
-                              {day.status === 'cuti' ? (
-                                <span style={{
-                                  display: 'block',
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}>
-                                  {day.leave_type || 'Cuti'}
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: 15, fontWeight: 700 }}>✓</span>
-                              )}
-                            </td>
-                          ))}
+                          {emp.days.map(day => {
+                            const cellColors = {
+                              cuti: { background: '#1f2937', color: '#f9fafb' },
+                              pending: { background: '#fed7aa', color: '#9a3412' },
+                              hadir: { background: '#dcfce7', color: '#15803d' },
+                            }[day.status] || { background: '#dcfce7', color: '#15803d' };
+                            const cellTitle = day.status === 'cuti'
+                              ? `${day.leave_type} (disetujui) — klik untuk detail`
+                              : day.status === 'pending'
+                                ? `${day.leave_type} (menunggu persetujuan) — klik untuk detail`
+                                : 'Klik untuk ajukan cuti';
+                            return (
+                              <td
+                                key={day.date}
+                                title={cellTitle}
+                                onClick={() => handleCellClick(emp, day)}
+                                style={{ ...cellStyle, ...(compact ? compactCellStyle : null), ...cellColors }}
+                                onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.93)'}
+                                onMouseLeave={e => e.currentTarget.style.filter = ''}
+                              >
+                                {compact ? null : day.status === 'cuti' || day.status === 'pending' ? (
+                                  <span style={{
+                                    display: 'block',
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}>
+                                    {day.leave_type || 'Cuti'}
+                                  </span>
+                                ) : (
+                                  <span style={{ fontSize: 15, fontWeight: 700 }}>✓</span>
+                                )}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
@@ -402,6 +498,13 @@ export default function ManpowerPlanning() {
               </div>
             );
           })}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 4, padding: '10px 12px', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#374151' }}>Keterangan:</span>
+            <LegendItem color="#dcfce7" label="Hadir" />
+            <LegendItem color="#fed7aa" label="Menunggu Persetujuan" />
+            <LegendItem color="#1f2937" label="Cuti (Disetujui)" />
+          </div>
         </>
       )}
 

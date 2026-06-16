@@ -82,6 +82,7 @@ export const getItemHistory   = (id) => api.get(`/items/${id}/history`);
 export const getItemLastPrice = (id, params) => api.get(`/items/${id}/last-price`, { params });
 
 export const getInventory = (params) => api.get('/inventory', { params });
+export const getInventoryCount = (params) => api.get('/inventory/count', { params });
 export const getInventoryRecord = (id) => api.get(`/inventory/${id}`);
 export const createInventoryRecord = (data) => api.post('/inventory', data);
 export const updateInventoryRecord = (id, data) => api.put(`/inventory/${id}`, data);
@@ -283,6 +284,8 @@ export const createLeaveRequest   = (data) => api.post('/hr/leave-requests', dat
 export const approveLeaveRequest  = (id, note) => api.post(`/hr/leave-requests/${id}/approve`, { note });
 export const rejectLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/reject`, { note });
 export const cancelLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/cancel`, { note });
+export const bulkApproveLeaveRequests = (ids, note) => api.post('/hr/leave-requests/bulk-approve', { ids, note });
+export const bulkRejectLeaveRequests  = (ids, note) => api.post('/hr/leave-requests/bulk-reject', { ids, note });
 
 // Per-employee balance + history
 export const getLeaveBalance        = (id, year) => api.get(`/hr/employees/${id}/leave-balance`, { params: { year } });
