@@ -515,6 +515,10 @@ export default function InvoiceForm() {
                       <select value={row.item_id} onChange={setExpenseRow(i, 'item_id')} required style={{ width: '100%' }}>
                         <option value="">Pilih item...</option>
                         {nonStockItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                        {row.item_id && !nonStockItems.some(it => it.id === row.item_id) && (() => {
+                          const stockItem = items.find(it => it.id === row.item_id);
+                          return stockItem ? <option key={stockItem.id} value={stockItem.id}>{stockItem.name}</option> : null;
+                        })()}
                       </select>
                     )}
                   </td>
@@ -525,7 +529,9 @@ export default function InvoiceForm() {
                   <td style={{ minWidth: '100px', paddingTop: '0.3rem' }}>
                     <div style={{ height: '1.6rem', marginBottom: '0.3rem' }} />
                     {(() => {
-                      const selectedItem = !row.useDescription ? nonStockItems.find(it => it.id === row.item_id) : null;
+                      const selectedItem = !row.useDescription
+                        ? (nonStockItems.find(it => it.id === row.item_id) ?? items.find(it => it.id === row.item_id))
+                        : null;
                       return (
                         <select value={row.unit_index} onChange={setExpenseRow(i, 'unit_index')} disabled={!selectedItem} style={{ width: '100%' }}>
                           {selectedItem

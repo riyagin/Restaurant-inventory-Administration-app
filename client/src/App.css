@@ -101,6 +101,7 @@ tr:hover td { background: #fafbff; }
 .badge.status-paid { background: #e6f9f0; color: #27ae60; }
 .badge.status-unpaid { background: #fdecea; color: #e74c3c; }
 .badge.status-partial { background: #fef9e7; color: #e67e22; }
+.badge.status-dispatched { background: #e8eaf6; color: #3949ab; }
 
 tr.row-expanded td { background: #f0f4ff !important; }
 

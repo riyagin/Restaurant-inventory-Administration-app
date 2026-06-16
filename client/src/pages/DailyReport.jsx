@@ -70,9 +70,10 @@ export default function DailyReport() {
 
   const statusBadge = (status) => {
     const cfg = {
-      paid:    { bg: '#e6f9f0', color: '#1b5e45', label: 'Lunas' },
-      partial: { bg: '#fff3e0', color: '#e67e22', label: 'Sebagian' },
-      unpaid:  { bg: '#fdecea', color: '#c0392b', label: 'Belum' },
+      paid:       { bg: '#e6f9f0', color: '#1b5e45', label: 'Lunas' },
+      partial:    { bg: '#fff3e0', color: '#e67e22', label: 'Sebagian' },
+      unpaid:     { bg: '#fdecea', color: '#c0392b', label: 'Belum' },
+      dispatched: { bg: '#e8eaf6', color: '#3949ab', label: 'Pengiriman' },
     }[status] || { bg: '#f5f5f5', color: '#888', label: status };
     return (
       <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.4rem', borderRadius: '3px', fontWeight: 600, background: cfg.bg, color: cfg.color }}>

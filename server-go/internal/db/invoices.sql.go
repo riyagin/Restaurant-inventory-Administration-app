@@ -18,7 +18,7 @@ INSERT INTO invoices (
     division_id, vendor_id, reference_number
 )
 VALUES (
-    gen_random_uuid(), $1, $2, $3, $4, $5, 'unpaid', 0, $6, $7, $8, $9, $10, $11
+    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12
 )
 RETURNING id, invoice_number, date, due_date, invoice_type, payment_status, created_at
 `
@@ -29,6 +29,7 @@ type CreateInvoiceParams struct {
 	DueDate         pgtype.Date `json:"due_date"`
 	InvoiceType     string      `json:"invoice_type"`
 	PaymentMethod   pgtype.Text `json:"payment_method"`
+	PaymentStatus   string      `json:"payment_status"`
 	AccountID       pgtype.UUID `json:"account_id"`
 	WarehouseID     pgtype.UUID `json:"warehouse_id"`
 	BranchID        pgtype.UUID `json:"branch_id"`
@@ -54,6 +55,7 @@ func (q *Queries) CreateInvoice(ctx context.Context, arg *CreateInvoiceParams) (
 		arg.DueDate,
 		arg.InvoiceType,
 		arg.PaymentMethod,
+		arg.PaymentStatus,
 		arg.AccountID,
 		arg.WarehouseID,
 		arg.BranchID,

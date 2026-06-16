@@ -314,6 +314,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		DueDate:         dueDate,
 		InvoiceType:     invoiceType,
 		PaymentMethod:   pgtype.Text{String: body.PaymentMethod, Valid: body.PaymentMethod != ""},
+		PaymentStatus:   "unpaid",
 		AccountID:       pgtype.UUID{},
 		WarehouseID:     pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil},
 		BranchID:        pgtype.UUID{Bytes: branchID, Valid: branchID != uuid.Nil},

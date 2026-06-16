@@ -9,8 +9,8 @@ function getUser() {
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
-const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian' };
-const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial' };
+const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
+const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
 
 const PAGE_SIZE = 25;
 const todayStr = new Date().toISOString().split('T')[0];
@@ -261,7 +261,7 @@ export default function Invoices() {
                 <td style={{whiteSpace:'nowrap'}}>
                   <div className="actions">
                     <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
-                    {inv.payment_status !== 'paid' && (
+                    {inv.payment_status !== 'paid' && inv.payment_status !== 'dispatched' && (
                       <button onClick={() => openPay(inv)} className="btn btn-primary btn-sm">Bayar</button>
                     )}
                     <Link to={`/invoices/edit/${inv.id}`} className="btn btn-secondary btn-sm">Edit</Link>

@@ -72,7 +72,7 @@ INSERT INTO invoices (
     division_id, vendor_id, reference_number
 )
 VALUES (
-    gen_random_uuid(), $1, $2, $3, $4, $5, 'unpaid', 0, $6, $7, $8, $9, $10, $11
+    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12
 )
 RETURNING id, invoice_number, date, due_date, invoice_type, payment_status, created_at;
 

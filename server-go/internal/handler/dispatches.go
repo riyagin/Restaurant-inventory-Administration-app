@@ -320,6 +320,7 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		InvoiceNumber: invoiceNumber,
 		Date:          pgtype.Date{Time: invoiceDate, Valid: true},
 		InvoiceType:   "expense",
+		PaymentStatus: "dispatched",
 		BranchID:      pgtype.UUID{Bytes: branchID, Valid: true},
 		DivisionID:    pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
 	})

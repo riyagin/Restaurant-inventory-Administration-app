@@ -7,8 +7,8 @@ const idr = (v) =>
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 const todayStr = new Date().toISOString().split('T')[0];
 
-const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian' };
-const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial' };
+const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
+const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
 
 const SERVER = 'http://localhost:5000';
 
@@ -90,7 +90,7 @@ export default function InvoiceDetail() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {invoice.payment_status !== 'paid' && (
+          {invoice.payment_status !== 'paid' && invoice.payment_status !== 'dispatched' && (
             <button onClick={() => openPayModal(remaining)} className="btn btn-primary">
               💳 Bayar Invoice
             </button>
