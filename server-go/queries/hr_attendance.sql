@@ -144,6 +144,14 @@ INSERT INTO attendance_records (id, employee_id, date, status)
 VALUES (gen_random_uuid(), $1, $2, 'absent')
 ON CONFLICT (employee_id, date) DO NOTHING;
 
+-- name: ListPresentAttendanceForEmployeeRange :many
+-- Present-day check-outs for an employee within a date range, used to derive
+-- automatic overtime hours at payroll generation (checkout time vs schedule
+-- work_end, computed in Go via service.ComputeOvertimeMinutes).
+SELECT employee_id, date, check_in, check_out
+FROM attendance_records
+WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND status = 'present';
+
 -- ── Fingerprint imports ─────────────────────────────────────────────────────
 
 -- name: CreateFingerprintImport :one

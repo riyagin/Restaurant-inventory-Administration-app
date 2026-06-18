@@ -86,6 +86,22 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 	return s
 }
 
+// ComputeOvertimeMinutes returns the minutes a present-day check-out falls past
+// the branch's scheduled work_end (0 when there's no check-out or it's at/before
+// work_end). Mirrors the is_early_leave check in ComputeAnomalies but in the
+// opposite direction; used to seed payroll's auto-computed overtime hours from
+// attendance instead of requiring a fully manual entry.
+func ComputeOvertimeMinutes(checkOut *time.Time, sched Schedule) int {
+	if checkOut == nil {
+		return 0
+	}
+	outMin := minutesSinceMidnight(*checkOut)
+	if outMin <= sched.WorkEndMinutes {
+		return 0
+	}
+	return outMin - sched.WorkEndMinutes
+}
+
 const dedupWindow = 5 * time.Minute
 
 // AttendanceEvent is a single incoming punch to be merged into a day record.

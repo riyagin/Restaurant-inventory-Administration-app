@@ -681,17 +681,11 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 	for _, c := range components {
 		switch c.ComponentType {
 		case "allowance":
-			if c.ComponentIsFixed {
-				allowanceTotal += c.Amount
-			}
+			allowanceTotal += c.Amount
 		case "bonus":
-			if c.ComponentIsFixed {
-				bonusTotal += c.Amount
-			}
+			bonusTotal += c.Amount
 		case "deduction":
-			if c.ComponentIsFixed {
-				deductionTotal += c.Amount
-			}
+			deductionTotal += c.Amount
 		}
 	}
 
@@ -700,6 +694,11 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		Date:       pgtype.Date{Time: start, Valid: true},
 		Date_2:     pgtype.Date{Time: end, Valid: true},
 	})
+	if err != nil {
+		return err
+	}
+
+	overtimeHours, err := service.GetOvertimeHours(ctx, qtx, empID, start, end, sched)
 	if err != nil {
 		return err
 	}
@@ -731,7 +730,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		BaseSalary:              ws.BaseSalary,
 		DailyRate:               ws.DailyRate,
 		OvertimeDays:            0,
-		OvertimeHours:           0,
+		OvertimeHours:           overtimeHours,
 		OvertimeHourlyRate:      hourlyRate,
 		PublicHolidayDays:       float64(holidayCount),
 		OvertimeMultiplier:      mult.Overtime,
@@ -762,7 +761,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		GrossPay:                calc.GrossPay,
 		NetPay:                  calc.NetPay,
 		PerformanceScore:        perfScore,
-		OvertimeHours:           service.NumericFromFloat(0),
+		OvertimeHours:           service.NumericFromFloat(overtimeHours),
 		OvertimeHourlyRate:      hourlyRate,
 		OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 	})

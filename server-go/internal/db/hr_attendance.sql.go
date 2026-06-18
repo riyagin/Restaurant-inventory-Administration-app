@@ -38,6 +38,7 @@ func (q *Queries) CreateAttendanceDevice(ctx context.Context, arg *CreateAttenda
 }
 
 const createFingerprintImport = `-- name: CreateFingerprintImport :one
+
 INSERT INTO fingerprint_imports (id, filename, imported_by, row_count, matched_count)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)
 RETURNING id, filename, imported_by, row_count, matched_count, created_at
@@ -50,6 +51,7 @@ type CreateFingerprintImportParams struct {
 	MatchedCount pgtype.Int4 `json:"matched_count"`
 }
 
+// ── Fingerprint imports ─────────────────────────────────────────────────────
 func (q *Queries) CreateFingerprintImport(ctx context.Context, arg *CreateFingerprintImportParams) (*FingerprintImport, error) {
 	row := q.db.QueryRow(ctx, createFingerprintImport,
 		arg.Filename,
@@ -135,6 +137,7 @@ func (q *Queries) GetActiveDeviceByKeyHash(ctx context.Context, apiKeyHash strin
 }
 
 const getAttendanceRecordByEmployeeDate = `-- name: GetAttendanceRecordByEmployeeDate :one
+
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
        is_early_leave, early_leave_minutes, is_missing_checkout, note
@@ -147,6 +150,7 @@ type GetAttendanceRecordByEmployeeDateParams struct {
 	Date       pgtype.Date `json:"date"`
 }
 
+// ── Attendance records ──────────────────────────────────────────────────────
 func (q *Queries) GetAttendanceRecordByEmployeeDate(ctx context.Context, arg *GetAttendanceRecordByEmployeeDateParams) (*AttendanceRecord, error) {
 	row := q.db.QueryRow(ctx, getAttendanceRecordByEmployeeDate, arg.EmployeeID, arg.Date)
 	var i AttendanceRecord
@@ -204,6 +208,7 @@ func (q *Queries) GetAttendanceRecordByID(ctx context.Context, id pgtype.UUID) (
 }
 
 const getEmployeeByCode = `-- name: GetEmployeeByCode :one
+
 SELECT id, employee_code, full_name, branch_id, status, photo_path
 FROM employees
 WHERE employee_code = $1
@@ -218,6 +223,7 @@ type GetEmployeeByCodeRow struct {
 	PhotoPath    pgtype.Text `json:"photo_path"`
 }
 
+// ── Employees lookup (device + reconcile) ───────────────────────────────────
 func (q *Queries) GetEmployeeByCode(ctx context.Context, employeeCode string) (*GetEmployeeByCodeRow, error) {
 	row := q.db.QueryRow(ctx, getEmployeeByCode, employeeCode)
 	var i GetEmployeeByCodeRow
@@ -393,6 +399,7 @@ func (q *Queries) ListActiveEmployeesForReconcile(ctx context.Context) ([]*ListA
 }
 
 const listAttendanceDevices = `-- name: ListAttendanceDevices :many
+
 SELECT d.id, d.name, d.branch_id, d.api_key_hash, d.is_active, d.created_at,
        b.name AS branch_name
 FROM attendance_devices d
@@ -410,6 +417,7 @@ type ListAttendanceDevicesRow struct {
 	BranchName pgtype.Text        `json:"branch_name"`
 }
 
+// ── Attendance devices ──────────────────────────────────────────────────────
 func (q *Queries) ListAttendanceDevices(ctx context.Context) ([]*ListAttendanceDevicesRow, error) {
 	rows, err := q.db.Query(ctx, listAttendanceDevices)
 	if err != nil {
@@ -471,12 +479,61 @@ func (q *Queries) ListDeviceRosterByBranch(ctx context.Context, branchID pgtype.
 	return items, nil
 }
 
+const listPresentAttendanceForEmployeeRange = `-- name: ListPresentAttendanceForEmployeeRange :many
+SELECT employee_id, date, check_in, check_out
+FROM attendance_records
+WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND status = 'present'
+`
+
+type ListPresentAttendanceForEmployeeRangeParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+type ListPresentAttendanceForEmployeeRangeRow struct {
+	EmployeeID pgtype.UUID        `json:"employee_id"`
+	Date       pgtype.Date        `json:"date"`
+	CheckIn    pgtype.Timestamptz `json:"check_in"`
+	CheckOut   pgtype.Timestamptz `json:"check_out"`
+}
+
+// Present-day check-outs for an employee within a date range, used to derive
+// automatic overtime hours at payroll generation (checkout time vs schedule
+// work_end, computed in Go via service.ComputeOvertimeMinutes).
+func (q *Queries) ListPresentAttendanceForEmployeeRange(ctx context.Context, arg *ListPresentAttendanceForEmployeeRangeParams) ([]*ListPresentAttendanceForEmployeeRangeRow, error) {
+	rows, err := q.db.Query(ctx, listPresentAttendanceForEmployeeRange, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListPresentAttendanceForEmployeeRangeRow
+	for rows.Next() {
+		var i ListPresentAttendanceForEmployeeRangeRow
+		if err := rows.Scan(
+			&i.EmployeeID,
+			&i.Date,
+			&i.CheckIn,
+			&i.CheckOut,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublicHolidays = `-- name: ListPublicHolidays :many
+
 SELECT id, date, name
 FROM public_holidays
 ORDER BY date DESC
 `
 
+// ── Public holidays ─────────────────────────────────────────────────────────
 func (q *Queries) ListPublicHolidays(ctx context.Context) ([]*PublicHoliday, error) {
 	rows, err := q.db.Query(ctx, listPublicHolidays)
 	if err != nil {
@@ -498,11 +555,13 @@ func (q *Queries) ListPublicHolidays(ctx context.Context) ([]*PublicHoliday, err
 }
 
 const listWorkSchedules = `-- name: ListWorkSchedules :many
+
 SELECT id, branch_id, work_start, work_end, grace_minutes, early_leave_minutes, work_days
 FROM work_schedules
 ORDER BY branch_id
 `
 
+// ── Work schedules ──────────────────────────────────────────────────────────
 func (q *Queries) ListWorkSchedules(ctx context.Context) ([]*WorkSchedule, error) {
 	rows, err := q.db.Query(ctx, listWorkSchedules)
 	if err != nil {

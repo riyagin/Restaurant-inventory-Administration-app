@@ -154,6 +154,31 @@ func HourlyRateFromDaily(dailyRate int64, sched Schedule) int64 {
 	return roundHalfUp(float64(dailyRate) / StandardDailyHours(sched))
 }
 
+// GetOvertimeHours sums minutes worked past the branch's scheduled work_end across
+// every 'present' attendance record for an employee in [from, to], converting to
+// hours. Seeds payroll's overtime_hours automatically from attendance instead of
+// requiring a fully manual entry; the reviewer can still adjust it afterwards.
+func GetOvertimeHours(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time, sched Schedule) (float64, error) {
+	rows, err := qtx.ListPresentAttendanceForEmployeeRange(ctx, &db.ListPresentAttendanceForEmployeeRangeParams{
+		EmployeeID: employeeID,
+		Date:       pgtype.Date{Time: dateOnly(from), Valid: true},
+		Date_2:     pgtype.Date{Time: dateOnly(to), Valid: true},
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	totalMinutes := 0
+	for _, r := range rows {
+		if !r.CheckOut.Valid {
+			continue
+		}
+		checkOut := r.CheckOut.Time
+		totalMinutes += ComputeOvertimeMinutes(&checkOut, sched)
+	}
+	return float64(totalMinutes) / 60, nil
+}
+
 // AllLinesReviewed reports whether every line in a period has been reviewed. Used by
 // the close-blocked-until-reviewed predicate (and unit-tested directly).
 func AllLinesReviewed(reviewedCount, total int) bool {
@@ -237,10 +262,13 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			res.SkippedNames = append(res.SkippedNames, emp.FullName)
 			continue
 		}
-		hourlyRate := HourlyRateFromDaily(ws.DailyRate, getSched(emp.BranchID))
+		sched := getSched(emp.BranchID)
+		hourlyRate := HourlyRateFromDaily(ws.DailyRate, sched)
 
-		// Snapshot fixed allowance/bonus totals and fixed deduction total from the
-		// wage structure's components.
+		// Snapshot allowance/bonus/deduction totals from every wage structure
+		// component — fixed AND variable (variable components carry their current
+		// catalog amount as a starting point; the reviewer can still adjust bonus/
+		// allowance amounts later, which recomputes these totals).
 		components, err := qtx.ListEmployeeWageComponents(ctx, ws.ID)
 		if err != nil {
 			return nil, err
@@ -249,17 +277,11 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		for _, c := range components {
 			switch c.ComponentType {
 			case "allowance":
-				if c.ComponentIsFixed {
-					allowanceTotal += c.Amount
-				}
+				allowanceTotal += c.Amount
 			case "bonus":
-				if c.ComponentIsFixed {
-					bonusTotal += c.Amount
-				}
+				bonusTotal += c.Amount
 			case "deduction":
-				if c.ComponentIsFixed {
-					deductionTotal += c.Amount
-				}
+				deductionTotal += c.Amount
 			}
 		}
 
@@ -269,6 +291,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			Date:       pgtype.Date{Time: dateOnly(start), Valid: true},
 			Date_2:     pgtype.Date{Time: dateOnly(end), Valid: true},
 		})
+		if err != nil {
+			return nil, err
+		}
+
+		// Prefill overtime_hours from attendance check-out times past work_end.
+		overtimeHours, err := GetOvertimeHours(ctx, qtx, emp.ID, start, end, sched)
 		if err != nil {
 			return nil, err
 		}
@@ -303,8 +331,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		calc := CalcLine(CalcLineInput{
 			BaseSalary:              ws.BaseSalary,
 			DailyRate:               ws.DailyRate,
-			OvertimeDays:            0, // entered manually during review
-			OvertimeHours:           0, // entered manually during review
+			OvertimeDays:            0, // entered manually during review (no day-based attendance signal)
+			OvertimeHours:           overtimeHours,
 			OvertimeHourlyRate:      hourlyRate,
 			PublicHolidayDays:       float64(holidayCount),
 			OvertimeMultiplier:      mult.Overtime,
@@ -335,7 +363,7 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			GrossPay:                calc.GrossPay,
 			NetPay:                  calc.NetPay,
 			PerformanceScore:        perfScore,
-			OvertimeHours:           NumericFromFloat(0),
+			OvertimeHours:           NumericFromFloat(overtimeHours),
 			OvertimeHourlyRate:      hourlyRate,
 			OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 		})

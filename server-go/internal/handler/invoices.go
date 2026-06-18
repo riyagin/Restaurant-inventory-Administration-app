@@ -243,6 +243,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Date            string `json:"date"`
 		DueDate         string `json:"due_date"`
 		InvoiceType     string `json:"invoice_type"`
+		PaymentStatus   string `json:"payment_status"`
 		PaymentMethod   string `json:"payment_method"`
 		AccountID       string `json:"account_id"`
 		WarehouseID     string `json:"warehouse_id"`
@@ -430,6 +431,45 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, grandTotal); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
+			return
+		}
+	}
+
+	// 5. If already paid at creation, settle immediately within the same transaction
+	if body.PaymentStatus == "paid" && body.AccountID != "" {
+		cashAcctID, err := parseUUID(body.AccountID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "account_id tidak valid")
+			return
+		}
+		cashAcct, err := qtx.GetAccountByID(ctx, pgtype.UUID{Bytes: cashAcctID, Valid: true})
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "akun pembayaran tidak ditemukan")
+			return
+		}
+		if cashAcct.Balance < grandTotal {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("saldo akun \"%s\" tidak cukup", cashAcct.Name))
+			return
+		}
+		// Debit AP (liability decreases — already credited above)
+		if apAcct != nil {
+			if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -grandTotal); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
+				return
+			}
+		}
+		// Credit cash (asset decreases)
+		if err := service.UpdateBalance(ctx, qtx, cashAcctID, -grandTotal); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo kas")
+			return
+		}
+		if _, err := qtx.UpdateInvoicePayment(ctx, &db.UpdateInvoicePaymentParams{
+			AmountPaid:    grandTotal,
+			PaymentStatus: "paid",
+			AccountID:     pgtype.UUID{Bytes: cashAcctID, Valid: true},
+			ID:            invoice.ID,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui status pembayaran")
 			return
 		}
 	}

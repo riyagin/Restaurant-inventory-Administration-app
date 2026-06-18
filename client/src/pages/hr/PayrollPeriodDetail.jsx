@@ -407,7 +407,10 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
               </label>
               <input type="number" step="0.5" min="0" value={overtimeHours} disabled={!editable}
                 onChange={(e) => setOvertimeHours(e.target.value)}
-                style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd', marginBottom: 10 }} />
+                style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd' }} />
+              <p style={{ fontSize: 11, color: '#9aa', margin: '2px 0 10px' }}>
+                Otomatis dihitung dari absensi (jam keluar setelah jam kerja berakhir) — dapat disesuaikan.
+              </p>
               <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Hari Libur Nasional</label>
               <input type="number" step="0.5" min="0" value={holidayDays} disabled={!editable}
                 onChange={(e) => setHolidayDays(e.target.value)}
