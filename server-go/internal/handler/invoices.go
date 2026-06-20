@@ -435,8 +435,12 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 5. If already paid at creation, settle immediately within the same transaction
-	if body.PaymentStatus == "paid" && body.AccountID != "" {
+	// 5. If already paid/partial at creation, settle immediately within the same transaction
+	if body.PaymentStatus == "paid" || body.PaymentStatus == "partial" {
+		if body.AccountID == "" {
+			respondError(w, http.StatusBadRequest, "account_id diperlukan untuk status pembayaran ini")
+			return
+		}
 		cashAcctID, err := parseUUID(body.AccountID)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, "account_id tidak valid")
@@ -465,7 +469,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := qtx.UpdateInvoicePayment(ctx, &db.UpdateInvoicePaymentParams{
 			AmountPaid:    grandTotal,
-			PaymentStatus: "paid",
+			PaymentStatus: body.PaymentStatus,
 			AccountID:     pgtype.UUID{Bytes: cashAcctID, Valid: true},
 			ID:            invoice.ID,
 		}); err != nil {
