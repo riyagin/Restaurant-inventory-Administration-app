@@ -45,6 +45,9 @@ SELECT
 FROM payroll_lines l
 WHERE l.payroll_period_id = $1;
 
+-- name: DeletePayrollPeriod :exec
+DELETE FROM payroll_periods WHERE id = $1;
+
 -- name: ClosePayrollPeriod :one
 UPDATE payroll_periods
 SET status = 'closed', closed_at = now()
@@ -201,6 +204,15 @@ WHERE ar.employee_id = $1
   AND ar.date >= $2 AND ar.date <= $3
   AND ar.status = 'present';
 
+-- name: ListHolidaysWorked :many
+SELECT ph.id, ph.date, ph.name
+FROM attendance_records ar
+JOIN public_holidays ph ON ph.date = ar.date
+WHERE ar.employee_id = $1
+  AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+ORDER BY ph.date;
+
 -- name: GetAttendanceSummaryForMonth :one
 SELECT
     COUNT(*) FILTER (WHERE status = 'present')::int AS hadir,
@@ -240,6 +252,36 @@ JOIN employees e       ON e.id = l.employee_id
 LEFT JOIN positions pos ON pos.id = e.position_id
 LEFT JOIN branches  b   ON b.id  = e.branch_id
 WHERE l.id = $1;
+
+-- name: GetBonusEligibleLines :many
+-- Returns payroll lines for this period where the employee's wage structure
+-- has the given bonus wage component, ordered by employee name.
+SELECT
+    l.id              AS line_id,
+    plc.id            AS line_component_id,
+    plc.name          AS component_name,
+    plc.amount        AS current_amount,
+    l.employee_id,
+    e.full_name       AS employee_name,
+    e.employee_code,
+    l.performance_score,
+    l.reviewed
+FROM payroll_line_components plc
+JOIN payroll_lines l  ON l.id  = plc.payroll_line_id
+JOIN employees     e  ON e.id  = l.employee_id
+WHERE l.payroll_period_id = $1
+  AND plc.wage_component_id = $2
+  AND plc.type = 'bonus'
+ORDER BY e.full_name;
+
+-- name: UpdatePayrollLineTotals :exec
+-- Updates bonus_total, gross_pay, and net_pay on a line without touching
+-- the reviewed flag — used after a bulk bonus distribution.
+UPDATE payroll_lines
+SET bonus_total = $1,
+    gross_pay   = $2,
+    net_pay     = $3
+WHERE id = $4;
 
 -- name: ListLineKasbonNumbers :many
 -- Kasbon numbers whose installments were deducted on this payroll line. Populated

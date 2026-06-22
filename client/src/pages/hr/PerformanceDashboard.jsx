@@ -2,7 +2,7 @@ import { useEffect, useState, Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getPerformanceScores, getBranches, getEmployeePerformance,
-  createPerformanceViolation, getEmployees,
+  createPerformanceViolation, getEmployees, evaluatePerformance, resetAutoViolations,
 } from '../../api';
 
 const RULE_LABELS = {
@@ -77,7 +77,7 @@ function ManualViolationModal({ onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getEmployees().then(r => setEmployees(r.data || [])).catch(() => setEmployees([]));
+    getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
   }, []);
 
   const submit = async (e) => {
@@ -151,6 +151,7 @@ export default function PerformanceDashboard() {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
 
   useEffect(() => {
     getBranches().then(r => setBranches(r.data || [])).catch(() => {});
@@ -169,11 +170,31 @@ export default function PerformanceDashboard() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [month, branchId]);
 
+  const handleEvaluate = async () => {
+    setEvaluating(true);
+    try {
+      const [y, m] = month.split('-');
+      const from = `${y}-${m}-01`;
+      const lastDay = new Date(Number(y), Number(m), 0).getDate();
+      const to = `${y}-${m}-${String(lastDay).padStart(2, '0')}`;
+      await resetAutoViolations(from, to);
+      await evaluatePerformance(from, to);
+      load();
+    } catch {
+      alert('Evaluasi gagal. Coba lagi.');
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
   return (
     <>
       <div className="page-header">
         <h1>Kinerja Karyawan</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={handleEvaluate} className="btn btn-secondary" disabled={evaluating}>
+            {evaluating ? 'Mengevaluasi…' : 'Evaluasi Bulan Ini'}
+          </button>
           <button onClick={() => setShowModal(true)} className="btn btn-primary">Tambah Pelanggaran Manual</button>
           <Link to="/hr/performance/policies" className="btn btn-secondary">Kebijakan</Link>
         </div>

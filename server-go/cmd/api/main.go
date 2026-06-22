@@ -135,6 +135,7 @@ func main() {
 	kasbonHandler := handler.NewKasbonHandler(pool, queries)
 	kasbonHandler.SetUploadsDir(cfg.UploadsDir)
 	payrollHandler := handler.NewPayrollHandler(pool, queries)
+	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 
@@ -430,6 +431,7 @@ func main() {
 			r.Get("/api/hr/employees/{id}/performance", performanceHandler.EmployeePerformance)
 			// Violations
 			r.Post("/api/hr/performance/violations", performanceHandler.CreateManualViolation)
+			r.Delete("/api/hr/performance/violations/auto", performanceHandler.ResetAutoViolations)
 			r.Delete("/api/hr/performance/violations/{id}", performanceHandler.DeleteViolation)
 			// Manual backfill
 			r.Post("/api/hr/performance/evaluate", performanceHandler.Evaluate)
@@ -482,6 +484,14 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/reject", kasbonHandler.Reject)
 		})
 
+		// HR Overtime requests — read: admin/manager; write: admin only (enforced in handler).
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Get("/api/hr/overtime", overtimeHandler.List)
+			r.Post("/api/hr/overtime", overtimeHandler.Create)
+			r.Delete("/api/hr/overtime/{id}", overtimeHandler.Delete)
+		})
+
 		// HR Payroll (penggajian) — admin/manager only.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
@@ -489,7 +499,10 @@ func main() {
 			r.Post("/api/hr/payroll/periods", payrollHandler.CreatePeriod)
 			r.Get("/api/hr/payroll/periods/{id}", payrollHandler.GetPeriod)
 			r.Get("/api/hr/payroll/periods/{id}/lines", payrollHandler.ListLines)
+			r.Get("/api/hr/payroll/periods/{id}/bonus-eligible", payrollHandler.BonusEligible)
+			r.Post("/api/hr/payroll/periods/{id}/apply-bonus", payrollHandler.ApplyBonus)
 			r.Post("/api/hr/payroll/periods/{id}/regenerate-line/{employeeId}", payrollHandler.RegenerateLine)
+			r.Delete("/api/hr/payroll/periods/{id}", payrollHandler.DeletePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/close", payrollHandler.ClosePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/mark-paid", payrollHandler.MarkPaid)
 			r.Get("/api/hr/payroll/lines/{id}/review", payrollHandler.GetLineReview)

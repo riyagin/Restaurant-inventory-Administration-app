@@ -541,6 +541,41 @@ func (h *PerformanceHandler) DeleteViolation(w http.ResponseWriter, r *http.Requ
 	respondJSON(w, http.StatusOK, map[string]any{"message": "pelanggaran berhasil dihapus"})
 }
 
+// ResetAutoViolations — DELETE /api/hr/performance/violations/auto?from=&to=
+// Deletes all auto-generated violations in the date range so evaluation can be re-run cleanly.
+// Manual violations are never touched.
+func (h *PerformanceHandler) ResetAutoViolations(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+
+	fromStr := strings.TrimSpace(q.Get("from"))
+	toStr := strings.TrimSpace(q.Get("to"))
+	if fromStr == "" || toStr == "" {
+		respondError(w, http.StatusBadRequest, "parameter from dan to wajib diisi (YYYY-MM-DD)")
+		return
+	}
+	from, err := time.Parse("2006-01-02", fromStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format from tidak valid")
+		return
+	}
+	to, err := time.Parse("2006-01-02", toStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format to tidak valid")
+		return
+	}
+
+	if err := h.queries.DeleteAutoViolationsForRange(ctx, &db.DeleteAutoViolationsForRangeParams{
+		From: pgtype.Date{Time: from, Valid: true},
+		To:   pgtype.Date{Time: to, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghapus pelanggaran otomatis")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"message": "pelanggaran otomatis berhasil direset"})
+}
+
 // Evaluate — POST /api/hr/performance/evaluate?from=&to=
 // Manual backfill: runs the evaluation engine over a date range.
 func (h *PerformanceHandler) Evaluate(w http.ResponseWriter, r *http.Request) {
@@ -578,6 +613,29 @@ func (h *PerformanceHandler) Evaluate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
+
+	if err := qtx.DeleteAutoViolationsForRange(ctx, &db.DeleteAutoViolationsForRangeParams{
+		From: pgtype.Date{Time: from, Valid: true},
+		To:   pgtype.Date{Time: to, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mereset pelanggaran otomatis")
+		return
+	}
+
+	// Reconcile absent records for each past day in the range before evaluating.
+	// Without this, employees with no attendance record (missed nightly reconcile)
+	// are invisible to the evaluation engine.
+	yesterday := time.Now().AddDate(0, 0, -1)
+	reconcileTo := to
+	if reconcileTo.After(yesterday) {
+		reconcileTo = yesterday
+	}
+	for d := from; !d.After(reconcileTo); d = d.AddDate(0, 0, 1) {
+		if _, err := service.ReconcileAbsent(ctx, qtx, d); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menjalankan rekonsiliasi absen")
+			return
+		}
+	}
 
 	if err := service.EvaluateRange(ctx, qtx, from, to); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menjalankan evaluasi kinerja")

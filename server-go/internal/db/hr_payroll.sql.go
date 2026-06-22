@@ -59,6 +59,42 @@ func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentO
 	return cnt, err
 }
 
+const listHolidaysWorked = `-- name: ListHolidaysWorked :many
+SELECT ph.id, ph.date, ph.name
+FROM attendance_records ar
+JOIN public_holidays ph ON ph.date = ar.date
+WHERE ar.employee_id = $1
+  AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+ORDER BY ph.date
+`
+
+type ListHolidaysWorkedParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+func (q *Queries) ListHolidaysWorked(ctx context.Context, arg *ListHolidaysWorkedParams) ([]*PublicHoliday, error) {
+	rows, err := q.db.Query(ctx, listHolidaysWorked, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*PublicHoliday
+	for rows.Next() {
+		var i PublicHoliday
+		if err := rows.Scan(&i.ID, &i.Date, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countUnreviewedLines = `-- name: CountUnreviewedLines :one
 SELECT COUNT(*) FROM payroll_lines
 WHERE payroll_period_id = $1 AND reviewed = false
@@ -249,6 +285,15 @@ func (q *Queries) CreatePayrollPeriod(ctx context.Context, arg *CreatePayrollPer
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const deletePayrollPeriod = `-- name: DeletePayrollPeriod :exec
+DELETE FROM payroll_periods WHERE id = $1
+`
+
+func (q *Queries) DeletePayrollPeriod(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deletePayrollPeriod, id)
+	return err
 }
 
 const deletePayrollLine = `-- name: DeletePayrollLine :exec
@@ -989,6 +1034,93 @@ func (q *Queries) UnreviewPayrollLine(ctx context.Context, id pgtype.UUID) (*Pay
 		&i.OvertimeHourlyAmount,
 	)
 	return &i, err
+}
+
+const getBonusEligibleLines = `-- name: GetBonusEligibleLines :many
+SELECT
+    l.id              AS line_id,
+    plc.id            AS line_component_id,
+    plc.name          AS component_name,
+    plc.amount        AS current_amount,
+    l.employee_id,
+    e.full_name       AS employee_name,
+    e.employee_code,
+    l.performance_score,
+    l.reviewed
+FROM payroll_line_components plc
+JOIN payroll_lines l  ON l.id  = plc.payroll_line_id
+JOIN employees     e  ON e.id  = l.employee_id
+WHERE l.payroll_period_id = $1
+  AND plc.wage_component_id = $2
+  AND plc.type = 'bonus'
+ORDER BY e.full_name
+`
+
+type GetBonusEligibleLinesParams struct {
+	PayrollPeriodID pgtype.UUID `json:"payroll_period_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+}
+
+type GetBonusEligibleLinesRow struct {
+	LineID           pgtype.UUID `json:"line_id"`
+	LineComponentID  pgtype.UUID `json:"line_component_id"`
+	ComponentName    string      `json:"component_name"`
+	CurrentAmount    int64       `json:"current_amount"`
+	EmployeeID       pgtype.UUID `json:"employee_id"`
+	EmployeeName     string      `json:"employee_name"`
+	EmployeeCode     string      `json:"employee_code"`
+	PerformanceScore pgtype.Int4 `json:"performance_score"`
+	Reviewed         bool        `json:"reviewed"`
+}
+
+func (q *Queries) GetBonusEligibleLines(ctx context.Context, arg *GetBonusEligibleLinesParams) ([]*GetBonusEligibleLinesRow, error) {
+	rows, err := q.db.Query(ctx, getBonusEligibleLines, arg.PayrollPeriodID, arg.WageComponentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetBonusEligibleLinesRow
+	for rows.Next() {
+		var i GetBonusEligibleLinesRow
+		if err := rows.Scan(
+			&i.LineID,
+			&i.LineComponentID,
+			&i.ComponentName,
+			&i.CurrentAmount,
+			&i.EmployeeID,
+			&i.EmployeeName,
+			&i.EmployeeCode,
+			&i.PerformanceScore,
+			&i.Reviewed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updatePayrollLineTotals = `-- name: UpdatePayrollLineTotals :exec
+UPDATE payroll_lines
+SET bonus_total = $1,
+    gross_pay   = $2,
+    net_pay     = $3
+WHERE id = $4
+`
+
+type UpdatePayrollLineTotalsParams struct {
+	BonusTotal int64       `json:"bonus_total"`
+	GrossPay   int64       `json:"gross_pay"`
+	NetPay     int64       `json:"net_pay"`
+	ID         pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdatePayrollLineTotals(ctx context.Context, arg *UpdatePayrollLineTotalsParams) error {
+	_, err := q.db.Exec(ctx, updatePayrollLineTotals, arg.BonusTotal, arg.GrossPay, arg.NetPay, arg.ID)
+	return err
 }
 
 const updatePayrollLineComponentAmount = `-- name: UpdatePayrollLineComponentAmount :exec

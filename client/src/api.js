@@ -267,6 +267,7 @@ export const getEmployeePerformance   = (id, params) => api.get(`/hr/employees/$
 export const createPerformanceViolation = (data) => api.post('/hr/performance/violations', data);
 export const deletePerformanceViolation = (id, reason) => api.delete(`/hr/performance/violations/${id}`, { params: { reason } });
 export const evaluatePerformance        = (from, to) => api.post('/hr/performance/evaluate', null, { params: { from, to } });
+export const resetAutoViolations        = (from, to) => api.delete('/hr/performance/violations/auto', { params: { from, to } });
 
 // ── HR: Cuti (Leave Management) ─────────────────────────────────────────────
 // Leave types
@@ -306,6 +307,11 @@ export const processKasbon   = (id, formData) => api.post(`/hr/kasbons/${id}/pro
 // the list filtered by employee_id.
 export const getEmployeeKasbons = (employeeId) => api.get('/hr/kasbons', { params: { employee_id: employeeId } });
 
+// ── HR: Overtime Requests ───────────────────────────────────────────────────
+export const getOvertimeRequests  = (params) => api.get('/hr/overtime', { params });
+export const createOvertimeRequest = (data) => api.post('/hr/overtime', data);
+export const deleteOvertimeRequest = (id) => api.delete(`/hr/overtime/${id}`);
+
 // ── HR: Payroll (Penggajian) ────────────────────────────────────────────────
 export const getPayrollPeriods   = () => api.get('/hr/payroll/periods');
 export const createPayrollPeriod = (data) => api.post('/hr/payroll/periods', data);
@@ -317,6 +323,9 @@ export const unreviewPayrollLine = (lineId) => api.post(`/hr/payroll/lines/${lin
 export const regeneratePayrollLine = (id, employeeId) => api.post(`/hr/payroll/periods/${id}/regenerate-line/${employeeId}`);
 export const closePayrollPeriod  = (id) => api.post(`/hr/payroll/periods/${id}/close`);
 export const markPayrollPeriodPaid = (id) => api.post(`/hr/payroll/periods/${id}/mark-paid`);
+export const deletePayrollPeriod = (id) => api.delete(`/hr/payroll/periods/${id}`);
+export const getPayrollBonusEligible = (id, wageComponentId) => api.get(`/hr/payroll/periods/${id}/bonus-eligible`, { params: { wage_component_id: wageComponentId } });
+export const applyPayrollBonus = (id, data) => api.post(`/hr/payroll/periods/${id}/apply-bonus`, data);
 
 // ── HR: Slip Gaji (Payslips) + Pengaturan HR ────────────────────────────────
 export const downloadPayslip        = (lineId)   => api.get(`/hr/payroll/lines/${lineId}/payslip`, { responseType: 'blob' });

@@ -295,8 +295,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 
-		// Prefill overtime_hours from attendance check-out times past work_end.
-		overtimeHours, err := GetOvertimeHours(ctx, qtx, emp.ID, start, end, sched)
+		// Seed overtime_hours from formal overtime requests logged for this period.
+		overtimeHours, err := qtx.SumOvertimeHoursForEmployee(ctx, &db.SumOvertimeHoursForEmployeeParams{
+			EmployeeID: emp.ID,
+			Date:       pgtype.Date{Time: dateOnly(start), Valid: true},
+			Date_2:     pgtype.Date{Time: dateOnly(end), Valid: true},
+		})
 		if err != nil {
 			return nil, err
 		}

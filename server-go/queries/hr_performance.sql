@@ -64,6 +64,12 @@ DELETE FROM performance_violations WHERE id = $1;
 DELETE FROM performance_violations
 WHERE attendance_record_id = $1 AND source = 'auto';
 
+-- name: DeleteAutoViolationsForRange :exec
+DELETE FROM performance_violations
+WHERE source = 'auto'
+  AND date >= $1
+  AND date <= $2;
+
 -- name: CountPolicyOccurrencesInMonth :one
 SELECT COUNT(*)
 FROM performance_violations

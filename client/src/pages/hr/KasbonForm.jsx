@@ -22,8 +22,8 @@ function monthLabel(value) {
 
 const SENDING_SUGGESTIONS = ['Transfer Bank', 'Tunai', 'E-Wallet', 'Cek'];
 
-// Fund-source accounts: asset (and cash-like) accounts only.
-const isFundSource = (a) => a.account_type === 'asset';
+// Same filter as invoice payment: all non-system asset accounts.
+const isFundSource = (a) => a.account_type === 'asset' && !a.is_system;
 
 export default function KasbonForm() {
   const navigate = useNavigate();
@@ -132,10 +132,10 @@ export default function KasbonForm() {
         </div>
 
         <div className="form-group">
-          <label>Sumber Dana (akun aset / kas)</label>
+          <label>Akun Kas / Bank</label>
           <select value={form.fund_source_account_id} onChange={e => setForm({ ...form, fund_source_account_id: e.target.value })}>
             <option value="">— Pilih akun —</option>
-            {accounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.account_number ? ` (${a.account_number})` : ''}</option>)}
+            {accounts.map(a => <option key={a.id} value={a.id}>{a.account_number ? `${a.account_number} · ` : ''}{a.name}</option>)}
           </select>
         </div>
 

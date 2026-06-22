@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getPayrollPeriods, createPayrollPeriod } from '../../api';
+import { getPayrollPeriods, createPayrollPeriod, deletePayrollPeriod } from '../../api';
 
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
 const STATUS_COLORS = {
@@ -45,6 +45,18 @@ export default function PayrollDashboard() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleDelete = async (e, id, label) => {
+    e.stopPropagation();
+    if (!window.confirm(`Hapus periode penggajian ${label}? Semua baris penggajian akan ikut terhapus.`)) return;
+    setError('');
+    try {
+      await deletePayrollPeriod(id);
+      await load();
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Gagal menghapus periode penggajian');
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -114,6 +126,7 @@ export default function PayrollDashboard() {
               <th style={{ padding: 12 }}>Status</th>
               <th style={{ padding: 12, textAlign: 'right' }}>Total Gaji Bersih</th>
               <th style={{ padding: 12, textAlign: 'center' }}>Direview</th>
+              <th style={{ padding: 12 }}></th>
             </tr>
           </thead>
           <tbody>
@@ -124,6 +137,15 @@ export default function PayrollDashboard() {
                 <td style={{ padding: 12 }}><StatusChip status={p.status} /></td>
                 <td style={{ padding: 12, textAlign: 'right' }}>{fmtIDR(p.total_net)}</td>
                 <td style={{ padding: 12, textAlign: 'center' }}>{p.reviewed_count}/{p.line_count}</td>
+                <td style={{ padding: '8px 12px' }}>
+                  {p.status === 'open' && (
+                    <button
+                      onClick={(e) => handleDelete(e, p.id, fmtMonth(p.period_month))}
+                      style={{ background: '#fce8e6', color: '#c5221f', border: 0, borderRadius: 6, padding: '4px 10px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                      Hapus
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

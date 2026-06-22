@@ -257,12 +257,39 @@ func (h *PayrollHandler) GetLineReview(w http.ResponseWriter, r *http.Request) {
 		installments = []*db.KasbonInstallment{}
 	}
 
+	holidaysWorked, _ := h.queries.ListHolidaysWorked(ctx, &db.ListHolidaysWorkedParams{
+		EmployeeID: line.EmployeeID,
+		Date:       period.StartDate,
+		Date_2:     period.EndDate,
+	})
+	if holidaysWorked == nil {
+		holidaysWorked = []*db.PublicHoliday{}
+	}
+
+	overtimeRequests, _ := h.queries.ListOvertimeRequestsForEmployee(ctx, &db.ListOvertimeRequestsForEmployeeParams{
+		EmployeeID: line.EmployeeID,
+		Date:       period.StartDate,
+		Date_2:     period.EndDate,
+	})
+	if overtimeRequests == nil {
+		overtimeRequests = []*db.OvertimeRequest{}
+	}
+
+	mult, err := service.LoadMultipliers(ctx, h.queries)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengaturan lembur")
+		return
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
-		"line":         line,
-		"components":   components,
-		"attendance":   attendance,
-		"violations":   violations,
-		"installments": installments,
+		"line":              line,
+		"components":        components,
+		"attendance":        attendance,
+		"violations":        violations,
+		"installments":      installments,
+		"holidays_worked":   holidaysWorked,
+		"overtime_requests": overtimeRequests,
+		"multipliers":       map[string]float64{"overtime": mult.Overtime, "holiday": mult.Holiday},
 	})
 }
 
@@ -582,6 +609,48 @@ func (h *PayrollHandler) ClosePeriod(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, updated)
 }
 
+// DeletePeriod — DELETE /api/hr/payroll/periods/:id
+// Only open (unfinished) periods may be deleted. Cascades to lines and components.
+func (h *PayrollHandler) DeletePeriod(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	period, err := h.queries.GetPayrollPeriodByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "periode penggajian tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil periode penggajian")
+		return
+	}
+	if period.Status != "open" {
+		respondError(w, http.StatusConflict, "hanya periode yang belum ditutup yang dapat dihapus")
+		return
+	}
+
+	if err := h.queries.DeletePayrollPeriod(ctx, pgID); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghapus periode penggajian")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "DELETE",
+		EntityType:  "payroll_period",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menghapus periode penggajian %s", period.PeriodMonth.Time.Format("2006-01")),
+	})
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // MarkPaid — POST /api/hr/payroll/periods/:id/mark-paid
 func (h *PayrollHandler) MarkPaid(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
@@ -622,6 +691,190 @@ func (h *PayrollHandler) MarkPaid(w http.ResponseWriter, r *http.Request) {
 	})
 
 	respondJSON(w, http.StatusOK, updated)
+}
+
+// ── Bonus Distribution ───────────────────────────────────────────────────────
+
+// BonusEligible — GET /api/hr/payroll/periods/:id/bonus-eligible?wage_component_id=...
+// Returns all payroll lines in this period whose wage structure contains the given
+// bonus component (identified by its wage_component catalog ID).
+func (h *PayrollHandler) BonusEligible(w http.ResponseWriter, r *http.Request) {
+	periodID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID periode tidak valid")
+		return
+	}
+	wcID, err := parseUUID(r.URL.Query().Get("wage_component_id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "wage_component_id tidak valid")
+		return
+	}
+	ctx := r.Context()
+
+	rows, err := h.queries.GetBonusEligibleLines(ctx, &db.GetBonusEligibleLinesParams{
+		PayrollPeriodID: pgtype.UUID{Bytes: periodID, Valid: true},
+		WageComponentID: pgtype.UUID{Bytes: wcID, Valid: true},
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil daftar karyawan eligible")
+		return
+	}
+	if rows == nil {
+		rows = []*db.GetBonusEligibleLinesRow{}
+	}
+	respondJSON(w, http.StatusOK, rows)
+}
+
+type applyBonusBody struct {
+	WageComponentID   string   `json:"wage_component_id"`
+	AmountPerEmployee int64    `json:"amount_per_employee"` // cents
+	LineComponentIDs  []string `json:"line_component_ids"`  // payroll_line_components.id
+}
+
+// ApplyBonus — POST /api/hr/payroll/periods/:id/apply-bonus
+// Adds amount_per_employee to each listed line component's amount, then recomputes
+// bonus_total / gross_pay / net_pay for every affected line. Period must be open.
+func (h *PayrollHandler) ApplyBonus(w http.ResponseWriter, r *http.Request) {
+	periodID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID periode tidak valid")
+		return
+	}
+	var body applyBonusBody
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	if body.AmountPerEmployee <= 0 {
+		respondError(w, http.StatusBadRequest, "jumlah per karyawan harus lebih dari 0")
+		return
+	}
+	if len(body.LineComponentIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "pilih minimal satu karyawan")
+		return
+	}
+
+	ctx := r.Context()
+	pgPeriodID := pgtype.UUID{Bytes: periodID, Valid: true}
+
+	period, err := h.queries.GetPayrollPeriodByID(ctx, pgPeriodID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "periode penggajian tidak ditemukan")
+		return
+	}
+	if period.Status != "open" {
+		respondError(w, http.StatusConflict, service.ErrPeriodLocked.Error())
+		return
+	}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.queries.WithTx(tx)
+
+	// Fetch all eligible rows for this period+component to build a lookup map
+	// from line_component_id → (line_id, current_amount).
+	wcID, err := parseUUID(body.WageComponentID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "wage_component_id tidak valid")
+		return
+	}
+	eligible, err := qtx.GetBonusEligibleLines(ctx, &db.GetBonusEligibleLinesParams{
+		PayrollPeriodID: pgPeriodID,
+		WageComponentID: pgtype.UUID{Bytes: wcID, Valid: true},
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil daftar eligible")
+		return
+	}
+
+	// Build lookup: line_component_id → line_id.
+	type eligibleEntry struct {
+		lineID        pgtype.UUID
+		currentAmount int64
+	}
+	lcToLine := map[string]eligibleEntry{}
+	for _, row := range eligible {
+		lcToLine[row.LineComponentID.String()] = eligibleEntry{
+			lineID:        row.LineID,
+			currentAmount: row.CurrentAmount,
+		}
+	}
+
+	selectedLineIDs := map[string]pgtype.UUID{}
+
+	for _, lcIDStr := range body.LineComponentIDs {
+		entry, ok := lcToLine[lcIDStr]
+		if !ok {
+			respondError(w, http.StatusBadRequest, "komponen tidak ditemukan dalam periode ini: "+lcIDStr)
+			return
+		}
+		lcID, _ := parseUUID(lcIDStr)
+		pgLCID := pgtype.UUID{Bytes: lcID, Valid: true}
+
+		newAmount := entry.currentAmount + body.AmountPerEmployee
+		if err := qtx.UpdatePayrollLineComponentAmount(ctx, &db.UpdatePayrollLineComponentAmountParams{
+			Amount: newAmount,
+			ID:     pgLCID,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui komponen bonus")
+			return
+		}
+		selectedLineIDs[entry.lineID.String()] = entry.lineID
+	}
+
+	// Recompute bonus_total / gross_pay / net_pay for each affected line.
+	for _, lineID := range selectedLineIDs {
+		line, err := qtx.GetPayrollLineByID(ctx, lineID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil baris penggajian")
+			return
+		}
+		comps, err := qtx.ListPayrollLineComponents(ctx, lineID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil komponen baris")
+			return
+		}
+		var bonusTotal int64
+		for _, c := range comps {
+			if c.Type == "bonus" {
+				bonusTotal += c.Amount
+			}
+		}
+		grossPay := line.BaseSalary + line.AllowanceTotal + bonusTotal +
+			line.OvertimeAmount + line.OvertimeHourlyAmount + line.PublicHolidayAmount
+		netPay := grossPay - line.ComponentDeductionTotal - line.KasbonDeduction - line.UnpaidLeaveDeduction
+		if err := qtx.UpdatePayrollLineTotals(ctx, &db.UpdatePayrollLineTotalsParams{
+			BonusTotal: bonusTotal,
+			GrossPay:   grossPay,
+			NetPay:     netPay,
+			ID:         lineID,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui total baris")
+			return
+		}
+	}
+
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "payroll_period",
+		EntityID:    periodID,
+		Description: fmt.Sprintf("Distribusi bonus ke %d karyawan pada periode %s", len(body.LineComponentIDs), period.PeriodMonth.Time.Format("2006-01")),
+	})
+
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"updated": len(body.LineComponentIDs),
+	})
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -698,7 +951,12 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return err
 	}
 
-	overtimeHours, err := service.GetOvertimeHours(ctx, qtx, empID, start, end, sched)
+	// Seed overtime_hours from formal overtime requests logged for this period.
+	overtimeHours, err := qtx.SumOvertimeHoursForEmployee(ctx, &db.SumOvertimeHoursForEmployeeParams{
+		EmployeeID: empID,
+		Date:       pgtype.Date{Time: start, Valid: true},
+		Date_2:     pgtype.Date{Time: end, Valid: true},
+	})
 	if err != nil {
 		return err
 	}

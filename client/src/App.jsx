@@ -53,6 +53,7 @@ import KasbonForm from './pages/hr/KasbonForm';
 import KasbonDetail from './pages/hr/KasbonDetail';
 import PayrollDashboard from './pages/hr/PayrollDashboard';
 import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
+import OvertimePage from './pages/hr/OvertimePage';
 import HRSettings from './pages/hr/HRSettings';
 import ManpowerPlanning from './pages/hr/ManpowerPlanning';
 import './App.css';
@@ -195,6 +196,7 @@ function Nav() {
             {menuLink('/hr/leave', 'Cuti')}
             {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
             {menuLink('/hr/kasbon', 'Kasbon')}
+            {menuLink('/hr/overtime', 'Lembur')}
             {menuLink('/hr/payroll', 'Penggajian')}
             {menuLink('/hr/import', 'Impor Karyawan')}
             {menuLink('/hr/positions', 'Jabatan')}
@@ -274,6 +276,7 @@ function Nav() {
               <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Kinerja</Link>
               <Link to="/hr/leave" className={isActive('/hr/leave') ? 'active' : ''}>Cuti</Link>
               <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
+              <Link to="/hr/overtime" className={isActive('/hr/overtime') ? 'active' : ''}>Lembur</Link>
               <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>
               <Link to="/hr/import" className={isActive('/hr/import') ? 'active' : ''}>Impor Karyawan</Link>
               <Link to="/hr/positions" className={isActive('/hr/positions') ? 'active' : ''}>Jabatan</Link>
@@ -390,6 +393,7 @@ export default function App() {
                 <Route path="/hr/kasbon" element={<RequireManagerOrAdmin><KasbonDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/kasbon/new" element={<RequireManagerOrAdmin><KasbonForm /></RequireManagerOrAdmin>} />
                 <Route path="/hr/kasbon/:id" element={<RequireManagerOrAdmin><KasbonDetail /></RequireManagerOrAdmin>} />
+                <Route path="/hr/overtime" element={<RequireManagerOrAdmin><OvertimePage /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
                 <Route path="/hr/settings" element={<RequireAdmin><HRSettings /></RequireAdmin>} />

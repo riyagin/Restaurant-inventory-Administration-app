@@ -92,6 +92,23 @@ func (q *Queries) DeleteAutoViolationsByRecord(ctx context.Context, attendanceRe
 	return err
 }
 
+const deleteAutoViolationsForRange = `-- name: DeleteAutoViolationsForRange :exec
+DELETE FROM performance_violations
+WHERE source = 'auto'
+  AND date >= $1
+  AND date <= $2
+`
+
+type DeleteAutoViolationsForRangeParams struct {
+	From pgtype.Date `json:"from"`
+	To   pgtype.Date `json:"to"`
+}
+
+func (q *Queries) DeleteAutoViolationsForRange(ctx context.Context, arg *DeleteAutoViolationsForRangeParams) error {
+	_, err := q.db.Exec(ctx, deleteAutoViolationsForRange, arg.From, arg.To)
+	return err
+}
+
 const deletePerformancePolicy = `-- name: DeletePerformancePolicy :exec
 DELETE FROM performance_policies WHERE id = $1
 `
