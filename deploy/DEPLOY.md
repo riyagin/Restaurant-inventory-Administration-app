@@ -25,6 +25,20 @@ scp server-go/api user@your-vps:/var/www/inventory-app/server-go/
 
 ### Apply pending migrations
 
+The `deploy/migrate.sh` shortcut reads DB creds from `server-go/.env` and builds the
+connection string for you — no need to paste it by hand:
+
+```bash
+bash /var/www/inventory-app/deploy/migrate.sh            # apply all pending (up)
+bash /var/www/inventory-app/deploy/migrate.sh version    # current version
+bash /var/www/inventory-app/deploy/migrate.sh down 1     # roll back last migration
+bash /var/www/inventory-app/deploy/migrate.sh goto 12    # migrate to a specific version
+bash /var/www/inventory-app/deploy/migrate.sh force 12   # clear dirty flag after a failed migration
+bash /var/www/inventory-app/deploy/migrate.sh create add_foo   # scaffold a new migration pair
+```
+
+Or invoke the CLI directly:
+
 ```bash
 migrate -path server-go/migrations \
   -database "postgres://postgres:password@localhost:5432/inventory_app?sslmode=disable" up

@@ -64,6 +64,10 @@ api.interceptors.response.use(
   }
 );
 
+export function getUser() {
+  try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
+}
+
 export const login   = (data) => api.post('/auth/login', data);
 export const logout  = ()     => api.post('/auth/logout');
 export const refresh = ()     => api.post('/auth/refresh');
