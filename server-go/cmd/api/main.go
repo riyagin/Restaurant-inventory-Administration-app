@@ -180,86 +180,62 @@ func main() {
 		r.Use(appmiddleware.Authenticate(queries, cfg.JWTSecret))
 		r.Post("/api/auth/logout", authHandler.Logout)
 
-		// Users — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/users", usersHandler.List)
-			r.Post("/api/users", usersHandler.Create)
-			r.Put("/api/users/{id}", usersHandler.Update)
-			r.Delete("/api/users/{id}", usersHandler.Delete)
-		})
+		// Users — all authenticated
+		r.Get("/api/users", usersHandler.List)
+		r.Post("/api/users", usersHandler.Create)
+		r.Put("/api/users/{id}", usersHandler.Update)
+		r.Delete("/api/users/{id}", usersHandler.Delete)
 
-		// Warehouses
+		// Warehouses — all authenticated
 		r.Get("/api/warehouses", warehousesHandler.List)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Post("/api/warehouses", warehousesHandler.Create)
-			r.Put("/api/warehouses/{id}", warehousesHandler.Update)
-			r.Delete("/api/warehouses/{id}", warehousesHandler.Delete)
-		})
+		r.Post("/api/warehouses", warehousesHandler.Create)
+		r.Put("/api/warehouses/{id}", warehousesHandler.Update)
+		r.Delete("/api/warehouses/{id}", warehousesHandler.Delete)
 
-		// Vendors
+		// Vendors — all authenticated
 		r.Get("/api/vendors", vendorsHandler.List)
 		r.Get("/api/vendors/{id}/history", vendorsHandler.GetHistory)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Post("/api/vendors", vendorsHandler.Create)
-			r.Put("/api/vendors/{id}", vendorsHandler.Update)
-			r.Delete("/api/vendors/{id}", vendorsHandler.Delete)
-		})
+		r.Post("/api/vendors", vendorsHandler.Create)
+		r.Put("/api/vendors/{id}", vendorsHandler.Update)
+		r.Delete("/api/vendors/{id}", vendorsHandler.Delete)
 
-		// Items
+		// Items — all authenticated
 		r.Get("/api/items", itemsHandler.List)
 		r.Get("/api/items/{id}", itemsHandler.Get)
 		r.Get("/api/items/{id}/last-price", itemsHandler.GetLastPrice)
 		r.Get("/api/items/{id}/history", itemsHandler.GetHistory)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Post("/api/items", itemsHandler.Create)
-			r.Put("/api/items/{id}", itemsHandler.Update)
-			r.Delete("/api/items/{id}", itemsHandler.Delete)
-		})
+		r.Post("/api/items", itemsHandler.Create)
+		r.Put("/api/items/{id}", itemsHandler.Update)
+		r.Delete("/api/items/{id}", itemsHandler.Delete)
 
-		// Accounts — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/accounts", accountsHandler.List)
-			r.Post("/api/accounts", accountsHandler.Create)
-			r.Put("/api/accounts/{id}", accountsHandler.Update)
-			r.Delete("/api/accounts/{id}", accountsHandler.Delete)
-		})
+		// Accounts — all authenticated
+		r.Get("/api/accounts", accountsHandler.List)
+		r.Post("/api/accounts", accountsHandler.Create)
+		r.Put("/api/accounts/{id}", accountsHandler.Update)
+		r.Delete("/api/accounts/{id}", accountsHandler.Delete)
 
-		// Invoice Templates — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/invoice-templates", templatesHandler.List)
-			r.Get("/api/invoice-templates/{id}", templatesHandler.Get)
-			r.Post("/api/invoice-templates", templatesHandler.Create)
-			r.Put("/api/invoice-templates/{id}", templatesHandler.Update)
-			r.Delete("/api/invoice-templates/{id}", templatesHandler.Delete)
-		})
+		// Invoice Templates — all authenticated
+		r.Get("/api/invoice-templates", templatesHandler.List)
+		r.Get("/api/invoice-templates/{id}", templatesHandler.Get)
+		r.Post("/api/invoice-templates", templatesHandler.Create)
+		r.Put("/api/invoice-templates/{id}", templatesHandler.Update)
+		r.Delete("/api/invoice-templates/{id}", templatesHandler.Delete)
 
-		// Branches — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/branches", branchesHandler.List)
-			r.Get("/api/branches/{id}", branchesHandler.Get)
-			r.Post("/api/branches", branchesHandler.Create)
-			r.Put("/api/branches/{id}", branchesHandler.Update)
-			r.Delete("/api/branches/{id}", branchesHandler.Delete)
-		})
+		// Branches — all authenticated
+		r.Get("/api/branches", branchesHandler.List)
+		r.Get("/api/branches/{id}", branchesHandler.Get)
+		r.Post("/api/branches", branchesHandler.Create)
+		r.Put("/api/branches/{id}", branchesHandler.Update)
+		r.Delete("/api/branches/{id}", branchesHandler.Delete)
 
-		// Divisions — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/divisions", divisionsHandler.List)
-			r.Post("/api/divisions", divisionsHandler.Create)
-			r.Put("/api/divisions/{id}", divisionsHandler.Update)
-			r.Delete("/api/divisions/{id}", divisionsHandler.Delete)
-			r.Get("/api/division-categories", divisionsHandler.ListCategories)
-			r.Post("/api/division-categories", divisionsHandler.CreateCategory)
-			r.Delete("/api/division-categories/{id}", divisionsHandler.DeleteCategory)
-		})
+		// Divisions — all authenticated
+		r.Get("/api/divisions", divisionsHandler.List)
+		r.Post("/api/divisions", divisionsHandler.Create)
+		r.Put("/api/divisions/{id}", divisionsHandler.Update)
+		r.Delete("/api/divisions/{id}", divisionsHandler.Delete)
+		r.Get("/api/division-categories", divisionsHandler.ListCategories)
+		r.Post("/api/division-categories", divisionsHandler.CreateCategory)
+		r.Delete("/api/division-categories/{id}", divisionsHandler.DeleteCategory)
 
 		// Inventory — all authenticated
 		r.Get("/api/inventory", inventoryHandler.List)
@@ -294,65 +270,47 @@ func main() {
 		r.Post("/api/invoices/{id}/pay", invoicesHandler.Pay)
 		r.Post("/api/invoices/{id}/photo", invoicesHandler.UploadPhoto)
 		r.Delete("/api/invoices/{id}/photo", invoicesHandler.DeletePhoto)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Delete("/api/invoices/{id}", invoicesHandler.Delete)
-		})
+		r.Delete("/api/invoices/{id}", invoicesHandler.Delete)
 
 		// Dispatches — all authenticated
 		r.Get("/api/dispatches", dispatchesHandler.List)
 		r.Get("/api/dispatches/{id}", dispatchesHandler.Get)
 		r.Post("/api/dispatches", dispatchesHandler.Create)
 
-		// Enumerations — all authenticated; delete admin only
+		// Enumerations — all authenticated
 		r.Get("/api/enumerations", enumerationsHandler.List)
 		r.Post("/api/enumerations", enumerationsHandler.Create)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Delete("/api/enumerations/{id}", enumerationsHandler.Delete)
-		})
+		r.Delete("/api/enumerations/{id}", enumerationsHandler.Delete)
 
-		// Recipes — list/get all authenticated; create/update/delete admin only
+		// Recipes — all authenticated
 		r.Get("/api/recipes", recipesHandler.List)
 		r.Get("/api/recipes/{id}", recipesHandler.Get)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Post("/api/recipes", recipesHandler.Create)
-			r.Put("/api/recipes/{id}", recipesHandler.Update)
-			r.Delete("/api/recipes/{id}", recipesHandler.Delete)
-		})
+		r.Post("/api/recipes", recipesHandler.Create)
+		r.Put("/api/recipes/{id}", recipesHandler.Update)
+		r.Delete("/api/recipes/{id}", recipesHandler.Delete)
 
 		// Productions — all authenticated
 		r.Get("/api/productions", productionsHandler.List)
 		r.Post("/api/productions", productionsHandler.Create)
 
-		// Sales — list/create all authenticated; delete admin only
+		// Sales — all authenticated
 		r.Get("/api/sales", salesHandler.List)
 		r.Post("/api/sales", salesHandler.Create)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Delete("/api/sales/{id}", salesHandler.Delete)
-		})
+		r.Delete("/api/sales/{id}", salesHandler.Delete)
 
-		// POS Import — parse/confirm/list all authenticated; delete admin only
+		// POS Import — all authenticated
 		r.Post("/api/pos-import/parse", posImportHandler.Parse)
 		r.Post("/api/pos-import/confirm", posImportHandler.Confirm)
 		r.Get("/api/pos-import", posImportHandler.List)
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Delete("/api/pos-import/{id}", posImportHandler.Delete)
-		})
+		r.Delete("/api/pos-import/{id}", posImportHandler.Delete)
 
-		// Activity Log & Account Adjustments — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/activity-log", activityLogHandler.List)
-			r.Get("/api/activity-log/export", activityLogHandler.Export)
-			r.Delete("/api/activity-log", activityLogHandler.DeleteOld)
-			r.Get("/api/account-adjustments", adjustmentsHandler.List)
-			r.Post("/api/account-adjustments", adjustmentsHandler.Create)
-			r.Post("/api/account-adjustments/transfer", adjustmentsHandler.Transfer)
-		})
+		// Activity Log & Account Adjustments — all authenticated
+		r.Get("/api/activity-log", activityLogHandler.List)
+		r.Get("/api/activity-log/export", activityLogHandler.Export)
+		r.Delete("/api/activity-log", activityLogHandler.DeleteOld)
+		r.Get("/api/account-adjustments", adjustmentsHandler.List)
+		r.Post("/api/account-adjustments", adjustmentsHandler.Create)
+		r.Post("/api/account-adjustments/transfer", adjustmentsHandler.Transfer)
 
 		// HR Employees & Positions
 		// Read (list + detail) allowed for all authenticated users incl. staff.
@@ -394,11 +352,11 @@ func main() {
 			r.Post("/api/hr/import/confirm", hrImportHandler.Confirm)
 		})
 
-		// HR Attendance (admin/manager). Device endpoints are wired separately
-		// outside this JWT group.
+		// HR Attendance — list viewable by all authenticated (including staff).
+		r.Get("/api/hr/attendance", attendanceHandler.List)
+		// Mutations require admin/manager.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
-			r.Get("/api/hr/attendance", attendanceHandler.List)
 			r.Put("/api/hr/attendance/{id}", attendanceHandler.Update)
 			r.Post("/api/hr/attendance/reconcile", attendanceHandler.Reconcile)
 			// Fingerprint import (two-phase)
@@ -438,11 +396,11 @@ func main() {
 		})
 
 		// HR Leave management.
+		// Manpower planning viewable by all authenticated (including staff).
+		r.Get("/api/hr/manpower-planning", leaveHandler.GetManpowerPlanning)
 		// Most endpoints admin/manager; approval/rejection are manager-only.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
-			// Manpower planning grid
-			r.Get("/api/hr/manpower-planning", leaveHandler.GetManpowerPlanning)
 			// Leave types (CRUD; delete deactivates when referenced)
 			r.Get("/api/hr/leave-types", leaveHandler.ListLeaveTypes)
 			r.Post("/api/hr/leave-types", leaveHandler.CreateLeaveType)
@@ -466,13 +424,13 @@ func main() {
 			r.Post("/api/hr/leave-requests/bulk-reject", leaveHandler.BulkRejectLeaveRequests)
 		})
 
-		// HR Kasbon (cash advance) management.
-		// Most endpoints admin/manager; approval/rejection are manager-only.
+		// HR Kasbon (cash advance) — list and detail viewable by all authenticated.
+		r.Get("/api/hr/kasbons", kasbonHandler.List)
+		r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
+		// Mutations require admin/manager.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
-			r.Get("/api/hr/kasbons", kasbonHandler.List)
 			r.Post("/api/hr/kasbons", kasbonHandler.Create)
-			r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
 			r.Put("/api/hr/kasbons/{id}", kasbonHandler.Update)
 			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
 			r.Post("/api/hr/kasbons/{id}/cancel", kasbonHandler.Cancel)
@@ -524,18 +482,15 @@ func main() {
 			r.Post("/api/hr/settings/logo", payslipHandler.UploadLogo)
 		})
 
-		// Reports & Stats — all admin
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
-			r.Get("/api/reports/financial", reportsHandler.Financial)
-			r.Get("/api/reports/daily", reportsHandler.Daily)
-			r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
-			r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
-			r.Get("/api/expense-report", reportsHandler.ExpenseReport)
-			r.Get("/api/stats", statsHandler.GeneralStats)
-			r.Get("/api/stats/daily-sales", statsHandler.DailySales)
-			r.Get("/api/stats/stock-flow", statsHandler.StockFlow)
-		})
+		// Reports & Stats — all authenticated
+		r.Get("/api/reports/financial", reportsHandler.Financial)
+		r.Get("/api/reports/daily", reportsHandler.Daily)
+		r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
+		r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
+		r.Get("/api/expense-report", reportsHandler.ExpenseReport)
+		r.Get("/api/stats", statsHandler.GeneralStats)
+		r.Get("/api/stats/daily-sales", statsHandler.DailySales)
+		r.Get("/api/stats/stock-flow", statsHandler.StockFlow)
 	})
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

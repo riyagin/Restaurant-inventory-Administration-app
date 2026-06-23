@@ -126,6 +126,7 @@ function Nav() {
   const user = getUser();
   const isAdmin = user?.role === 'admin';
   const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
+  const isStaff = user?.role === 'staff';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isActive = (to) => to === '/' ? pathname === '/' : pathname.startsWith(to);
 
@@ -188,47 +189,43 @@ function Nav() {
           {menuLink('/sales/import', 'Import dari POS')}
         </NavDropdown>
 
-        {isAdminOrManager && (
+        {(isAdminOrManager || isStaff) && (
           <NavDropdown label="HR" paths={['/hr']}>
-            {menuLink('/hr/employees', 'Karyawan')}
+            {isAdminOrManager && menuLink('/hr/employees', 'Karyawan')}
             {menuLink('/hr/attendance', 'Absensi')}
-            {menuLink('/hr/performance', 'Kinerja')}
-            {menuLink('/hr/leave', 'Cuti')}
+            {isAdminOrManager && menuLink('/hr/performance', 'Kinerja')}
+            {isAdminOrManager && menuLink('/hr/leave', 'Cuti')}
             {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
             {menuLink('/hr/kasbon', 'Kasbon')}
-            {menuLink('/hr/overtime', 'Lembur')}
-            {menuLink('/hr/payroll', 'Penggajian')}
-            {menuLink('/hr/import', 'Impor Karyawan')}
-            {menuLink('/hr/positions', 'Jabatan')}
-            {menuLink('/hr/wage-components', 'Komponen Gaji')}
+            {isAdminOrManager && menuLink('/hr/overtime', 'Lembur')}
+            {isAdminOrManager && menuLink('/hr/payroll', 'Penggajian')}
+            {isAdminOrManager && menuLink('/hr/import', 'Impor Karyawan')}
+            {isAdminOrManager && menuLink('/hr/positions', 'Jabatan')}
+            {isAdminOrManager && menuLink('/hr/wage-components', 'Komponen Gaji')}
             {isAdmin && menuLink('/hr/settings', 'Pengaturan')}
           </NavDropdown>
         )}
 
-        {isAdmin && (
-          <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
-            {menuLink('/reports/daily', 'Laporan Harian')}
-            {menuLink('/reports/financial', 'Laporan Keuangan')}
-            {menuLink('/expense-report', 'Laporan Pengeluaran')}
-            {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
-          </NavDropdown>
-        )}
+        <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
+          {menuLink('/reports/daily', 'Laporan Harian')}
+          {menuLink('/reports/financial', 'Laporan Keuangan')}
+          {menuLink('/expense-report', 'Laporan Pengeluaran')}
+          {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
+        </NavDropdown>
 
-        {isAdmin && (
-          <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
-            {menuLink('/items', 'Barang')}
-            {menuLink('/warehouses', 'Gudang')}
-            {menuLink('/vendors', 'Vendor')}
-            {menuLink('/accounts', 'Akun')}
-            <div className="nav-dropdown-divider" />
-            {menuLink('/branches', 'Cabang & Divisi')}
-            {menuLink('/invoice-templates', 'Template Invoice')}
-            {menuLink('/account-adjustments', 'Jurnal Manual')}
-            <div className="nav-dropdown-divider" />
-            {menuLink('/users', 'Pengguna')}
-            {menuLink('/activity', 'Log Aktivitas')}
-          </NavDropdown>
-        )}
+        <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
+          {menuLink('/items', 'Barang')}
+          {menuLink('/warehouses', 'Gudang')}
+          {menuLink('/vendors', 'Vendor')}
+          {menuLink('/accounts', 'Akun')}
+          <div className="nav-dropdown-divider" />
+          {menuLink('/branches', 'Cabang & Divisi')}
+          {menuLink('/invoice-templates', 'Template Invoice')}
+          {menuLink('/account-adjustments', 'Jurnal Manual')}
+          <div className="nav-dropdown-divider" />
+          {menuLink('/users', 'Pengguna')}
+          {menuLink('/activity', 'Log Aktivitas')}
+        </NavDropdown>
       </div>
 
       {user && (
@@ -269,44 +266,41 @@ function Nav() {
             <Link to="/sales/import" className={isActive('/sales/import') ? 'active' : ''}>Import dari POS</Link>
           </MobileSection>
 
-          {isAdminOrManager && (
+          {(isAdminOrManager || isStaff) && (
             <MobileSection label="HR" paths={['/hr']}>
-              <Link to="/hr/employees" className={isActive('/hr/employees') ? 'active' : ''}>Karyawan</Link>
+              {isAdminOrManager && <Link to="/hr/employees" className={isActive('/hr/employees') ? 'active' : ''}>Karyawan</Link>}
               <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
-              <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Kinerja</Link>
-              <Link to="/hr/leave" className={isActive('/hr/leave') ? 'active' : ''}>Cuti</Link>
+              {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Kinerja</Link>}
+              {isAdminOrManager && <Link to="/hr/leave" className={isActive('/hr/leave') ? 'active' : ''}>Cuti</Link>}
+              <Link to="/hr/manpower" className={isActive('/hr/manpower') ? 'active' : ''}>Rencana Tenaga Kerja</Link>
               <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
-              <Link to="/hr/overtime" className={isActive('/hr/overtime') ? 'active' : ''}>Lembur</Link>
-              <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>
-              <Link to="/hr/import" className={isActive('/hr/import') ? 'active' : ''}>Impor Karyawan</Link>
-              <Link to="/hr/positions" className={isActive('/hr/positions') ? 'active' : ''}>Jabatan</Link>
-              <Link to="/hr/wage-components" className={isActive('/hr/wage-components') ? 'active' : ''}>Komponen Gaji</Link>
+              {isAdminOrManager && <Link to="/hr/overtime" className={isActive('/hr/overtime') ? 'active' : ''}>Lembur</Link>}
+              {isAdminOrManager && <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>}
+              {isAdminOrManager && <Link to="/hr/import" className={isActive('/hr/import') ? 'active' : ''}>Impor Karyawan</Link>}
+              {isAdminOrManager && <Link to="/hr/positions" className={isActive('/hr/positions') ? 'active' : ''}>Jabatan</Link>}
+              {isAdminOrManager && <Link to="/hr/wage-components" className={isActive('/hr/wage-components') ? 'active' : ''}>Komponen Gaji</Link>}
               {isAdmin && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
             </MobileSection>
           )}
 
-          {isAdmin && (
-            <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
-              <Link to="/reports/daily" className={isActive('/reports/daily') ? 'active' : ''}>Laporan Harian</Link>
-              <Link to="/reports/financial" className={isActive('/reports/financial') ? 'active' : ''}>Laporan Keuangan</Link>
-              <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
-              <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
-            </MobileSection>
-          )}
+          <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
+            <Link to="/reports/daily" className={isActive('/reports/daily') ? 'active' : ''}>Laporan Harian</Link>
+            <Link to="/reports/financial" className={isActive('/reports/financial') ? 'active' : ''}>Laporan Keuangan</Link>
+            <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
+            <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
+          </MobileSection>
 
-          {isAdmin && (
-            <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
-              <Link to="/items" className={isActive('/items') ? 'active' : ''}>Barang</Link>
-              <Link to="/warehouses" className={isActive('/warehouses') ? 'active' : ''}>Gudang</Link>
-              <Link to="/vendors" className={isActive('/vendors') ? 'active' : ''}>Vendor</Link>
-              <Link to="/accounts" className={isActive('/accounts') ? 'active' : ''}>Akun</Link>
-              <Link to="/branches" className={isActive('/branches') ? 'active' : ''}>Cabang & Divisi</Link>
-              <Link to="/invoice-templates" className={isActive('/invoice-templates') ? 'active' : ''}>Template Invoice</Link>
-              <Link to="/account-adjustments" className={isActive('/account-adjustments') ? 'active' : ''}>Jurnal Manual</Link>
-              <Link to="/users" className={isActive('/users') ? 'active' : ''}>Pengguna</Link>
-              <Link to="/activity" className={isActive('/activity') ? 'active' : ''}>Log Aktivitas</Link>
-            </MobileSection>
-          )}
+          <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
+            <Link to="/items" className={isActive('/items') ? 'active' : ''}>Barang</Link>
+            <Link to="/warehouses" className={isActive('/warehouses') ? 'active' : ''}>Gudang</Link>
+            <Link to="/vendors" className={isActive('/vendors') ? 'active' : ''}>Vendor</Link>
+            <Link to="/accounts" className={isActive('/accounts') ? 'active' : ''}>Akun</Link>
+            <Link to="/branches" className={isActive('/branches') ? 'active' : ''}>Cabang & Divisi</Link>
+            <Link to="/invoice-templates" className={isActive('/invoice-templates') ? 'active' : ''}>Template Invoice</Link>
+            <Link to="/account-adjustments" className={isActive('/account-adjustments') ? 'active' : ''}>Jurnal Manual</Link>
+            <Link to="/users" className={isActive('/users') ? 'active' : ''}>Pengguna</Link>
+            <Link to="/activity" className={isActive('/activity') ? 'active' : ''}>Log Aktivitas</Link>
+          </MobileSection>
 
           {user && (
             <div className="mobile-drawer-footer">
@@ -339,25 +333,25 @@ export default function App() {
             <Layout>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
-                <Route path="/items" element={<RequireAdmin><Items /></RequireAdmin>} />
-                <Route path="/items/new" element={<RequireAdmin><ItemForm /></RequireAdmin>} />
-                <Route path="/items/edit/:id" element={<RequireAdmin><ItemForm /></RequireAdmin>} />
-                <Route path="/items/history/:id" element={<RequireAdmin><NonStockItemDetail /></RequireAdmin>} />
+                <Route path="/items" element={<Items />} />
+                <Route path="/items/new" element={<ItemForm />} />
+                <Route path="/items/edit/:id" element={<ItemForm />} />
+                <Route path="/items/history/:id" element={<NonStockItemDetail />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/inventory/new" element={<InventoryForm />} />
                 <Route path="/inventory/edit/:id" element={<InventoryForm />} />
                 <Route path="/inventory/history/:itemId" element={<StockHistoryPage />} />
                 <Route path="/invoices" element={<Invoices />} />
                 <Route path="/invoices/new" element={<InvoiceForm />} />
-                <Route path="/invoices/edit/:id" element={<RequireAdmin><InvoiceForm /></RequireAdmin>} />
+                <Route path="/invoices/edit/:id" element={<InvoiceForm />} />
                 <Route path="/invoices/view/:id" element={<InvoiceDetail />} />
                 <Route path="/sales" element={<Sales />} />
                 <Route path="/sales/import" element={<SalesImport />} />
-                <Route path="/expense-report" element={<RequireAdmin><ExpenseReport /></RequireAdmin>} />
-                <Route path="/reports/inventory-value" element={<RequireAdmin><InventoryValueReport /></RequireAdmin>} />
-                <Route path="/reports/financial" element={<RequireAdmin><FinancialReport /></RequireAdmin>} />
-                <Route path="/reports/daily" element={<RequireAdmin><DailyReport /></RequireAdmin>} />
-                <Route path="/account-adjustments" element={<RequireAdmin><AccountAdjustments /></RequireAdmin>} />
+                <Route path="/expense-report" element={<ExpenseReport />} />
+                <Route path="/reports/inventory-value" element={<InventoryValueReport />} />
+                <Route path="/reports/financial" element={<FinancialReport />} />
+                <Route path="/reports/daily" element={<DailyReport />} />
+                <Route path="/account-adjustments" element={<AccountAdjustments />} />
                 <Route path="/transfers" element={<StockTransfers />} />
                 <Route path="/transfers/group/:id" element={<TransferDetail />} />
                 <Route path="/dispatch" element={<Dispatch />} />
@@ -367,14 +361,14 @@ export default function App() {
                 <Route path="/recipes" element={<Recipes />} />
                 <Route path="/productions" element={<Productions />} />
                 <Route path="/enumerations" element={<Enumerations />} />
-                <Route path="/warehouses" element={<RequireAdmin><Warehouses /></RequireAdmin>} />
-                <Route path="/vendors" element={<RequireAdmin><Vendors /></RequireAdmin>} />
+                <Route path="/warehouses" element={<Warehouses />} />
+                <Route path="/vendors" element={<Vendors />} />
                 <Route path="/vendors/:id/history" element={<VendorHistory />} />
-                <Route path="/accounts" element={<RequireAdmin><Accounts /></RequireAdmin>} />
-                <Route path="/branches" element={<RequireAdmin><Branches /></RequireAdmin>} />
-                <Route path="/invoice-templates" element={<RequireAdmin><InvoiceTemplates /></RequireAdmin>} />
-                <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
-                <Route path="/activity" element={<RequireAdmin><ActivityLog /></RequireAdmin>} />
+                <Route path="/accounts" element={<Accounts />} />
+                <Route path="/branches" element={<Branches />} />
+                <Route path="/invoice-templates" element={<InvoiceTemplates />} />
+                <Route path="/users" element={<Users />} />
+                <Route path="/activity" element={<ActivityLog />} />
                 <Route path="/profile" element={<Profile />} />
                 <Route path="/hr/employees" element={<Employees />} />
                 <Route path="/hr/employees/new" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
@@ -383,16 +377,16 @@ export default function App() {
                 <Route path="/hr/import" element={<RequireManagerOrAdmin><HRImport /></RequireManagerOrAdmin>} />
                 <Route path="/hr/positions" element={<RequireManagerOrAdmin><Positions /></RequireManagerOrAdmin>} />
                 <Route path="/hr/wage-components" element={<RequireManagerOrAdmin><WageComponents /></RequireManagerOrAdmin>} />
-                <Route path="/hr/attendance" element={<RequireManagerOrAdmin><AttendanceDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/attendance" element={<AttendanceDashboard />} />
                 <Route path="/hr/attendance/import" element={<RequireManagerOrAdmin><FingerprintImport /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance/policies" element={<RequireManagerOrAdmin><PerformancePolicies /></RequireManagerOrAdmin>} />
                 <Route path="/hr/leave" element={<RequireManagerOrAdmin><LeaveRequests /></RequireManagerOrAdmin>} />
-                <Route path="/hr/manpower" element={<RequireManagerOrAdmin><ManpowerPlanning /></RequireManagerOrAdmin>} />
-                <Route path="/hr/kasbon" element={<RequireManagerOrAdmin><KasbonDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/manpower" element={<ManpowerPlanning />} />
+                <Route path="/hr/kasbon" element={<KasbonDashboard />} />
                 <Route path="/hr/kasbon/new" element={<RequireManagerOrAdmin><KasbonForm /></RequireManagerOrAdmin>} />
-                <Route path="/hr/kasbon/:id" element={<RequireManagerOrAdmin><KasbonDetail /></RequireManagerOrAdmin>} />
+                <Route path="/hr/kasbon/:id" element={<KasbonDetail />} />
                 <Route path="/hr/overtime" element={<RequireManagerOrAdmin><OvertimePage /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
