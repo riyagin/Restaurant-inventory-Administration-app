@@ -90,10 +90,14 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		    ar.check_in_source, ar.check_out_source, ar.check_in_photo_path,
 		    ar.device_id, ar.status, ar.is_late, ar.late_minutes,
 		    ar.is_early_leave, ar.early_leave_minutes, ar.is_missing_checkout, ar.note,
-		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name
+		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name,
+		    COALESCE(d.branch_id <> e.branch_id, false) AS is_remote,
+		    db.name AS clock_in_branch_name
 		FROM attendance_records ar
 		JOIN employees e ON e.id = ar.employee_id
 		JOIN branches  b ON b.id = e.branch_id
+		LEFT JOIN attendance_devices d  ON d.id = ar.device_id
+		LEFT JOIN branches          db ON db.id = d.branch_id
 		%s
 		ORDER BY ar.date DESC, e.full_name
 		LIMIT 1000`, where)
@@ -126,6 +130,11 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		EmployeeCode      string             `json:"employee_code"`
 		BranchID          pgtype.UUID        `json:"branch_id"`
 		BranchName        string             `json:"branch_name"`
+		// is_remote: the recording device's branch differs from the employee's
+		// home branch (a cross-branch / visitor check-in). clock_in_branch_name
+		// is where they actually clocked in (null for non-device records).
+		IsRemote          bool               `json:"is_remote"`
+		ClockInBranchName pgtype.Text        `json:"clock_in_branch_name"`
 	}
 
 	items := []recordRow{}
@@ -137,6 +146,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			&x.DeviceID, &x.Status, &x.IsLate, &x.LateMinutes,
 			&x.IsEarlyLeave, &x.EarlyLeaveMinutes, &x.IsMissingCheckout, &x.Note,
 			&x.FullName, &x.EmployeeCode, &x.BranchID, &x.BranchName,
+			&x.IsRemote, &x.ClockInBranchName,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data kehadiran")
 			return

@@ -85,6 +85,11 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	employeeCode := strings.TrimSpace(r.FormValue("employee_code"))
 	eventType := strings.TrimSpace(r.FormValue("event_type"))
 	rawTimestamp := strings.TrimSpace(r.FormValue("timestamp"))
+	// recorded_by is set only for manager-assisted manual entries (visitor help):
+	// it carries the operator's username for the audit trail. Its presence marks
+	// the event as a manual entry (source "manual") rather than a face check-in.
+	recordedBy := strings.TrimSpace(r.FormValue("recorded_by"))
+	isManual := recordedBy != ""
 
 	if employeeCode == "" {
 		respondError(w, http.StatusBadRequest, "employee_code wajib diisi")
@@ -123,7 +128,15 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	dateOnly := time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)
 	pgDate := pgtype.Date{Time: dateOnly, Valid: true}
 
-	sched := h.scheduleForBranch(r, emp.BranchID)
+	// The branch where the employee checks in governs the schedule: a visitor
+	// called to another branch is judged by that branch's hours/work-days. For a
+	// normal same-branch check-in the device branch equals the home branch, so
+	// behaviour is unchanged.
+	scheduleBranch := emp.BranchID
+	if dev != nil && dev.BranchID.Valid {
+		scheduleBranch = dev.BranchID
+	}
+	sched := h.scheduleForBranch(r, scheduleBranch)
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -176,11 +189,21 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Merge the event (face primary, fingerprint fills, 5-min dedup).
+	source := "face" // device events are face check-ins by default
+	if isManual {
+		source = "manual"
+	}
 	service.MergeAttendanceEvent(state, service.AttendanceEvent{
 		Timestamp: ts,
-		Source:    "face", // device events are face check-ins
+		Source:    source,
 		Direction: direction,
 	})
+
+	// Audit note for manager-assisted manual entries.
+	manualNote := ""
+	if isManual {
+		manualNote = fmt.Sprintf("Absen manual (visitor) oleh %s", recordedBy)
+	}
 
 	dayOver := service.DayIsOver(dateOnly, sched, time.Now())
 	service.ComputeAnomalies(state, sched, dayOver)
@@ -195,6 +218,9 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 			DeviceID: deviceID,
 			Note:     existing.Note,
 			ID:       existing.ID,
+		}
+		if isManual {
+			params.Note = pgtype.Text{String: manualNote, Valid: true}
 		}
 		// Preserve any prior photo unless we just captured one.
 		if photoPath != "" {
@@ -212,6 +238,9 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 			EmployeeID: emp.ID,
 			Date:       pgDate,
 			DeviceID:   deviceID,
+		}
+		if isManual {
+			params.Note = pgtype.Text{String: manualNote, Valid: true}
 		}
 		if photoPath != "" {
 			params.CheckInPhotoPath = pgtype.Text{String: photoPath, Valid: true}

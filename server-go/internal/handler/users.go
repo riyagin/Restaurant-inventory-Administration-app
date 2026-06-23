@@ -12,6 +12,16 @@ import (
 	"inventory-app/server-go/internal/middleware"
 )
 
+// validUserRoles enumerates the roles an admin may assign. store_manager is a
+// limited role scoped to HR attendance (record entry/correction) — see
+// middleware.RequireAttendanceAccess; it has no access to other modules.
+var validUserRoles = map[string]bool{
+	"admin":         true,
+	"manager":       true,
+	"staff":         true,
+	"store_manager": true,
+}
+
 type UsersHandler struct {
 	queries *db.Queries
 }
@@ -47,8 +57,8 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "username, password, dan role wajib diisi")
 		return
 	}
-	if body.Role != "admin" && body.Role != "manager" && body.Role != "staff" {
-		respondError(w, http.StatusBadRequest, "role harus admin, manager, atau staff")
+	if !validUserRoles[body.Role] {
+		respondError(w, http.StatusBadRequest, "role harus admin, manager, staff, atau store_manager")
 		return
 	}
 
@@ -92,8 +102,8 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "username dan role wajib diisi")
 		return
 	}
-	if body.Role != "admin" && body.Role != "manager" && body.Role != "staff" {
-		respondError(w, http.StatusBadRequest, "role harus admin, manager, atau staff")
+	if !validUserRoles[body.Role] {
+		respondError(w, http.StatusBadRequest, "role harus admin, manager, staff, atau store_manager")
 		return
 	}
 

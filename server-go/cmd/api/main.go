@@ -354,10 +354,16 @@ func main() {
 
 		// HR Attendance — list viewable by all authenticated (including staff).
 		r.Get("/api/hr/attendance", attendanceHandler.List)
-		// Mutations require admin/manager.
+		// Attendance record entry/correction — admin, manager, and store_manager.
+		// store_manager is scoped to attendance only (RequireAttendanceAccess);
+		// the configuration/batch endpoints below stay admin/manager.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAttendanceAccess)
+			r.Put("/api/hr/attendance/{id}", attendanceHandler.Update)
+		})
+		// Attendance configuration & batch operations require admin/manager.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
-			r.Put("/api/hr/attendance/{id}", attendanceHandler.Update)
 			r.Post("/api/hr/attendance/reconcile", attendanceHandler.Reconcile)
 			// Fingerprint import (two-phase)
 			r.Post("/api/hr/attendance/fingerprint-import/parse", attendanceHandler.FingerprintParse)

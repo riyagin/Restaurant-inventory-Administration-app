@@ -111,6 +111,24 @@ func RequireAdminOrManager(next http.Handler) http.Handler {
 	})
 }
 
+// RequireAttendanceAccess allows admin, manager, and store_manager.
+//
+// store_manager is a limited role whose web-app access is scoped to HR
+// attendance record entry/correction (helping visiting employees punch in/out).
+// It is rejected by every other module's middleware (RequireAdmin /
+// RequireAdminOrManager / RequireManager), so this is the only place it is
+// granted access.
+func RequireAttendanceAccess(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		role := RoleFromCtx(r.Context())
+		if role != "admin" && role != "manager" && role != "store_manager" {
+			writeAuthError(w, http.StatusForbidden, "akses ditolak")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequireManager allows only the manager role (approval-only actions).
 func RequireManager(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
