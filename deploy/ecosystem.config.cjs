@@ -4,12 +4,15 @@ module.exports = {
       name: 'inventory-app',
       script: './api',
       cwd: '/var/www/inventory-app/server-go',
+      interpreter: 'none', // run the Go binary directly so PM2 tracks the real PID
+                           // (prevents orphaned instances that keep holding :5000)
 
       autorestart: true,
       watch: false,
       max_restarts: 10,
       restart_delay: 3000,
       max_memory_restart: '200M',
+      kill_timeout: 6000, // allow the 5s graceful shutdown to finish before SIGKILL
 
       env: {
         PORT: 5000,
@@ -26,9 +29,6 @@ module.exports = {
       error_file: '/var/log/inventory-app/error.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
       merge_logs: true,
-
-      max_size: '10M',
-      retain: 7,
     },
   ],
 };

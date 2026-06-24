@@ -85,17 +85,25 @@ cd "$SERVER_GO_DIR"
 go build -o api ./cmd/api
 ok "Binary built: $(du -sh api | cut -f1)"
 
-# ── 5. Reload PM2 ─────────────────────────────────────────────────────────────
-log "Reloading PM2 process '$PM2_APP'..."
-if pm2 describe "$PM2_APP" &>/dev/null; then
-  pm2 reload "$PM2_APP"
-  ok "PM2 reloaded"
-else
-  log "Process not found — starting fresh from ecosystem config..."
-  pm2 start "$APP_DIR/deploy/ecosystem.config.cjs"
-  pm2 save
-  ok "PM2 started"
+# ── 5. (Re)start PM2 ──────────────────────────────────────────────────────────
+# Use delete + start (NOT reload): reload reuses PM2's cached launch options, so
+# changes to ecosystem.config.cjs (interpreter, kill_timeout, env) would never
+# take effect. delete + start re-reads the config every deploy.
+PORT=$(get_env PORT); PORT="${PORT:-5000}"
+log "Restarting PM2 process '$PM2_APP' on :$PORT..."
+
+# Clear any orphaned binary still bound to the port. If PM2 ever lost track of a
+# previous instance, it keeps holding :$PORT and the fresh start crash-loops on
+# 'bind: address already in use'. Safe no-op when nothing is listening.
+if command -v fuser &>/dev/null; then
+  fuser -k "${PORT}/tcp" 2>/dev/null || true
+  sleep 1
 fi
+
+pm2 delete "$PM2_APP" 2>/dev/null || true
+pm2 start "$APP_DIR/deploy/ecosystem.config.cjs"
+pm2 save
+ok "PM2 started"
 
 # ── 6. Health check ───────────────────────────────────────────────────────────
 log "Waiting for server to come up..."
