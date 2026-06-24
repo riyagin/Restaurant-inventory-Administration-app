@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getItems, getWarehouses, getInventory, getBranches, getDivisions, getDispatches, createDispatch } from '../api';
+import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, getDispatches, createDispatch } from '../api';
 
 const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0' });
 const today = () => new Date().toISOString().slice(0, 10);
@@ -32,7 +32,7 @@ export default function Dispatch() {
   // Load inventory when source warehouse changes
   useEffect(() => {
     if (!header.warehouse_id) { setSrcInventory([]); setRows([emptyRow()]); return; }
-    getInventory({ warehouse_id: header.warehouse_id }).then(r => setSrcInventory(r.data));
+    getAllInventory({ warehouse_id: header.warehouse_id }).then(setSrcInventory);
     setRows([emptyRow()]);
   }, [header.warehouse_id]);
 

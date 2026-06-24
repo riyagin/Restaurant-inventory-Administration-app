@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import XLSX from 'xlsx-js-style';
 import {
-  getWarehouses, getInventory, createStockOpname, getStockOpname,
+  getWarehouses, getAllInventory, createStockOpname, getStockOpname,
   getStockOpnameDrafts, createStockOpnameDraft, updateStockOpnameDraft, deleteStockOpnameDraft,
 } from '../api';
 
@@ -11,20 +11,6 @@ const idr = (v) =>
 
 const fmt = (d) => d ? new Date(d).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { dateStyle: 'medium' }) : '—';
-
-// Fetch every inventory lot for a warehouse. The /inventory endpoint is
-// paginated (max 200 rows/page), so a single unpaged call would silently
-// truncate the opname sheet — loop until a short page signals the end.
-async function fetchAllInventory(warehouseId) {
-  const limit = 200;
-  const all = [];
-  for (let page = 1; ; page++) {
-    const r = await getInventory({ warehouse_id: warehouseId, limit, page });
-    all.push(...r.data);
-    if (r.data.length < limit) break;
-  }
-  return all;
-}
 
 function groupInventory(inventory) {
   const map = new Map();
@@ -111,7 +97,7 @@ export default function StockOpname() {
     setPicName('');
     setOperatorName('');
     setNotes('');
-    fetchAllInventory(wh.id).then(rows => {
+    getAllInventory({ warehouse_id: wh.id }).then(rows => {
       setInventory(rows);
       setScreen('form');
     });
@@ -135,7 +121,7 @@ export default function StockOpname() {
       }
     }
 
-    fetchAllInventory(wh.id).then(rows => {
+    getAllInventory({ warehouse_id: wh.id }).then(rows => {
       setInventory(rows);
       setActuals(draftActuals);
       setScreen('form');

@@ -87,6 +87,20 @@ export const getItemLastPrice = (id, params) => api.get(`/items/${id}/last-price
 
 export const getInventory = (params) => api.get('/inventory', { params });
 export const getInventoryCount = (params) => api.get('/inventory/count', { params });
+// Fetch every inventory lot matching the filters. The /inventory endpoint is
+// paginated (max 200 rows/page), so callers that need the full set (stock
+// opname sheet, dispatch item picker) must page through — a single call would
+// silently truncate to the first 25 lots.
+export const getAllInventory = async (params = {}) => {
+  const limit = 200;
+  const all = [];
+  for (let page = 1; ; page++) {
+    const { data } = await getInventory({ ...params, limit, page });
+    all.push(...data);
+    if (data.length < limit) break;
+  }
+  return all;
+};
 export const getInventoryRecord = (id) => api.get(`/inventory/${id}`);
 export const createInventoryRecord = (data) => api.post('/inventory', data);
 export const updateInventoryRecord = (id, data) => api.put(`/inventory/${id}`, data);

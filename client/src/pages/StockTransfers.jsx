@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getItems, getWarehouses, getInventory, getStockTransfers, createStockTransfer } from '../api';
+import { getItems, getWarehouses, getAllInventory, getStockTransfers, createStockTransfer } from '../api';
 
 const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0' });
 const emptyHeader = { from_warehouse_id: '', to_warehouse_id: '', notes: '' };
@@ -27,7 +27,7 @@ export default function StockTransfers() {
   // When source warehouse changes, load its inventory and reset rows
   useEffect(() => {
     if (!header.from_warehouse_id) { setSrcInventory([]); return; }
-    getInventory({ warehouse_id: header.from_warehouse_id }).then(r => setSrcInventory(r.data));
+    getAllInventory({ warehouse_id: header.from_warehouse_id }).then(setSrcInventory);
     setRows([emptyRow()]);
   }, [header.from_warehouse_id]);
 
