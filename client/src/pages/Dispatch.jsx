@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, getDispatches, createDispatch } from '../api';
+import { useEffect, useRef, useState } from 'react';
+import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, getDispatches, createDispatch, updateDispatch, deleteDispatch } from '../api';
 
 const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0' });
 const today = () => new Date().toISOString().slice(0, 10);
@@ -15,9 +15,14 @@ export default function Dispatch() {
   const [header, setHeader] = useState(emptyHeader);
   const [rows, setRows] = useState([emptyRow()]);
   const [expandedId, setExpandedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // When populating the form for an edit, suppress the warehouse/branch effects
+  // that would otherwise wipe the rows and selected division.
+  const loadingEditRef = useRef(false);
 
+  const isEditing = !!editingId;
   const loadDispatches = () => getDispatches().then(r => setDispatches(r.data));
 
   useEffect(() => {
@@ -31,19 +36,24 @@ export default function Dispatch() {
 
   // Load inventory when source warehouse changes
   useEffect(() => {
-    if (!header.warehouse_id) { setSrcInventory([]); setRows([emptyRow()]); return; }
+    if (!header.warehouse_id) { setSrcInventory([]); if (!loadingEditRef.current) setRows([emptyRow()]); return; }
     getAllInventory({ warehouse_id: header.warehouse_id }).then(setSrcInventory);
-    setRows([emptyRow()]);
+    if (!loadingEditRef.current) setRows([emptyRow()]);
   }, [header.warehouse_id]);
 
   // Load divisions when branch changes
   useEffect(() => {
     if (!header.branch_id) { setDivisions([]); return; }
     getDivisions({ branch_id: header.branch_id }).then(r => setDivisions(r.data));
-    setHeader(h => ({ ...h, division_id: '' }));
+    if (!loadingEditRef.current) setHeader(h => ({ ...h, division_id: '' }));
+    // Both effects fire on an edit-load; clear the guard in this (later) one.
+    loadingEditRef.current = false;
   }, [header.branch_id]);
 
-  const availableItems = allItems.filter(it => srcInventory.some(inv => inv.item_id === it.id));
+  // Show items available in the warehouse, plus any already on the edited rows.
+  const availableItems = allItems.filter(it =>
+    srcInventory.some(inv => inv.item_id === it.id) || rows.some(r => r.item_id === it.id)
+  );
 
   const getItemStock = (item_id, unit_index) => {
     return srcInventory
@@ -71,6 +81,50 @@ export default function Dispatch() {
   const addRow = () => setRows(rs => [...rs, emptyRow()]);
   const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index));
 
+  const resetForm = () => {
+    setEditingId(null);
+    setHeader(emptyHeader);
+    setRows([emptyRow()]);
+    setSrcInventory([]);
+    setDivisions([]);
+    setError('');
+  };
+
+  const startEdit = (d) => {
+    setError('');
+    setEditingId(d.id);
+    // Suppress the reset side-effects of the warehouse/branch effects while we
+    // populate the form from the existing dispatch.
+    loadingEditRef.current = true;
+    setHeader({
+      warehouse_id: d.warehouse_id ?? '',
+      branch_id: d.branch_id ?? '',
+      division_id: d.division_id ?? '',
+      notes: d.notes ?? '',
+      dispatch_date: today(),
+    });
+    setRows(d.items.map(it => ({
+      item_id: it.item_id,
+      quantity: String(Number(it.quantity)),
+      unit_index: String(it.unit_index),
+    })));
+    // Ensure the division dropdown is populated for the target branch.
+    if (d.branch_id) getDivisions({ branch_id: d.branch_id }).then(r => setDivisions(r.data));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDelete = async (d) => {
+    if (!window.confirm('Batalkan pengiriman ini? Stok akan dikembalikan dan pembukuan direverse. Catatan tetap disimpan.')) return;
+    setError('');
+    try {
+      await deleteDispatch(d.id);
+      if (editingId === d.id) resetForm();
+      loadDispatches();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Pembatalan gagal');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -80,17 +134,22 @@ export default function Dispatch() {
     for (const [i, row] of rows.entries()) {
       if (!row.item_id) { setError(`Baris ${i + 1}: pilih barang`); return; }
       if (!row.quantity || Number(row.quantity) <= 0) { setError(`Baris ${i + 1}: jumlah harus lebih dari 0`); return; }
-      const available = getItemStock(row.item_id, row.unit_index);
-      if (Number(row.quantity) > available) {
-        const item = allItems.find(it => it.id === row.item_id);
-        const unitName = item?.units[Number(row.unit_index)]?.name ?? '';
-        setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${available.toLocaleString('id-ID')} ${unitName})`);
-        return;
+      // When editing, the current dispatch already holds stock, so the
+      // available figure understates what can be dispatched; let the backend
+      // enforce real availability via FIFO.
+      if (!isEditing) {
+        const available = getItemStock(row.item_id, row.unit_index);
+        if (Number(row.quantity) > available) {
+          const item = allItems.find(it => it.id === row.item_id);
+          const unitName = item?.units[Number(row.unit_index)]?.name ?? '';
+          setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${available.toLocaleString('id-ID')} ${unitName})`);
+          return;
+        }
       }
     }
     setLoading(true);
     try {
-      await createDispatch({
+      const payload = {
         warehouse_id: header.warehouse_id,
         branch_id: header.branch_id,
         division_id: header.division_id,
@@ -101,14 +160,16 @@ export default function Dispatch() {
           const unitName = item?.units[Number(r.unit_index)]?.name ?? '';
           return { item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index), unit_name: unitName };
         }),
-      });
-      setHeader(emptyHeader);
-      setRows([emptyRow()]);
-      setSrcInventory([]);
-      setDivisions([]);
+      };
+      if (isEditing) {
+        await updateDispatch(editingId, payload);
+      } else {
+        await createDispatch(payload);
+      }
+      resetForm();
       loadDispatches();
     } catch (err) {
-      setError(err.response?.data?.error || 'Pengiriman gagal');
+      setError(err.response?.data?.error || (isEditing ? 'Perubahan gagal' : 'Pengiriman gagal'));
     } finally {
       setLoading(false);
     }
@@ -124,13 +185,18 @@ export default function Dispatch() {
 
       {/* Dispatch form */}
       <div className="card" style={{ maxWidth: '900px', marginBottom: '1.5rem' }}>
-        <h2 style={{ marginBottom: '1.25rem' }}>Pengiriman Baru</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+          <h2 style={{ margin: 0 }}>{isEditing ? 'Edit Pengiriman' : 'Pengiriman Baru'}</h2>
+          {isEditing && (
+            <button type="button" onClick={resetForm} className="btn btn-secondary btn-sm">Batal Edit</button>
+          )}
+        </div>
         {error && <div className="error-msg">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-row" style={{ marginBottom: '1rem' }}>
             <div className="form-group" style={{ margin: 0 }}>
-              <label>Dari Gudang</label>
-              <select value={header.warehouse_id} onChange={setHeaderField('warehouse_id')}>
+              <label>Dari Gudang {isEditing && <span style={{ color: '#aaa', fontWeight: 400 }}>(tidak dapat diubah)</span>}</label>
+              <select value={header.warehouse_id} onChange={setHeaderField('warehouse_id')} disabled={isEditing}>
                 <option value="">Pilih gudang...</option>
                 {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
               </select>
@@ -178,7 +244,8 @@ export default function Dispatch() {
                   const available = row.item_id ? getItemStock(row.item_id, row.unit_index) : null;
                   const stockedUnits = selectedItem
                     ? selectedItem.units.map((u, ui) => ({ ...u, ui })).filter(u =>
-                        srcInventory.some(inv => inv.item_id === row.item_id && inv.unit_index === u.ui)
+                        srcInventory.some(inv => inv.item_id === row.item_id && inv.unit_index === u.ui) ||
+                        String(u.ui) === String(row.unit_index)
                       )
                     : [];
                   return (
@@ -199,7 +266,7 @@ export default function Dispatch() {
                       <td style={{ minWidth: '150px' }}>
                         <input
                           type="number" min="0.001" step="any"
-                          max={available !== null ? available : undefined}
+                          max={!isEditing && available !== null ? available : undefined}
                           value={row.quantity} onChange={setRow(i, 'quantity')}
                           placeholder="0" style={{ width: '100%' }} disabled={!selectedItem}
                         />
@@ -224,7 +291,7 @@ export default function Dispatch() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem' }}>
             <button type="button" onClick={addRow} className="btn btn-secondary" disabled={!header.warehouse_id}>+ Tambah Baris</button>
             <button type="submit" className="btn btn-primary" disabled={loading}>
-              {loading ? 'Memproses...' : 'Kirim Stok'}
+              {loading ? 'Memproses...' : isEditing ? 'Simpan Perubahan' : 'Kirim Stok'}
             </button>
           </div>
         </form>
@@ -264,7 +331,12 @@ export default function Dispatch() {
                   <td style={{ color: '#555' }}>{d.warehouse_name}</td>
                   <td style={{ fontWeight: 500 }}>{d.branch_name}</td>
                   <td style={{ color: '#555' }}>{d.division_name}</td>
-                  <td><span className="badge">{d.items.length} item{d.items.length !== 1 ? 's' : ''}</span></td>
+                  <td>
+                    <span className="badge">{d.items.length} item{d.items.length !== 1 ? 's' : ''}</span>
+                    {d.status === 'cancelled' && (
+                      <span className="badge" style={{ marginLeft: '0.35rem', background: '#fdecea', color: '#c0392b' }}>Dibatalkan</span>
+                    )}
+                  </td>
                   <td style={{ fontSize: '0.85rem', color: '#666' }}>{d.dispatched_by_name ?? '—'}</td>
                   <td style={{ fontSize: '0.85rem', color: '#888', fontStyle: d.notes ? 'normal' : 'italic' }}>{d.notes ?? '—'}</td>
                 </tr>
@@ -293,6 +365,24 @@ export default function Dispatch() {
                           ))}
                         </tbody>
                       </table>
+                      <div style={{ marginTop: '0.85rem', display: 'flex', gap: '0.5rem' }}>
+                        {d.status === 'cancelled' ? (
+                          <span style={{ fontSize: '0.82rem', color: '#c0392b', fontStyle: 'italic' }}>
+                            Pengiriman ini telah dibatalkan. Stok telah dikembalikan dan pembukuan direverse.
+                          </span>
+                        ) : (
+                          <>
+                            <button type="button" className="btn btn-secondary btn-sm"
+                              onClick={(e) => { e.stopPropagation(); startEdit(d); }}>
+                              Edit
+                            </button>
+                            <button type="button" className="btn btn-danger btn-sm"
+                              onClick={(e) => { e.stopPropagation(); handleDelete(d); }}>
+                              Batalkan
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )}

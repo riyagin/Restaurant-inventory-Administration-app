@@ -1,0 +1,2 @@
+ALTER TABLE dispatches DROP COLUMN IF EXISTS updated_at;
+ALTER TABLE dispatches DROP COLUMN IF EXISTS status;

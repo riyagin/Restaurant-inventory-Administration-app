@@ -276,6 +276,8 @@ func main() {
 		r.Get("/api/dispatches", dispatchesHandler.List)
 		r.Get("/api/dispatches/{id}", dispatchesHandler.Get)
 		r.Post("/api/dispatches", dispatchesHandler.Create)
+		r.Put("/api/dispatches/{id}", dispatchesHandler.Update)
+		r.Delete("/api/dispatches/{id}", dispatchesHandler.Delete)
 
 		// Enumerations — all authenticated
 		r.Get("/api/enumerations", enumerationsHandler.List)

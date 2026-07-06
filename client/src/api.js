@@ -167,6 +167,8 @@ export const deleteDivisionCategory = (id) => api.delete(`/division-categories/$
 export const getDispatches = () => api.get('/dispatches');
 export const getDispatch = (id) => api.get(`/dispatches/${id}`);
 export const createDispatch = (data) => api.post('/dispatches', data);
+export const updateDispatch = (id, data) => api.put(`/dispatches/${id}`, data);
+export const deleteDispatch = (id) => api.delete(`/dispatches/${id}`);
 
 export const getSales = (params) => api.get('/sales', { params });
 export const createSale = (data) => api.post('/sales', data);
