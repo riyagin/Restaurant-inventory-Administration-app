@@ -178,6 +178,66 @@ func TestDispatchCreate_FIFODeductionAndAccountBalance(t *testing.T) {
 	}
 }
 
+// TestDispatchCreate_EntryDate verifies a supplied dispatch_date is used as the
+// entry date across every record that drives period inventory-value reporting:
+// the dispatch header, the stock_history movement, and the auto-invoice.
+func TestDispatchCreate_EntryDate(t *testing.T) {
+	pool := testutil.OpenDB(t)
+	fix := setupDispatchFixtures(t, pool)
+	userID := createTestUser(t, pool)
+
+	h := handler.NewDispatchesHandler(pool, db.New(pool))
+	ctx := middleware.ContextWithClaims(context.Background(), testClaims(userID))
+
+	const entryDate = "2026-02-15"
+	rr := postJSON(t, h.Create, ctx, map[string]any{
+		"branch_id":     fix.branchID.String(),
+		"warehouse_id":  fix.warehouseID.String(),
+		"dispatch_date": entryDate,
+		"items": []map[string]any{{
+			"item_id": fix.itemID.String(), "quantity": 2.0,
+			"unit_index": 0, "unit_name": "kg",
+		}},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	dispMap, _ := resp["dispatch"].(map[string]any)
+	dispatchID, _ := dispMap["id"].(string)
+	if dispatchID == "" {
+		t.Fatal("dispatch.id missing from response")
+	}
+
+	bCtx := context.Background()
+
+	var dispatchedDate string
+	pool.QueryRow(bCtx,
+		`SELECT dispatched_at::date::text FROM dispatches WHERE id = $1`, dispatchID).Scan(&dispatchedDate)
+	if dispatchedDate != entryDate {
+		t.Errorf("dispatches.dispatched_at date = %q, want %q", dispatchedDate, entryDate)
+	}
+
+	var histDate string
+	pool.QueryRow(bCtx,
+		`SELECT date::text FROM stock_history WHERE source_id = $1 AND source_type = 'dispatch'`,
+		dispatchID).Scan(&histDate)
+	if histDate != entryDate {
+		t.Errorf("stock_history.date = %q, want %q", histDate, entryDate)
+	}
+
+	var invoiceDate string
+	pool.QueryRow(bCtx,
+		`SELECT date::text FROM invoices WHERE dispatch_id = $1`, dispatchID).Scan(&invoiceDate)
+	if invoiceDate != entryDate {
+		t.Errorf("invoices.date = %q, want %q", invoiceDate, entryDate)
+	}
+}
+
 // TestDispatchCreate_InsufficientStock confirms 422 when dispatch qty > stock.
 func TestDispatchCreate_InsufficientStock(t *testing.T) {
 	pool := testutil.OpenDB(t)

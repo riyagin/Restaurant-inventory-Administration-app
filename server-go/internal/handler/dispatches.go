@@ -171,11 +171,12 @@ func (h *DispatchesHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Create — POST /api/dispatches
 func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		BranchID   string `json:"branch_id"`
-		DivisionID string `json:"division_id"`
-		WarehouseID string `json:"warehouse_id"`
-		Notes      string `json:"notes"`
-		Items      []struct {
+		BranchID     string `json:"branch_id"`
+		DivisionID   string `json:"division_id"`
+		WarehouseID  string `json:"warehouse_id"`
+		Notes        string `json:"notes"`
+		DispatchDate string `json:"dispatch_date"`
+		Items        []struct {
 			ItemID    string  `json:"item_id"`
 			Quantity  float64 `json:"quantity"`
 			UnitIndex int32   `json:"unit_index"`
@@ -197,6 +198,19 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if len(body.Items) == 0 {
 		respondError(w, http.StatusBadRequest, "minimal satu item diperlukan")
 		return
+	}
+	// Optional entry date; empty falls back to the DB default (now). The chosen
+	// date drives which period the dispatch's inventory value is counted in
+	// (stock_history.date + auto-invoice.date).
+	var entryDate time.Time
+	hasEntryDate := false
+	if body.DispatchDate != "" {
+		t, err := time.Parse("2006-01-02", body.DispatchDate)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "format tanggal pengiriman tidak valid")
+			return
+		}
+		entryDate, hasEntryDate = t, true
 	}
 
 	branchID, err := parseUUID(body.BranchID)
@@ -245,6 +259,18 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	dispatchID := dispatched.ID.Bytes
 
+	// Apply the entry date if provided, so all downstream records (stock_history,
+	// auto-invoice) fall in the intended period.
+	effectiveDate := dispatched.DispatchedAt.Time
+	if hasEntryDate {
+		effectiveDate = entryDate
+		if _, err := tx.Exec(ctx, `UPDATE dispatches SET dispatched_at = $1 WHERE id = $2`,
+			pgtype.Timestamptz{Time: entryDate, Valid: true}, pgUUID(dispatchID)); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan tanggal pengiriman")
+			return
+		}
+	}
+
 	// 2. Process each item: FIFO deduct, insert dispatch item, insert stock history
 	type itemResult struct {
 		itemID       uuid.UUID
@@ -290,7 +316,7 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			QuantityChange: -it.Quantity,
 			UnitName:       it.UnitName,
 			Type:           "dispatch",
-			Date:           dispatched.DispatchedAt.Time,
+			Date:           effectiveDate,
 			Value:          -valueDeducted,
 			SourceID:       dispatchID,
 			SourceType:     "dispatch",
@@ -338,7 +364,7 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	invoiceNumber := fmt.Sprintf("%v", invNumRaw)
 
-	invoiceDate := dispatched.DispatchedAt.Time
+	invoiceDate := effectiveDate
 
 	invoice, err := qtx.CreateInvoice(ctx, &db.CreateInvoiceParams{
 		InvoiceNumber: invoiceNumber,
@@ -429,6 +455,17 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: id != uuid.Nil}
 }
 
+// pgDateOrNull returns a valid pgtype.Date only when present, else NULL — so a
+// COALESCE keeps the existing column value when no new date is supplied.
+func pgDateOrNull(present bool, t time.Time) pgtype.Date {
+	return pgtype.Date{Time: t, Valid: present}
+}
+
+// pgTimestamptzOrNull mirrors pgDateOrNull for timestamptz columns.
+func pgTimestamptzOrNull(present bool, t time.Time) pgtype.Timestamptz {
+	return pgtype.Timestamptz{Time: t, Valid: present}
+}
+
 const dispatchEpsilon = 0.0001
 
 // Update — PUT /api/dispatches/:id
@@ -448,10 +485,11 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		BranchID   string              `json:"branch_id"`
-		DivisionID string              `json:"division_id"`
-		Notes      string              `json:"notes"`
-		Items      []dispatchItemInput `json:"items"`
+		BranchID     string              `json:"branch_id"`
+		DivisionID   string              `json:"division_id"`
+		Notes        string              `json:"notes"`
+		DispatchDate string              `json:"dispatch_date"`
+		Items        []dispatchItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -478,6 +516,16 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "division_id tidak valid")
 		return
+	}
+	var newEntryDate time.Time
+	hasNewEntryDate := false
+	if body.DispatchDate != "" {
+		t, err := time.Parse("2006-01-02", body.DispatchDate)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "format tanggal pengiriman tidak valid")
+			return
+		}
+		newEntryDate, hasNewEntryDate = t, true
 	}
 
 	// Build the desired new state keyed by item+unit.
@@ -519,10 +567,11 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Load current dispatch header.
 	var curBranch, curDivision, curWarehouse pgtype.UUID
+	var curDispatchedAt pgtype.Timestamptz
 	var status string
 	err = tx.QueryRow(ctx,
-		`SELECT branch_id, division_id, warehouse_id, status FROM dispatches WHERE id = $1`,
-		pgUUID(id)).Scan(&curBranch, &curDivision, &curWarehouse, &status)
+		`SELECT branch_id, division_id, warehouse_id, dispatched_at, status FROM dispatches WHERE id = $1`,
+		pgUUID(id)).Scan(&curBranch, &curDivision, &curWarehouse, &curDispatchedAt, &status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "pengiriman tidak ditemukan")
@@ -536,6 +585,13 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	warehouseID := curWarehouse.Bytes
+
+	// Effective date the corrections are booked under: the (possibly new) entry
+	// date, so they land in the same period as the dispatch's inventory value.
+	effectiveDate := curDispatchedAt.Time
+	if hasNewEntryDate {
+		effectiveDate = newEntryDate
+	}
 
 	// Load current item quantities keyed by item+unit.
 	oldByKey := map[string]*lineState{}
@@ -596,7 +652,6 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	now := time.Now()
 	var netExpenseDelta int64 // positive = more expense booked
 
 	// Walk the union of old and new keys and book each difference as a new line.
@@ -653,7 +708,7 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 				ItemID: itemID, WarehouseID: warehouseID, QuantityChange: -delta, UnitName: unitName,
-				Type: "dispatch_edit", Date: now, Value: -extraValue, SourceID: id, SourceType: "dispatch",
+				Type: "dispatch_edit", Date: effectiveDate, Value: -extraValue, SourceID: id, SourceType: "dispatch",
 			}); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 				return
@@ -668,7 +723,7 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 				unitCost = float64(c.value) / c.qty
 			}
 			retValue := int64(unitCost * ret)
-			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, ret, unitIndex, retValue, now); err != nil {
+			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, ret, unitIndex, retValue, effectiveDate); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal mengembalikan stok")
 				return
 			}
@@ -687,7 +742,7 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 				ItemID: itemID, WarehouseID: warehouseID, QuantityChange: ret, UnitName: unitName,
-				Type: "dispatch_edit", Date: now, Value: retValue, SourceID: id, SourceType: "dispatch",
+				Type: "dispatch_edit", Date: effectiveDate, Value: retValue, SourceID: id, SourceType: "dispatch",
 			}); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 				return
@@ -726,10 +781,14 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Re-point the invoice header so period reports attribute lines correctly.
+	// When the entry date changes, move the invoice date too so the whole
+	// expense (original + correction lines) falls in the intended period.
 	if invID.Valid {
 		if _, err := tx.Exec(ctx,
-			`UPDATE invoices SET branch_id = $1, division_id = $2 WHERE id = $3`,
-			pgUUID(newBranchID), pgUUID(newDivisionID), invID); err != nil {
+			`UPDATE invoices SET branch_id = $1, division_id = $2,
+			        date = COALESCE($3::date, date) WHERE id = $4`,
+			pgUUID(newBranchID), pgUUID(newDivisionID),
+			pgDateOrNull(hasNewEntryDate, newEntryDate), invID); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui faktur")
 			return
 		}
@@ -753,11 +812,14 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Update dispatch header.
+	// Update dispatch header (including the entry date when changed).
 	if _, err := tx.Exec(ctx,
-		`UPDATE dispatches SET branch_id = $1, division_id = $2, notes = $3, updated_at = now() WHERE id = $4`,
+		`UPDATE dispatches SET branch_id = $1, division_id = $2, notes = $3,
+		        dispatched_at = COALESCE($4::timestamptz, dispatched_at), updated_at = now()
+		 WHERE id = $5`,
 		pgUUID(newBranchID), pgUUID(newDivisionID),
-		pgtype.Text{String: body.Notes, Valid: body.Notes != ""}, pgUUID(id)); err != nil {
+		pgtype.Text{String: body.Notes, Valid: body.Notes != ""},
+		pgTimestamptzOrNull(hasNewEntryDate, newEntryDate), pgUUID(id)); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui pengiriman")
 		return
 	}
@@ -814,10 +876,11 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	qtx := h.queries.WithTx(tx)
 
 	var branchID, divisionID, warehouseID pgtype.UUID
+	var dispatchedAt pgtype.Timestamptz
 	var status string
 	err = tx.QueryRow(ctx,
-		`SELECT branch_id, division_id, warehouse_id, status FROM dispatches WHERE id = $1`,
-		pgUUID(id)).Scan(&branchID, &divisionID, &warehouseID, &status)
+		`SELECT branch_id, division_id, warehouse_id, dispatched_at, status FROM dispatches WHERE id = $1`,
+		pgUUID(id)).Scan(&branchID, &divisionID, &warehouseID, &dispatchedAt, &status)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "pengiriman tidak ditemukan")
@@ -893,7 +956,12 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 
-	now := time.Now()
+	// Book the reversal on the dispatch's own date so it nets against the
+	// original movement within the same reporting period.
+	reversalDate := dispatchedAt.Time
+	if !dispatchedAt.Valid {
+		reversalDate = time.Now()
+	}
 
 	// Return stock for each item.
 	for itemID, a := range perItem {
@@ -902,13 +970,13 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		unitIndex := unitByItem[itemID]
 		unitName := nameByItem[itemID]
-		if err := service.FIFOAdd(ctx, qtx, itemID, whID, a.qty, unitIndex, a.value, now); err != nil {
+		if err := service.FIFOAdd(ctx, qtx, itemID, whID, a.qty, unitIndex, a.value, reversalDate); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengembalikan stok")
 			return
 		}
 		if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 			ItemID: itemID, WarehouseID: whID, QuantityChange: a.qty, UnitName: unitName,
-			Type: "dispatch_cancel", Date: now, Value: a.value, SourceID: id, SourceType: "dispatch",
+			Type: "dispatch_cancel", Date: reversalDate, Value: a.value, SourceID: id, SourceType: "dispatch",
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 			return

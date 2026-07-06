@@ -101,7 +101,9 @@ export default function Dispatch() {
       branch_id: d.branch_id ?? '',
       division_id: d.division_id ?? '',
       notes: d.notes ?? '',
-      dispatch_date: today(),
+      // Preload the dispatch's own date so editing (e.g. just the notes) does
+      // not silently move it to today.
+      dispatch_date: d.dispatched_at ? new Date(d.dispatched_at).toISOString().slice(0, 10) : today(),
     });
     setRows(d.items.map(it => ({
       item_id: it.item_id,

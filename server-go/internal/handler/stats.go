@@ -243,7 +243,10 @@ func (h *StatsHandler) StockFlow(w http.ResponseWriter, r *http.Request) {
 		  COALESCE(pos.pos_revenue,  0)::BIGINT AS pos_revenue
 		FROM (SELECT generate_series($1::date, $2::date, '1 day'::interval)::date AS day) days
 		LEFT JOIN (
-		  SELECT sh.date, SUM(ABS(sh.value))::BIGINT AS stock_usage
+		  -- Dispatch value leaves stock as a negative sh.value, so -SUM gives the
+		  -- outgoing value. Edit/cancel reversals post positive values that net
+		  -- against it, keeping period usage correct after corrections.
+		  SELECT sh.date, SUM(-sh.value)::BIGINT AS stock_usage
 		  FROM stock_history sh
 		  ` + dispatchJoin + `
 		  WHERE sh.source_type = 'dispatch' AND sh.value IS NOT NULL AND sh.date BETWEEN $1 AND $2

@@ -10,7 +10,6 @@ const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
 const fmt = (d) => d ? new Date(d).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { dateStyle: 'medium' }) : '—';
 
 function groupInventory(inventory) {
   const map = new Map();
@@ -430,8 +429,13 @@ export default function StockOpname() {
                             </thead>
                             <tbody>
                               {op.items.map(it => (
-                                <tr key={it.id}>
-                                  <td style={{ padding: '0.3rem 0.6rem', fontWeight: 500 }}>{it.item_name}</td>
+                                <tr key={it.id} style={it.is_correction ? { background: '#fffaf0' } : undefined}>
+                                  <td style={{ padding: '0.3rem 0.6rem', fontWeight: 500 }}>
+                                    {it.item_name}
+                                    {it.is_correction && (
+                                      <span className="badge" style={{ marginLeft: '0.4rem', background: '#f39c12', color: '#fff', fontSize: '0.68rem' }}>Koreksi</span>
+                                    )}
+                                  </td>
                                   <td style={{ padding: '0.3rem 0.6rem', color: '#555' }}>{it.unit_name}</td>
                                   <td style={{ padding: '0.3rem 0.6rem', textAlign: 'right' }}>{Number(it.recorded_quantity).toLocaleString('id-ID')}</td>
                                   <td style={{ padding: '0.3rem 0.6rem', textAlign: 'right' }}>{Number(it.actual_quantity).toLocaleString('id-ID')}</td>

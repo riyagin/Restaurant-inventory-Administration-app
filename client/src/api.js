@@ -127,6 +127,7 @@ export const getStockHistory = (itemId, params) => api.get(`/stock-history/${ite
 export const getStockOpname = () => api.get('/stock-opname');
 export const getStockOpnameById = (id) => api.get(`/stock-opname/${id}`);
 export const createStockOpname = (data) => api.post('/stock-opname', data);
+export const updateStockOpname = (id, data) => api.put(`/stock-opname/${id}`, data);
 
 export const getStockOpnameDrafts = () => api.get('/stock-opname/drafts');
 export const createStockOpnameDraft = (data) => api.post('/stock-opname/drafts', data);

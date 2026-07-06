@@ -261,6 +261,7 @@ func main() {
 		r.Put("/api/stock-opname/drafts/{id}", stockOpnameHandler.UpdateDraft)
 		r.Delete("/api/stock-opname/drafts/{id}", stockOpnameHandler.DeleteDraft)
 		r.Get("/api/stock-opname/{id}", stockOpnameHandler.Get)
+		r.Put("/api/stock-opname/{id}", stockOpnameHandler.Update)
 
 		// Invoices — all authenticated; delete admin only
 		r.Get("/api/invoices", invoicesHandler.List)
