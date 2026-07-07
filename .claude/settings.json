@@ -44,7 +44,9 @@
       "Bash(find / -iname \"*ssh*.py\" -not -path \"*/node_modules/*\" 2>/dev/null | head -20)",
       "Read(//d//**)",
       "Bash(find /c/Users/Lenovo -iname \"*ssh*\" -iname \"*.py\" 2>/dev/null | head -20)",
-      "Read(//c/Users/Lenovo/**)"
+      "Read(//c/Users/Lenovo/**)",
+      "Bash(go vet ./*)",
+      "Bash(go version)"
     ]
   }
 }

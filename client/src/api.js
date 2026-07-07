@@ -150,6 +150,8 @@ export const payInvoice = (id, data) => api.post(`/invoices/${id}/pay`, data);
 export const getStockTransfers = () => api.get('/stock-transfers');
 export const getStockTransferGroup = (id) => api.get(`/stock-transfers/group/${id}`);
 export const createStockTransfer = (data) => api.post('/stock-transfers', data);
+export const updateStockTransfer = (groupId, data) => api.put(`/stock-transfers/group/${groupId}`, data);
+export const deleteStockTransfer = (groupId) => api.delete(`/stock-transfers/group/${groupId}`);
 
 export const getBranches = () => api.get('/branches');
 export const createBranch = (data) => api.post('/branches', data);

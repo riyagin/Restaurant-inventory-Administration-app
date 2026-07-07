@@ -1,3 +1,15 @@
+// TEMPLATE — copy to `ecosystem.config.cjs` and fill in real values.
+//
+//   cp ecosystem.config.example.cjs ecosystem.config.cjs
+//   # then edit DB_PASSWORD and JWT_SECRET below
+//
+// The real `ecosystem.config.cjs` is gitignored so it can hold production
+// secrets without being committed or overwritten by `git pull` on deploy.
+//
+// NOTE: PM2 caches the env block in ~/.pm2/dump.pm2. After editing values,
+// reload the env explicitly — a plain `pm2 restart` keeps the cached values:
+//   pm2 restart inventory-app --update-env
+//   # or: pm2 delete inventory-app && pm2 start ecosystem.config.cjs
 module.exports = {
   apps: [
     {

@@ -252,6 +252,8 @@ func main() {
 		r.Get("/api/stock-transfers", stockTransfersHandler.List)
 		r.Get("/api/stock-transfers/group/{groupId}", stockTransfersHandler.ListByGroup)
 		r.Post("/api/stock-transfers", stockTransfersHandler.Create)
+		r.Put("/api/stock-transfers/group/{groupId}", stockTransfersHandler.Update)
+		r.Delete("/api/stock-transfers/group/{groupId}", stockTransfersHandler.Delete)
 
 		// Stock Opname — all authenticated
 		r.Get("/api/stock-opname", stockOpnameHandler.List)

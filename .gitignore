@@ -18,6 +18,9 @@ pnpm-debug.log*
 .env.*
 !.env.example
 server/config.json
+# PM2 config holds the prod DB password + JWT secret — keep the real file
+# untracked; only ecosystem.config.example.cjs (placeholders) is committed.
+deploy/ecosystem.config.cjs
 
 # Uploaded files (server)
 server/uploads/
