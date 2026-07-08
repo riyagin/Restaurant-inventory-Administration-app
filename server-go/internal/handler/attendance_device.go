@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,6 +79,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	if err := r.ParseMultipartForm(20 << 20); err != nil {
 		// Fall back to plain form parsing (no file part).
 		if err := r.ParseForm(); err != nil {
+			log.Printf("attendance device event: parse form failed: %v", err)
 			respondError(w, http.StatusBadRequest, "gagal membaca permintaan")
 			return
 		}
@@ -120,6 +123,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 			respondError(w, http.StatusNotFound, "karyawan dengan kode tersebut tidak ditemukan")
 			return
 		}
+		log.Printf("attendance device event: GetEmployeeByCode(%q) failed: %v", employeeCode, err)
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
 		return
 	}
@@ -140,6 +144,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
+		log.Printf("attendance device event: begin tx failed: %v", err)
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
 		return
 	}
@@ -175,15 +180,23 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		defer file.Close()
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
-			fname := fmt.Sprintf("attendance-%s-%d%s", emp.ID.Bytes, time.Now().UnixNano(), ext)
+			// emp.ID.Bytes is a raw [16]byte; format it as a proper UUID string so
+			// the filename is valid (a bare %s on the byte array yields control
+			// characters that fail os.Create, silently losing the photo).
+			empID := uuid.UUID(emp.ID.Bytes).String()
+			fname := fmt.Sprintf("attendance-%s-%d%s", empID, time.Now().UnixNano(), ext)
 			uploadsDir := h.resolveUploadsDir()
-			if mkErr := os.MkdirAll(uploadsDir, 0755); mkErr == nil {
-				if dst, cerr := os.Create(filepath.Join(uploadsDir, fname)); cerr == nil {
-					if _, werr := io.Copy(dst, file); werr == nil {
-						photoPath = fname
-					}
-					dst.Close()
+			if mkErr := os.MkdirAll(uploadsDir, 0755); mkErr != nil {
+				log.Printf("attendance device event: mkdir uploads %q failed: %v", uploadsDir, mkErr)
+			} else if dst, cerr := os.Create(filepath.Join(uploadsDir, fname)); cerr != nil {
+				log.Printf("attendance device event: create photo %q failed: %v", fname, cerr)
+			} else {
+				if _, werr := io.Copy(dst, file); werr == nil {
+					photoPath = fname
+				} else {
+					log.Printf("attendance device event: write photo %q failed: %v", fname, werr)
 				}
+				dst.Close()
 			}
 		}
 	}
@@ -230,6 +243,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		}
 		service.FillUpdateParams(&params, state)
 		if _, err := qtx.UpdateAttendanceRecord(ctx, &params); err != nil {
+			log.Printf("attendance device event: UpdateAttendanceRecord(emp=%s date=%s) failed: %v", employeeCode, rawTimestamp, err)
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 			return
 		}
@@ -247,17 +261,24 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		}
 		service.FillInsertParams(&params, state)
 		if _, err := qtx.InsertAttendanceRecord(ctx, &params); err != nil {
+			log.Printf("attendance device event: InsertAttendanceRecord(emp=%s date=%s) failed: %v", employeeCode, rawTimestamp, err)
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 			return
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		log.Printf("attendance device event: commit failed (emp=%s date=%s): %v", employeeCode, rawTimestamp, err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
+		// success/message mirror what the Android app parses (AttendanceEventResponse).
+		// direction ("check_in"/"check_out") is echoed as message so the app can show
+		// the resolved direction; the richer fields below are used by the web UI.
+		"success":      true,
+		"message":      direction,
 		"greeting":     greeting(ts, emp.FullName),
 		"full_name":    emp.FullName,
 		"status":       state.Status,
