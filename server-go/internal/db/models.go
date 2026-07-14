@@ -176,12 +176,13 @@ type HrImportBatch struct {
 }
 
 type HrSetting struct {
-	ID            int32              `json:"id"`
-	CompanyName   string             `json:"company_name"`
-	Address       string             `json:"address"`
-	LogoPath      pgtype.Text        `json:"logo_path"`
-	PayslipFooter string             `json:"payslip_footer"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID               int32              `json:"id"`
+	CompanyName      string             `json:"company_name"`
+	Address          string             `json:"address"`
+	LogoPath         pgtype.Text        `json:"logo_path"`
+	PayslipFooter    string             `json:"payslip_footer"`
+	AbsenceGraceDays int32              `json:"absence_grace_days"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Inventory struct {

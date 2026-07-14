@@ -12,7 +12,7 @@ import (
 )
 
 const getHRSettings = `-- name: GetHRSettings :one
-SELECT id, company_name, address, logo_path, payslip_footer, updated_at
+SELECT id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
 FROM hr_settings
 WHERE id = 1
 `
@@ -26,6 +26,7 @@ func (q *Queries) GetHRSettings(ctx context.Context) (*HrSetting, error) {
 		&i.Address,
 		&i.LogoPath,
 		&i.PayslipFooter,
+		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
 	)
 	return &i, err
@@ -33,19 +34,25 @@ func (q *Queries) GetHRSettings(ctx context.Context) (*HrSetting, error) {
 
 const updateHRSettings = `-- name: UpdateHRSettings :one
 UPDATE hr_settings
-SET company_name = $1, address = $2, payslip_footer = $3, updated_at = now()
+SET company_name = $1, address = $2, payslip_footer = $3, absence_grace_days = $4, updated_at = now()
 WHERE id = 1
-RETURNING id, company_name, address, logo_path, payslip_footer, updated_at
+RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
 `
 
 type UpdateHRSettingsParams struct {
-	CompanyName   string `json:"company_name"`
-	Address       string `json:"address"`
-	PayslipFooter string `json:"payslip_footer"`
+	CompanyName      string `json:"company_name"`
+	Address          string `json:"address"`
+	PayslipFooter    string `json:"payslip_footer"`
+	AbsenceGraceDays int32  `json:"absence_grace_days"`
 }
 
 func (q *Queries) UpdateHRSettings(ctx context.Context, arg *UpdateHRSettingsParams) (*HrSetting, error) {
-	row := q.db.QueryRow(ctx, updateHRSettings, arg.CompanyName, arg.Address, arg.PayslipFooter)
+	row := q.db.QueryRow(ctx, updateHRSettings,
+		arg.CompanyName,
+		arg.Address,
+		arg.PayslipFooter,
+		arg.AbsenceGraceDays,
+	)
 	var i HrSetting
 	err := row.Scan(
 		&i.ID,
@@ -53,6 +60,7 @@ func (q *Queries) UpdateHRSettings(ctx context.Context, arg *UpdateHRSettingsPar
 		&i.Address,
 		&i.LogoPath,
 		&i.PayslipFooter,
+		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
 	)
 	return &i, err
@@ -62,7 +70,7 @@ const updateHRSettingsLogo = `-- name: UpdateHRSettingsLogo :one
 UPDATE hr_settings
 SET logo_path = $1, updated_at = now()
 WHERE id = 1
-RETURNING id, company_name, address, logo_path, payslip_footer, updated_at
+RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
 `
 
 func (q *Queries) UpdateHRSettingsLogo(ctx context.Context, logoPath pgtype.Text) (*HrSetting, error) {
@@ -74,6 +82,7 @@ func (q *Queries) UpdateHRSettingsLogo(ctx context.Context, logoPath pgtype.Text
 		&i.Address,
 		&i.LogoPath,
 		&i.PayslipFooter,
+		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
 	)
 	return &i, err

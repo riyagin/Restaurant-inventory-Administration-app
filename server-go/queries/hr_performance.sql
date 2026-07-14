@@ -78,6 +78,17 @@ WHERE policy_id = $1
   AND date >= $3
   AND date < ($3::date + INTERVAL '1 month');
 
+-- name: CountAbsentDaysBeforeInMonth :one
+-- Number of 'absent' attendance days the employee already has in the month,
+-- strictly before `before_date`. Used to apply the monthly absence grace: the
+-- first N absent days each month carry no performance violation.
+SELECT COUNT(*)
+FROM attendance_records
+WHERE employee_id = $1
+  AND status = 'absent'
+  AND date >= $2
+  AND date < $3;
+
 -- name: SumViolationPointsInMonth :one
 SELECT COALESCE(SUM(points), 0)::int AS total
 FROM performance_violations

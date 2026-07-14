@@ -474,6 +474,7 @@ func main() {
 			r.Delete("/api/hr/payroll/periods/{id}", payrollHandler.DeletePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/close", payrollHandler.ClosePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/mark-paid", payrollHandler.MarkPaid)
+			r.Post("/api/hr/payroll/periods/{id}/review-all", payrollHandler.ReviewAll)
 			r.Get("/api/hr/payroll/lines/{id}/review", payrollHandler.GetLineReview)
 			r.Post("/api/hr/payroll/lines/{id}/review", payrollHandler.ReviewLine)
 			r.Post("/api/hr/payroll/lines/{id}/unreview", payrollHandler.UnreviewLine)

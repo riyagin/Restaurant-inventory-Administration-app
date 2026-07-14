@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   getPayrollPeriod, getPayrollLines, getPayrollLineReview,
-  reviewPayrollLine, unreviewPayrollLine,
+  reviewPayrollLine, unreviewPayrollLine, reviewAllPayrollLines,
   closePayrollPeriod, markPayrollPeriodPaid, getPositions, getBranches,
   downloadPayslip, downloadPeriodPayslips,
   getWageComponents, getPayrollBonusEligible, applyPayrollBonus,
@@ -116,6 +116,14 @@ export default function PayrollPeriodDetail() {
     catch (err) { setError(err?.response?.data?.error || 'Gagal menandai dibayar'); }
     finally { setBusy(false); }
   };
+  const doReviewAll = async () => {
+    const remaining = lineCount - reviewedCount;
+    if (!window.confirm(`Tandai ${remaining} baris yang belum direview sebagai sudah direview dengan nilai yang dihasilkan? Anda tetap dapat membuka kembali tiap baris selama periode belum ditutup.`)) return;
+    setBusy(true); setError('');
+    try { await reviewAllPayrollLines(id); await refreshAll(); }
+    catch (err) { setError(err?.response?.data?.error || 'Gagal mereview semua baris'); }
+    finally { setBusy(false); }
+  };
 
   const downloadablePayslips = period && (period.status === 'closed' || period.status === 'paid');
 
@@ -168,6 +176,13 @@ export default function PayrollPeriodDetail() {
             <button onClick={() => setShowBonusModal(true)} disabled={busy}
               style={{ background: '#fff', color: '#e37400', border: '1px solid #e37400', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
               Distribusi Bonus
+            </button>
+          )}
+          {period.status === 'open' && !allReviewed && (
+            <button onClick={doReviewAll} disabled={busy}
+              title="Tandai semua baris direview tanpa membuka rincian"
+              style={{ background: '#fff', color: '#1e7e34', border: '1px solid #1e7e34', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
+              Review Semua ({lineCount - reviewedCount})
             </button>
           )}
           {period.status === 'open' && (

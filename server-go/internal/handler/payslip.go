@@ -317,9 +317,10 @@ func (h *PayslipHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type hrSettingsBody struct {
-	CompanyName   string `json:"company_name"`
-	Address       string `json:"address"`
-	PayslipFooter string `json:"payslip_footer"`
+	CompanyName      string `json:"company_name"`
+	Address          string `json:"address"`
+	PayslipFooter    string `json:"payslip_footer"`
+	AbsenceGraceDays *int32 `json:"absence_grace_days"`
 }
 
 // UpdateSettings — PUT /api/hr/settings
@@ -330,10 +331,25 @@ func (h *PayslipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// absence_grace_days is optional in the request; when omitted keep the stored
+	// value. When present it must be >= 0.
+	grace := int32(0)
+	if current, err := h.queries.GetHRSettings(r.Context()); err == nil && current != nil {
+		grace = current.AbsenceGraceDays
+	}
+	if body.AbsenceGraceDays != nil {
+		if *body.AbsenceGraceDays < 0 {
+			respondError(w, http.StatusBadRequest, "toleransi absen tidak boleh negatif")
+			return
+		}
+		grace = *body.AbsenceGraceDays
+	}
+
 	settings, err := h.queries.UpdateHRSettings(r.Context(), &db.UpdateHRSettingsParams{
-		CompanyName:   strings.TrimSpace(body.CompanyName),
-		Address:       strings.TrimSpace(body.Address),
-		PayslipFooter: strings.TrimSpace(body.PayslipFooter),
+		CompanyName:      strings.TrimSpace(body.CompanyName),
+		Address:          strings.TrimSpace(body.Address),
+		PayslipFooter:    strings.TrimSpace(body.PayslipFooter),
+		AbsenceGraceDays: grace,
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengaturan HR")

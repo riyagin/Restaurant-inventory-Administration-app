@@ -33,6 +33,31 @@ func (q *Queries) CountPolicyOccurrencesInMonth(ctx context.Context, arg *CountP
 	return count, err
 }
 
+const countAbsentDaysBeforeInMonth = `-- name: CountAbsentDaysBeforeInMonth :one
+SELECT COUNT(*)
+FROM attendance_records
+WHERE employee_id = $1
+  AND status = 'absent'
+  AND date >= $2
+  AND date < $3
+`
+
+type CountAbsentDaysBeforeInMonthParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	MonthStart pgtype.Date `json:"month_start"`
+	BeforeDate pgtype.Date `json:"before_date"`
+}
+
+// Number of 'absent' attendance days the employee already has in the month,
+// strictly before before_date. Used to apply the monthly absence grace: the
+// first N absent days each month carry no performance violation.
+func (q *Queries) CountAbsentDaysBeforeInMonth(ctx context.Context, arg *CountAbsentDaysBeforeInMonthParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAbsentDaysBeforeInMonth, arg.EmployeeID, arg.MonthStart, arg.BeforeDate)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPolicyViolations = `-- name: CountPolicyViolations :one
 SELECT COUNT(*) FROM performance_violations WHERE policy_id = $1
 `

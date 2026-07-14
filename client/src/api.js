@@ -344,6 +344,7 @@ export const getPayrollLineReview = (lineId) => api.get(`/hr/payroll/lines/${lin
 export const reviewPayrollLine   = (lineId, data) => api.post(`/hr/payroll/lines/${lineId}/review`, data);
 export const unreviewPayrollLine = (lineId) => api.post(`/hr/payroll/lines/${lineId}/unreview`);
 export const regeneratePayrollLine = (id, employeeId) => api.post(`/hr/payroll/periods/${id}/regenerate-line/${employeeId}`);
+export const reviewAllPayrollLines = (id) => api.post(`/hr/payroll/periods/${id}/review-all`);
 export const closePayrollPeriod  = (id) => api.post(`/hr/payroll/periods/${id}/close`);
 export const markPayrollPeriodPaid = (id) => api.post(`/hr/payroll/periods/${id}/mark-paid`);
 export const deletePayrollPeriod = (id) => api.delete(`/hr/payroll/periods/${id}`);

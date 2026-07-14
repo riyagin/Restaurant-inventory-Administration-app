@@ -693,6 +693,64 @@ func (h *PayrollHandler) MarkPaid(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, updated)
 }
 
+// ReviewAll — POST /api/hr/payroll/periods/{id}/review-all
+// Marks every still-unreviewed line in an OPEN period as reviewed, keeping the
+// generated amounts as-is (no recompute). This lets a trusted operator finish the
+// review in one click without opening each line's breakdown. Individual lines can
+// still be reopened/edited afterwards (period stays open until explicitly closed).
+func (h *PayrollHandler) ReviewAll(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	period, err := h.queries.GetPayrollPeriodByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "periode penggajian tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil periode penggajian")
+		return
+	}
+	if period.Status != "open" {
+		respondError(w, http.StatusConflict, service.ErrPeriodLocked.Error())
+		return
+	}
+
+	reviewedBy := middleware.UserIDFromCtx(ctx)
+	reviewer := pgtype.UUID{Bytes: reviewedBy, Valid: reviewedBy != [16]byte{}}
+
+	tag, err := h.pool.Exec(ctx,
+		`UPDATE payroll_lines
+		    SET reviewed = true, reviewed_by = $2, reviewed_at = now()
+		  WHERE payroll_period_id = $1 AND reviewed = false`,
+		pgID, reviewer,
+	)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menandai semua baris direview")
+		return
+	}
+	count := tag.RowsAffected()
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      reviewedBy,
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "payroll_period",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menandai %d baris penggajian direview sekaligus (periode %s)", count, period.PeriodMonth.Time.Format("2006-01")),
+	})
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"message":  "semua baris ditandai direview",
+		"reviewed": count,
+	})
+}
+
 // ── Bonus Distribution ───────────────────────────────────────────────────────
 
 // BonusEligible — GET /api/hr/payroll/periods/:id/bonus-eligible?wage_component_id=...

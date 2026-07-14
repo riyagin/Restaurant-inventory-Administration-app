@@ -138,10 +138,30 @@ func applyAutoViolation(ctx context.Context, qtx *db.Queries, rec *db.Attendance
 	})
 }
 
+// AbsenceGraceDays returns the configured monthly absence grace (hr_settings).
+// Each month the first `grace` unexcused-absence days carry no performance
+// violation; only absences beyond the grace lower the score. Missing settings
+// (or a read error) fall back to 0 so behaviour degrades to "penalize every
+// absence" rather than silently skipping all of them.
+func AbsenceGraceDays(ctx context.Context, q *db.Queries) int {
+	s, err := q.GetHRSettings(ctx)
+	if err != nil || s == nil {
+		return 0
+	}
+	if s.AbsenceGraceDays < 0 {
+		return 0
+	}
+	return int(s.AbsenceGraceDays)
+}
+
 // evaluateRecord matches one finalized attendance record against all active
 // policies and inserts the resulting auto violations. It does NOT recompute the
 // score; callers batch that per employee+month.
-func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceRecord) error {
+//
+// graceDays is the monthly absence grace: an 'absent' record only produces an
+// absent_no_leave violation once the employee already has `graceDays` earlier
+// absent days that month.
+func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceRecord, graceDays int) error {
 	// late
 	if rec.IsLate && rec.LateMinutes > 0 {
 		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "late")
@@ -185,15 +205,28 @@ func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceReco
 	}
 
 	// absent_no_leave — status 'absent' (a 'leave' status carries no violation).
+	// Monthly grace: the first `graceDays` absent days each month are free; this
+	// record only produces a violation once at least `graceDays` earlier absent
+	// days already exist in the same month.
 	if rec.Status == "absent" {
 		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "absent_no_leave")
 		if err != nil {
 			return err
 		}
 		if len(rows) > 0 {
-			p := rows[0]
-			if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+			priorAbsent, err := qtx.CountAbsentDaysBeforeInMonth(ctx, &db.CountAbsentDaysBeforeInMonthParams{
+				EmployeeID: rec.EmployeeID,
+				MonthStart: pgtype.Date{Time: firstOfMonth(rec.Date.Time), Valid: true},
+				BeforeDate: rec.Date,
+			})
+			if err != nil {
 				return err
+			}
+			if int(priorAbsent) >= graceDays {
+				p := rows[0]
+				if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -223,9 +256,11 @@ func EvaluateDay(ctx context.Context, qtx *db.Queries, date time.Time) error {
 		return err
 	}
 
+	graceDays := AbsenceGraceDays(ctx, qtx)
+
 	affected := map[[16]byte]pgtype.UUID{}
 	for _, rec := range recs {
-		if err := evaluateRecord(ctx, qtx, rec); err != nil {
+		if err := evaluateRecord(ctx, qtx, rec, graceDays); err != nil {
 			return err
 		}
 		affected[rec.EmployeeID.Bytes] = rec.EmployeeID
@@ -282,7 +317,7 @@ func DeleteAutoViolationsForRecord(ctx context.Context, qtx *db.Queries, rec *db
 	if err := qtx.DeleteAutoViolationsByRecord(ctx, rec.ID); err != nil {
 		return err
 	}
-	if err := evaluateRecord(ctx, qtx, rec); err != nil {
+	if err := evaluateRecord(ctx, qtx, rec, AbsenceGraceDays(ctx, qtx)); err != nil {
 		return err
 	}
 	return RecomputeScore(ctx, qtx, rec.EmployeeID, firstOfMonth(rec.Date.Time))

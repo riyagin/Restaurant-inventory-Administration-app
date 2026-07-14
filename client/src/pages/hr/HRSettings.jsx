@@ -8,6 +8,7 @@ export default function HRSettings() {
   const [companyName, setCompanyName] = useState('');
   const [address, setAddress] = useState('');
   const [footer, setFooter] = useState('');
+  const [graceDays, setGraceDays] = useState(4);
   const [logoPath, setLogoPath] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -23,6 +24,7 @@ export default function HRSettings() {
       setCompanyName(data.company_name || '');
       setAddress(data.address || '');
       setFooter(data.payslip_footer || '');
+      setGraceDays(data.absence_grace_days ?? 4);
       setLogoPath(data.logo_path?.String ?? data.logo_path ?? '');
     } catch {
       setError('Gagal memuat pengaturan');
@@ -36,7 +38,12 @@ export default function HRSettings() {
   const save = async () => {
     setSaving(true); setMsg(''); setError('');
     try {
-      await updateHRSettings({ company_name: companyName, address, payslip_footer: footer });
+      await updateHRSettings({
+        company_name: companyName,
+        address,
+        payslip_footer: footer,
+        absence_grace_days: Math.max(0, Number(graceDays) || 0),
+      });
       setMsg('Pengaturan tersimpan.');
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengaturan');
@@ -87,6 +94,14 @@ export default function HRSettings() {
         <textarea value={footer} onChange={(e) => setFooter(e.target.value)} rows={2}
           placeholder="mis. Dokumen ini sah tanpa tanda tangan basah."
           style={{ width: '100%', padding: 9, borderRadius: 6, border: '1px solid #ccd', marginBottom: 14, boxSizing: 'border-box' }} />
+
+        <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Toleransi Absen per Bulan (hari)</label>
+        <input type="number" min={0} value={graceDays}
+          onChange={(e) => setGraceDays(e.target.value)}
+          style={{ width: 120, padding: 9, borderRadius: 6, border: '1px solid #ccd', marginBottom: 4, boxSizing: 'border-box' }} />
+        <div style={{ fontSize: 12, color: '#889', marginBottom: 14 }}>
+          Jumlah hari absen tanpa izin yang tidak mengurangi skor kinerja tiap bulan. Karyawan diharapkan hadir minimal (jumlah hari kerja − toleransi ini). Absen melebihi angka ini baru mengurangi skor.
+        </div>
 
         <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Logo Perusahaan</label>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
