@@ -25,12 +25,10 @@ func Load() (*Config, error) {
 
 	uploadsDir := getEnv("UPLOADS_DIR", "")
 	if uploadsDir == "" {
-		exe, err := os.Executable()
-		if err == nil {
-			uploadsDir = filepath.Join(filepath.Dir(exe), "..", "server", "uploads")
-		} else {
-			uploadsDir = filepath.Join("..", "server", "uploads")
-		}
+		// Relative to the process's working directory (server-go/), not the
+		// executable path — `go run` compiles to a throwaway temp dir, so
+		// os.Executable() would silently misdirect uploads there.
+		uploadsDir = filepath.Join("..", "server", "uploads")
 	}
 
 	cfg := &Config{

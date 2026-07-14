@@ -295,7 +295,11 @@ export default function InvoiceForm() {
         savedId = res.data.id;
       }
       if (photoFile && savedId) {
-        await uploadInvoicePhoto(savedId, photoFile);
+        try {
+          await uploadInvoicePhoto(savedId, photoFile);
+        } catch (photoErr) {
+          alert(`Faktur berhasil disimpan, tetapi upload foto gagal: ${photoErr.response?.data?.error || 'kesalahan tidak diketahui'}`);
+        }
       }
       navigate('/invoices');
     } catch (err) {

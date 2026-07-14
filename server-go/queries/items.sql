@@ -22,7 +22,6 @@ SELECT ii.price, ii.unit_index, i.date
 FROM invoice_items ii
 JOIN invoices i ON i.id = ii.invoice_id
 WHERE ii.item_id = $1
-  AND i.invoice_type = 'purchase'
 ORDER BY i.date DESC, i.created_at DESC
 LIMIT 1;
 
