@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+)
 
 func TestCalcLineMultipliersAndRounding(t *testing.T) {
 	// daily_rate 100_000, 1.5 overtime multiplier, 2 overtime days:
@@ -118,5 +122,49 @@ func TestRoundHalfUp(t *testing.T) {
 		if got := roundHalfUp(c.in); got != c.want {
 			t.Errorf("roundHalfUp(%v) = %d, want %d", c.in, got, c.want)
 		}
+	}
+}
+
+func TestEffectiveComponentAmount(t *testing.T) {
+	// Fixed components ignore the present-day count.
+	if got := EffectiveComponentAmount(CalcMethodFixed, 500_000, 20); got != 500_000 {
+		t.Errorf("fixed = %d, want 500000", got)
+	}
+	// Per-present-day treats the amount as a daily rate × present days.
+	if got := EffectiveComponentAmount(CalcMethodPerPresentDay, 15_000, 26); got != 390_000 {
+		t.Errorf("per_present_day = %d, want 390000", got)
+	}
+	// Zero present days yields nothing for a per-day component.
+	if got := EffectiveComponentAmount(CalcMethodPerPresentDay, 15_000, 0); got != 0 {
+		t.Errorf("per_present_day zero days = %d, want 0", got)
+	}
+	// Unknown/empty method falls back to fixed behaviour.
+	if got := EffectiveComponentAmount("", 15_000, 26); got != 15_000 {
+		t.Errorf("empty method = %d, want 15000", got)
+	}
+}
+
+func TestScoreGatePasses(t *testing.T) {
+	gated := func(v int32) pgtype.Int4 { return pgtype.Int4{Int32: v, Valid: true} }
+	none := pgtype.Int4{}
+
+	// No threshold → always passes regardless of score.
+	if !ScoreGatePasses(none, gated(0)) {
+		t.Error("no min_score should always pass")
+	}
+	// Score meets / exceeds threshold → pass.
+	if !ScoreGatePasses(gated(80), gated(80)) {
+		t.Error("score == min should pass")
+	}
+	if !ScoreGatePasses(gated(80), gated(95)) {
+		t.Error("score > min should pass")
+	}
+	// Score below threshold → fail.
+	if ScoreGatePasses(gated(80), gated(79)) {
+		t.Error("score < min should fail")
+	}
+	// Missing score with a threshold set → pass (don't withhold on missing eval).
+	if !ScoreGatePasses(gated(80), none) {
+		t.Error("missing score should pass so pay is not withheld")
 	}
 }

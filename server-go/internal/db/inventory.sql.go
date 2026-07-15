@@ -58,7 +58,17 @@ type CreateInventoryLotParams struct {
 	Date        pgtype.Date    `json:"date"`
 }
 
-func (q *Queries) CreateInventoryLot(ctx context.Context, arg *CreateInventoryLotParams) (*Inventory, error) {
+type CreateInventoryLotRow struct {
+	ID          pgtype.UUID    `json:"id"`
+	ItemID      pgtype.UUID    `json:"item_id"`
+	WarehouseID pgtype.UUID    `json:"warehouse_id"`
+	Quantity    pgtype.Numeric `json:"quantity"`
+	UnitIndex   int32          `json:"unit_index"`
+	Value       int64          `json:"value"`
+	Date        pgtype.Date    `json:"date"`
+}
+
+func (q *Queries) CreateInventoryLot(ctx context.Context, arg *CreateInventoryLotParams) (*CreateInventoryLotRow, error) {
 	row := q.db.QueryRow(ctx, createInventoryLot,
 		arg.ItemID,
 		arg.WarehouseID,
@@ -67,7 +77,7 @@ func (q *Queries) CreateInventoryLot(ctx context.Context, arg *CreateInventoryLo
 		arg.Value,
 		arg.Date,
 	)
-	var i Inventory
+	var i CreateInventoryLotRow
 	err := row.Scan(
 		&i.ID,
 		&i.ItemID,
@@ -149,7 +159,7 @@ const getInventoryLotsForFIFO = `-- name: GetInventoryLotsForFIFO :many
 SELECT id, quantity, value, date, unit_index
 FROM inventory
 WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0
-ORDER BY date ASC, id ASC
+ORDER BY date ASC, created_at ASC, id ASC
 `
 
 type GetInventoryLotsForFIFOParams struct {

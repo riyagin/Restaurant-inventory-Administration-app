@@ -190,7 +190,7 @@ export default function PerformanceDashboard() {
   return (
     <>
       <div className="page-header">
-        <h1>Kinerja Karyawan</h1>
+        <h1>Evaluasi Karyawan</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={handleEvaluate} className="btn btn-secondary" disabled={evaluating}>
             {evaluating ? 'Mengevaluasi…' : 'Evaluasi Bulan Ini'}

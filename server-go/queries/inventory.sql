@@ -53,7 +53,7 @@ WHERE inv.id = $1;
 SELECT id, quantity, value, date, unit_index
 FROM inventory
 WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0
-ORDER BY date ASC, id ASC;
+ORDER BY date ASC, created_at ASC, id ASC;
 
 -- name: CreateInventoryLot :one
 INSERT INTO inventory (id, item_id, warehouse_id, quantity, unit_index, value, date)

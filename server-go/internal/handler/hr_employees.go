@@ -95,20 +95,48 @@ type employeeBody struct {
 	BankAccountHolder string `json:"bank_account_holder"`
 	UserID            string `json:"user_id"`
 	Status            string `json:"status"`
+	EmploymentType    string `json:"employment_type"`
+	ContractEndDate   string `json:"contract_end_date"`
+}
+
+// normalizeEmployment validates the employment type + contract end date pair.
+// A contract employee must have a contract end date; a permanent employee never
+// carries one (any supplied date is cleared).
+func normalizeEmployment(empType, endDate string) (string, pgtype.Date, error) {
+	empType = strings.TrimSpace(empType)
+	if empType == "" {
+		empType = "permanent"
+	}
+	if empType != "permanent" && empType != "contract" {
+		return "", pgtype.Date{}, fmt.Errorf("tipe kepegawaian harus tetap atau kontrak")
+	}
+	contractEnd, err := dateOrNull(endDate)
+	if err != nil {
+		return "", pgtype.Date{}, fmt.Errorf("format tanggal berakhir kontrak tidak valid")
+	}
+	if empType == "contract" && !contractEnd.Valid {
+		return "", pgtype.Date{}, fmt.Errorf("tanggal berakhir kontrak wajib diisi untuk karyawan kontrak")
+	}
+	if empType == "permanent" {
+		contractEnd = pgtype.Date{}
+	}
+	return empType, contractEnd, nil
 }
 
 // employeeListRow is the projection returned by the List endpoint.
 type employeeListRow struct {
-	ID           pgtype.UUID `json:"id"`
-	EmployeeCode string      `json:"employee_code"`
-	FullName     string      `json:"full_name"`
-	JoinDate     pgtype.Date `json:"join_date"`
-	Status       string      `json:"status"`
-	PhotoPath    pgtype.Text `json:"photo_path"`
-	PositionID   pgtype.UUID `json:"position_id"`
-	PositionName string      `json:"position_name"`
-	BranchID     pgtype.UUID `json:"branch_id"`
-	BranchName   string      `json:"branch_name"`
+	ID              pgtype.UUID `json:"id"`
+	EmployeeCode    string      `json:"employee_code"`
+	FullName        string      `json:"full_name"`
+	JoinDate        pgtype.Date `json:"join_date"`
+	Status          string      `json:"status"`
+	PhotoPath       pgtype.Text `json:"photo_path"`
+	PositionID      pgtype.UUID `json:"position_id"`
+	PositionName    string      `json:"position_name"`
+	BranchID        pgtype.UUID `json:"branch_id"`
+	BranchName      string      `json:"branch_name"`
+	EmploymentType  string      `json:"employment_type"`
+	ContractEndDate pgtype.Date `json:"contract_end_date"`
 }
 
 // ── Employees ────────────────────────────────────────────────────────────────
@@ -122,6 +150,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 	branchID := strings.TrimSpace(q.Get("branch_id"))
 	positionID := strings.TrimSpace(q.Get("position_id"))
 	status := strings.TrimSpace(q.Get("status"))
+	employmentType := strings.TrimSpace(q.Get("employment_type"))
 
 	pageNum, pageSize := 1, 25
 	if p := q.Get("page"); p != "" {
@@ -155,6 +184,10 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, status)
 		conds = append(conds, fmt.Sprintf("e.status = $%d", len(args)))
 	}
+	if employmentType == "permanent" || employmentType == "contract" {
+		args = append(args, employmentType)
+		conds = append(conds, fmt.Sprintf("e.employment_type = $%d", len(args)))
+	}
 
 	whereClause := ""
 	if len(conds) > 0 {
@@ -170,7 +203,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		SELECT
 		    e.id, e.employee_code, e.full_name, e.join_date, e.status, e.photo_path,
 		    e.position_id, p.name AS position_name,
-		    e.branch_id, b.name AS branch_name
+		    e.branch_id, b.name AS branch_name,
+		    e.employment_type, e.contract_end_date
 		FROM employees e
 		JOIN positions p ON p.id = e.position_id
 		JOIN branches  b ON b.id = e.branch_id
@@ -192,6 +226,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 			&row.ID, &row.EmployeeCode, &row.FullName, &row.JoinDate, &row.Status, &row.PhotoPath,
 			&row.PositionID, &row.PositionName,
 			&row.BranchID, &row.BranchName,
+			&row.EmploymentType, &row.ContractEndDate,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
 			return
@@ -301,6 +336,12 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -336,6 +377,8 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		BankAccountHolder: textOrNull(body.BankAccountHolder),
 		UserID:            userID,
 		Status:            status,
+		EmploymentType:    employmentType,
+		ContractEndDate:   contractEnd,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -430,6 +473,12 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -455,6 +504,8 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		BankAccountHolder: textOrNull(body.BankAccountHolder),
 		UserID:            userID,
 		Status:            status,
+		EmploymentType:    employmentType,
+		ContractEndDate:   contractEnd,
 		ID:                pgID,
 	})
 	if err != nil {
@@ -670,6 +721,29 @@ func (h *HREmployeesHandler) DeletePhoto(w http.ResponseWriter, r *http.Request)
 	})
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "foto berhasil dihapus"})
+}
+
+// ContractAlerts — GET /api/hr/employees/contract-alerts
+// Returns active contract employees whose contract ends within `days` (default
+// 30 — i.e. the final month), including any already past due. Powers the
+// expiring-contract notifier in the HR UI.
+func (h *HREmployeesHandler) ContractAlerts(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if d := strings.TrimSpace(r.URL.Query().Get("days")); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v >= 0 && v <= 365 {
+			days = v
+		}
+	}
+
+	rows, err := h.queries.ListExpiringContracts(r.Context(), int32(days))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data kontrak")
+		return
+	}
+	if rows == nil {
+		rows = []*db.ListExpiringContractsRow{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": rows, "days": days})
 }
 
 // ── Positions ────────────────────────────────────────────────────────────────

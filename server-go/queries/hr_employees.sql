@@ -39,11 +39,30 @@ SELECT
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
+    e.employment_type, e.contract_end_date,
     e.created_at, e.updated_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
 WHERE e.id = $1;
+
+-- name: ListExpiringContracts :many
+-- Active contract employees whose contract ends within the given window
+-- (in days from today) — including any already past due. Ordered soonest first.
+SELECT
+    e.id, e.employee_code, e.full_name,
+    e.position_id, p.name AS position_name,
+    e.branch_id, b.name AS branch_name,
+    e.contract_end_date,
+    (e.contract_end_date - CURRENT_DATE)::int AS days_remaining
+FROM employees e
+JOIN positions p ON p.id = e.position_id
+JOIN branches  b ON b.id = e.branch_id
+WHERE e.status = 'active'
+  AND e.employment_type = 'contract'
+  AND e.contract_end_date IS NOT NULL
+  AND e.contract_end_date <= (CURRENT_DATE + $1::int)
+ORDER BY e.contract_end_date;
 
 -- name: GetEmployeePhotoPath :one
 SELECT photo_path FROM employees WHERE id = $1;
@@ -53,13 +72,13 @@ INSERT INTO employees (
     id, employee_code, full_name, dob, join_date,
     position_id, branch_id, phone, email, address, national_id,
     bank_name, bank_account_number, bank_account_holder,
-    user_id, status
+    user_id, status, employment_type, contract_end_date
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3, $4,
     $5, $6, $7, $8, $9, $10,
     $11, $12, $13,
-    $14, $15
+    $14, $15, $16, $17
 )
 RETURNING id;
 
@@ -80,8 +99,10 @@ UPDATE employees SET
     bank_account_holder = $13,
     user_id = $14,
     status = $15,
+    employment_type = $16,
+    contract_end_date = $17,
     updated_at = now()
-WHERE id = $16
+WHERE id = $18
 RETURNING id;
 
 -- name: UpdateEmployeePhotoPath :exec

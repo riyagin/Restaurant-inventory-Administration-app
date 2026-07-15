@@ -238,7 +238,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | KasbonDetail | `/hr/kasbon/:id` | Manager+ |
 | PayrollDashboard | `/hr/payroll` | Manager+ |
 | PayrollPeriodDetail | `/hr/payroll/:id` | Manager+ |
-| HRSettings | `/hr/settings` | Admin only |
+| HRSettings | `/hr/settings` | Manager+ (view/quick-links; company-info mutations still admin only) |
 
 ### Components (`client/src/components/`)
 - `CurrencyInput.jsx` — IDR currency input with formatting

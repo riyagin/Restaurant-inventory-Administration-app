@@ -59,6 +59,29 @@ func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentO
 	return cnt, err
 }
 
+const countPresentDays = `-- name: CountPresentDays :one
+SELECT COUNT(*)::int AS cnt
+FROM attendance_records
+WHERE employee_id = $1
+  AND date >= $2 AND date <= $3
+  AND status = 'present'
+`
+
+type CountPresentDaysParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+// Number of 'present' attendance days for an employee within [from, to]. Drives
+// per-present-day wage components (amount = per-day rate × present days).
+func (q *Queries) CountPresentDays(ctx context.Context, arg *CountPresentDaysParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countPresentDays, arg.EmployeeID, arg.Date, arg.Date_2)
+	var cnt int32
+	err := row.Scan(&cnt)
+	return cnt, err
+}
+
 const listHolidaysWorked = `-- name: ListHolidaysWorked :many
 SELECT ph.id, ph.date, ph.name
 FROM attendance_records ar

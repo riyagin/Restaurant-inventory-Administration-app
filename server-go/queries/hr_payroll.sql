@@ -204,6 +204,15 @@ WHERE ar.employee_id = $1
   AND ar.date >= $2 AND ar.date <= $3
   AND ar.status = 'present';
 
+-- name: CountPresentDays :one
+-- Number of 'present' attendance days for an employee within [from, to]. Drives
+-- per-present-day wage components (amount = per-day rate × present days).
+SELECT COUNT(*)::int AS cnt
+FROM attendance_records
+WHERE employee_id = $1
+  AND date >= $2 AND date <= $3
+  AND status = 'present';
+
 -- name: ListHolidaysWorked :many
 SELECT ph.id, ph.date, ph.name
 FROM attendance_records ar

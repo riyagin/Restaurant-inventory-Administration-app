@@ -129,6 +129,8 @@ type Employee struct {
 	PhotoPath         pgtype.Text        `json:"photo_path"`
 	UserID            pgtype.UUID        `json:"user_id"`
 	Status            string             `json:"status"`
+	EmploymentType    string             `json:"employment_type"`
+	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
@@ -558,12 +560,14 @@ type Vendor struct {
 }
 
 type WageComponent struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	Type      string             `json:"type"`
-	IsFixed   bool               `json:"is_fixed"`
-	IsActive  bool               `json:"is_active"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	Type       string             `json:"type"`
+	IsFixed    bool               `json:"is_fixed"`
+	IsActive   bool               `json:"is_active"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	CalcMethod string             `json:"calc_method"`
+	MinScore   pgtype.Int4        `json:"min_score"`
 }
 
 type WageStructure struct {

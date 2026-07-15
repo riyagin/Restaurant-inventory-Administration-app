@@ -63,16 +63,18 @@ func (q *Queries) CreateEmployeeWageComponent(ctx context.Context, arg *CreateEm
 }
 
 const createWageComponent = `-- name: CreateWageComponent :one
-INSERT INTO wage_components (id, name, type, is_fixed, is_active)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, type, is_fixed, is_active, created_at
+INSERT INTO wage_components (id, name, type, is_fixed, is_active, calc_method, min_score)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+RETURNING id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 `
 
 type CreateWageComponentParams struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	IsFixed  bool   `json:"is_fixed"`
-	IsActive bool   `json:"is_active"`
+	Name       string      `json:"name"`
+	Type       string      `json:"type"`
+	IsFixed    bool        `json:"is_fixed"`
+	IsActive   bool        `json:"is_active"`
+	CalcMethod string      `json:"calc_method"`
+	MinScore   pgtype.Int4 `json:"min_score"`
 }
 
 func (q *Queries) CreateWageComponent(ctx context.Context, arg *CreateWageComponentParams) (*WageComponent, error) {
@@ -81,6 +83,8 @@ func (q *Queries) CreateWageComponent(ctx context.Context, arg *CreateWageCompon
 		arg.Type,
 		arg.IsFixed,
 		arg.IsActive,
+		arg.CalcMethod,
+		arg.MinScore,
 	)
 	var i WageComponent
 	err := row.Scan(
@@ -90,6 +94,8 @@ func (q *Queries) CreateWageComponent(ctx context.Context, arg *CreateWageCompon
 		&i.IsFixed,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.CalcMethod,
+		&i.MinScore,
 	)
 	return &i, err
 }
@@ -170,7 +176,7 @@ func (q *Queries) GetCurrentOpenWageStructure(ctx context.Context, employeeID pg
 }
 
 const getWageComponentByID = `-- name: GetWageComponentByID :one
-SELECT id, name, type, is_fixed, is_active, created_at
+SELECT id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 FROM wage_components
 WHERE id = $1
 `
@@ -185,6 +191,8 @@ func (q *Queries) GetWageComponentByID(ctx context.Context, id pgtype.UUID) (*Wa
 		&i.IsFixed,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.CalcMethod,
+		&i.MinScore,
 	)
 	return &i, err
 }
@@ -223,7 +231,7 @@ func (q *Queries) GetWageStructureAsOf(ctx context.Context, arg *GetWageStructur
 }
 
 const listActiveWageComponents = `-- name: ListActiveWageComponents :many
-SELECT id, name, type, is_fixed, is_active, created_at
+SELECT id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 FROM wage_components
 WHERE is_active = true
 ORDER BY type, name
@@ -245,6 +253,8 @@ func (q *Queries) ListActiveWageComponents(ctx context.Context) ([]*WageComponen
 			&i.IsFixed,
 			&i.IsActive,
 			&i.CreatedAt,
+			&i.CalcMethod,
+			&i.MinScore,
 		); err != nil {
 			return nil, err
 		}
@@ -258,7 +268,8 @@ func (q *Queries) ListActiveWageComponents(ctx context.Context) ([]*WageComponen
 
 const listEmployeeWageComponents = `-- name: ListEmployeeWageComponents :many
 SELECT ewc.id, ewc.wage_structure_id, ewc.wage_component_id, ewc.amount,
-       wc.name AS component_name, wc.type AS component_type, wc.is_fixed AS component_is_fixed
+       wc.name AS component_name, wc.type AS component_type, wc.is_fixed AS component_is_fixed,
+       wc.calc_method AS component_calc_method, wc.min_score AS component_min_score
 FROM employee_wage_components ewc
 JOIN wage_components wc ON wc.id = ewc.wage_component_id
 WHERE ewc.wage_structure_id = $1
@@ -266,13 +277,15 @@ ORDER BY wc.type, wc.name
 `
 
 type ListEmployeeWageComponentsRow struct {
-	ID               pgtype.UUID `json:"id"`
-	WageStructureID  pgtype.UUID `json:"wage_structure_id"`
-	WageComponentID  pgtype.UUID `json:"wage_component_id"`
-	Amount           int64       `json:"amount"`
-	ComponentName    string      `json:"component_name"`
-	ComponentType    string      `json:"component_type"`
-	ComponentIsFixed bool        `json:"component_is_fixed"`
+	ID                  pgtype.UUID `json:"id"`
+	WageStructureID     pgtype.UUID `json:"wage_structure_id"`
+	WageComponentID     pgtype.UUID `json:"wage_component_id"`
+	Amount              int64       `json:"amount"`
+	ComponentName       string      `json:"component_name"`
+	ComponentType       string      `json:"component_type"`
+	ComponentIsFixed    bool        `json:"component_is_fixed"`
+	ComponentCalcMethod string      `json:"component_calc_method"`
+	ComponentMinScore   pgtype.Int4 `json:"component_min_score"`
 }
 
 func (q *Queries) ListEmployeeWageComponents(ctx context.Context, wageStructureID pgtype.UUID) ([]*ListEmployeeWageComponentsRow, error) {
@@ -292,6 +305,8 @@ func (q *Queries) ListEmployeeWageComponents(ctx context.Context, wageStructureI
 			&i.ComponentName,
 			&i.ComponentType,
 			&i.ComponentIsFixed,
+			&i.ComponentCalcMethod,
+			&i.ComponentMinScore,
 		); err != nil {
 			return nil, err
 		}
@@ -304,7 +319,7 @@ func (q *Queries) ListEmployeeWageComponents(ctx context.Context, wageStructureI
 }
 
 const listWageComponents = `-- name: ListWageComponents :many
-SELECT id, name, type, is_fixed, is_active, created_at
+SELECT id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 FROM wage_components
 ORDER BY type, name
 `
@@ -325,6 +340,8 @@ func (q *Queries) ListWageComponents(ctx context.Context) ([]*WageComponent, err
 			&i.IsFixed,
 			&i.IsActive,
 			&i.CreatedAt,
+			&i.CalcMethod,
+			&i.MinScore,
 		); err != nil {
 			return nil, err
 		}
@@ -378,7 +395,7 @@ const setWageComponentActive = `-- name: SetWageComponentActive :one
 UPDATE wage_components
 SET is_active = $1
 WHERE id = $2
-RETURNING id, name, type, is_fixed, is_active, created_at
+RETURNING id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 `
 
 type SetWageComponentActiveParams struct {
@@ -396,23 +413,27 @@ func (q *Queries) SetWageComponentActive(ctx context.Context, arg *SetWageCompon
 		&i.IsFixed,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.CalcMethod,
+		&i.MinScore,
 	)
 	return &i, err
 }
 
 const updateWageComponent = `-- name: UpdateWageComponent :one
 UPDATE wage_components
-SET name = $1, type = $2, is_fixed = $3, is_active = $4
-WHERE id = $5
-RETURNING id, name, type, is_fixed, is_active, created_at
+SET name = $1, type = $2, is_fixed = $3, is_active = $4, calc_method = $5, min_score = $6
+WHERE id = $7
+RETURNING id, name, type, is_fixed, is_active, created_at, calc_method, min_score
 `
 
 type UpdateWageComponentParams struct {
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	IsFixed  bool        `json:"is_fixed"`
-	IsActive bool        `json:"is_active"`
-	ID       pgtype.UUID `json:"id"`
+	Name       string      `json:"name"`
+	Type       string      `json:"type"`
+	IsFixed    bool        `json:"is_fixed"`
+	IsActive   bool        `json:"is_active"`
+	CalcMethod string      `json:"calc_method"`
+	MinScore   pgtype.Int4 `json:"min_score"`
+	ID         pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateWageComponent(ctx context.Context, arg *UpdateWageComponentParams) (*WageComponent, error) {
@@ -421,6 +442,8 @@ func (q *Queries) UpdateWageComponent(ctx context.Context, arg *UpdateWageCompon
 		arg.Type,
 		arg.IsFixed,
 		arg.IsActive,
+		arg.CalcMethod,
+		arg.MinScore,
 		arg.ID,
 	)
 	var i WageComponent
@@ -431,6 +454,8 @@ func (q *Queries) UpdateWageComponent(ctx context.Context, arg *UpdateWageCompon
 		&i.IsFixed,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.CalcMethod,
+		&i.MinScore,
 	)
 	return &i, err
 }

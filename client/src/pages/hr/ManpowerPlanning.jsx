@@ -23,6 +23,104 @@ function formatDateLabel(dateStr) {
   return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Builds a self-contained printable HTML document for the manpower plan, opened
+// in a new window so it renders free of the app's nav/layout. One table per
+// branch, one column per day; cells are shaded by leave status (colors print via
+// -webkit-print-color-adjust).
+function buildManpowerPrintHtml({ data, days }) {
+  const printedAt = new Date().toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' });
+  const periodLabel = `${formatDateLabel(data.dates[0])} s/d ${formatDateLabel(data.dates[data.dates.length - 1])}`;
+  const totalEmployees = data.branches.reduce((s, b) => s + b.employees.length, 0);
+
+  const headCols = data.dates.map(d => {
+    const dd = new Date(d + 'T00:00:00');
+    const weekend = dd.getDay() === 0 || dd.getDay() === 6;
+    return `<th class="day${weekend ? ' we' : ''}">${dd.getDate()}/${dd.getMonth() + 1}</th>`;
+  }).join('');
+
+  // Full month: give the name column more room; shorter ranges: keep it tight.
+  const nameWidth = days >= 31 ? 130 : 90;
+
+  const branchTables = data.branches.map(branch => {
+    const onLeave = branch.employees.reduce((s, e) => s + e.days.filter(d => d.status === 'cuti').length, 0);
+    const pending = branch.employees.reduce((s, e) => s + e.days.filter(d => d.status === 'pending').length, 0);
+    const rows = branch.employees.map(emp => {
+      const cells = emp.days.map(day => {
+        if (day.status === 'cuti') {
+          return `<td class="c cuti" title="${escapeHtml(day.leave_type || 'Cuti')}">${escapeHtml((day.leave_type || 'Cuti').slice(0, 8))}</td>`;
+        }
+        if (day.status === 'pending') {
+          return `<td class="c pending" title="${escapeHtml(day.leave_type || 'Cuti')} (menunggu)">M</td>`;
+        }
+        return `<td class="c hadir">✓</td>`;
+      }).join('');
+      return `<tr>
+        <td class="emp"><div class="en">${escapeHtml(emp.name)}</div>${emp.position ? `<div class="ep">${escapeHtml(emp.position)}</div>` : ''}</td>
+        ${cells}
+      </tr>`;
+    }).join('');
+    const meta = [`${branch.employees.length} karyawan`];
+    if (onLeave > 0) meta.push(`${onLeave} hari cuti`);
+    if (pending > 0) meta.push(`${pending} hari menunggu`);
+    return `<div class="branch">
+      <div class="bh"><b>${escapeHtml(branch.name)}</b> <span>${escapeHtml(meta.join(' · '))}</span></div>
+      <table>
+        <thead><tr><th class="emp">Karyawan</th>${headCols}</tr></thead>
+        <tbody>${rows || `<tr><td class="c" colspan="${data.dates.length + 1}" style="color:#888;padding:12px">Tidak ada karyawan.</td></tr>`}</tbody>
+      </table>
+    </div>`;
+  }).join('');
+
+  return `<!doctype html><html lang="id"><head><meta charset="utf-8">
+<title>Rencana Tenaga Kerja — ${escapeHtml(periodLabel)}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a2e; font-size: 11px; margin: 0; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: #667; font-size: 11px; margin-bottom: 4px; }
+  .branch { margin-top: 14px; }
+  .bh { font-size: 12px; margin-bottom: 4px; page-break-after: avoid; }
+  .bh span { color: #667; font-weight: normal; margin-left: 6px; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  th, td { border: 1px solid #cfd5df; padding: 3px 4px; font-size: 10px; }
+  th { background: #eef1f6; text-align: center; }
+  th.day, td.c { text-align: center; width: 26px; }
+  th.we { background: #e2e6ee; }
+  th.emp, td.emp { text-align: left; width: ${nameWidth}px; min-width: ${nameWidth}px; }
+  td.emp .en { font-weight: 600; }
+  td.emp .ep { color: #888; font-size: 9px; }
+  td.hadir { background: #dcfce7; color: #15803d; }
+  td.pending { background: #fed7aa; color: #9a3412; font-weight: 700; }
+  td.cuti { background: #1f2937; color: #f9fafb; font-weight: 600; font-size: 9px; }
+  .legend { margin-top: 14px; font-size: 10px; color: #444; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend i { width: 12px; height: 12px; border: 1px solid rgba(0,0,0,0.15); display: inline-block; }
+  .foot { margin-top: 16px; color: #999; font-size: 9px; }
+  @media print { .noprint { display: none; } }
+</style></head>
+<body>
+  <button class="noprint" onclick="window.print()" style="float:right;padding:8px 16px;cursor:pointer">Cetak</button>
+  <h1>Rencana Tenaga Kerja</h1>
+  <div class="sub">Periode: <b>${escapeHtml(periodLabel)}</b> (${days} hari) — ${totalEmployees} karyawan aktif</div>
+  ${branchTables || '<p style="color:#888">Tidak ada karyawan aktif.</p>'}
+  <div class="legend">
+    <span><i style="background:#dcfce7"></i> Hadir (✓)</span>
+    <span><i style="background:#fed7aa"></i> Menunggu Persetujuan (M)</span>
+    <span><i style="background:#1f2937"></i> Cuti Disetujui</span>
+  </div>
+  <div class="foot">Dicetak pada ${escapeHtml(printedAt)}</div>
+</body></html>`;
+}
+
 const overlay = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
   display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
@@ -344,6 +442,18 @@ export default function ManpowerPlanning() {
     load();
   };
 
+  const handlePrint = () => {
+    if (!data) return;
+    const html = buildManpowerPrintHtml({ data, days });
+    const win = window.open('', '_blank');
+    if (!win) return; // popup blocked
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    // Give the new document a tick to lay out before invoking print.
+    setTimeout(() => { try { win.print(); } catch { /* user can use the Cetak button */ } }, 300);
+  };
+
   const totalEmployees = data?.branches.reduce((s, b) => s + b.employees.length, 0) ?? 0;
   const countOnLeave = (employees) =>
     employees.reduce((s, e) => s + e.days.filter(d => d.status === 'cuti').length, 0);
@@ -388,6 +498,18 @@ export default function ManpowerPlanning() {
             onChange={e => setDays(clampDays(Number(e.target.value) || MIN_DAYS))}
             style={{ width: 56, fontSize: 13, padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 4 }}
           />
+          <button
+            onClick={handlePrint}
+            disabled={!data || loading}
+            title="Cetak rencana tenaga kerja"
+            style={{
+              fontSize: 13, padding: '4px 12px', borderRadius: 4, cursor: 'pointer',
+              border: '1px solid #d1d5db', background: '#fff', color: '#374151',
+              opacity: (!data || loading) ? 0.6 : 1,
+            }}
+          >
+            🖨️ Cetak
+          </button>
         </div>
       </div>
 

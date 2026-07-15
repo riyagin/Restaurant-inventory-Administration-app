@@ -221,6 +221,7 @@ export const deleteEnumeration  = (id)   => api.delete(`/enumerations/${id}`);
 
 // ── HR: Karyawan & Jabatan ──────────────────────────────────────────────────
 export const getEmployees   = (params) => api.get('/hr/employees', { params });
+export const getContractAlerts = (params) => api.get('/hr/employees/contract-alerts', { params });
 export const getEmployee    = (id)     => api.get(`/hr/employees/${id}`);
 export const createEmployee = (data)   => api.post('/hr/employees', data);
 export const updateEmployee = (id, data) => api.put(`/hr/employees/${id}`, data);
@@ -275,7 +276,7 @@ export const createAttendanceDevice = (data) => api.post('/hr/attendance/devices
 export const setAttendanceDeviceActive = (id, data) => api.put(`/hr/attendance/devices/${id}`, data);
 export const deleteAttendanceDevice = (id) => api.delete(`/hr/attendance/devices/${id}`);
 
-// ── HR: Penilaian Kinerja ───────────────────────────────────────────────────
+// ── HR: Evaluasi (Kinerja) ──────────────────────────────────────────────────
 // Performance policies
 export const getPerformancePolicies   = () => api.get('/hr/performance/policies');
 export const createPerformancePolicy  = (data) => api.post('/hr/performance/policies', data);
@@ -334,6 +335,9 @@ export const getEmployeeKasbons = (employeeId) => api.get('/hr/kasbons', { param
 export const getOvertimeRequests  = (params) => api.get('/hr/overtime', { params });
 export const createOvertimeRequest = (data) => api.post('/hr/overtime', data);
 export const deleteOvertimeRequest = (id) => api.delete(`/hr/overtime/${id}`);
+export const approveOvertimeRequest = (id, note) => api.post(`/hr/overtime/${id}/approve`, { note });
+export const rejectOvertimeRequest  = (id, note) => api.post(`/hr/overtime/${id}/reject`, { note });
+export const cancelOvertimeRequest  = (id, note) => api.post(`/hr/overtime/${id}/cancel`, { note });
 
 // ── HR: Payroll (Penggajian) ────────────────────────────────────────────────
 export const getPayrollPeriods   = () => api.get('/hr/payroll/periods');

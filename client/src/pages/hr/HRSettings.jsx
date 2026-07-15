@@ -81,6 +81,16 @@ export default function HRSettings() {
       {msg && <div style={{ background: '#e6f4ea', color: '#1e7e34', padding: 12, borderRadius: 8, marginBottom: 12 }}>{msg}</div>}
       {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 12, borderRadius: 8, marginBottom: 12 }}>{error}</div>}
 
+      <div style={{ background: '#fff', borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,.08)', padding: 20, marginBottom: 20 }}>
+        <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Manajemen Karyawan</h2>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          <Link to="/hr/employees" className="btn btn-secondary">Karyawan</Link>
+          <Link to="/hr/positions" className="btn btn-secondary">Jabatan</Link>
+          <Link to="/hr/wage-components" className="btn btn-secondary">Komponen Gaji</Link>
+          <Link to="/hr/import" className="btn btn-secondary">Impor Karyawan</Link>
+        </div>
+      </div>
+
       <div style={{ background: '#fff', borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,.08)', padding: 20 }}>
         <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Nama Perusahaan</label>
         <input value={companyName} onChange={(e) => setCompanyName(e.target.value)}
@@ -100,7 +110,7 @@ export default function HRSettings() {
           onChange={(e) => setGraceDays(e.target.value)}
           style={{ width: 120, padding: 9, borderRadius: 6, border: '1px solid #ccd', marginBottom: 4, boxSizing: 'border-box' }} />
         <div style={{ fontSize: 12, color: '#889', marginBottom: 14 }}>
-          Jumlah hari absen tanpa izin yang tidak mengurangi skor kinerja tiap bulan. Karyawan diharapkan hadir minimal (jumlah hari kerja − toleransi ini). Absen melebihi angka ini baru mengurangi skor.
+          Jumlah hari absen tanpa izin yang tidak mengurangi skor evaluasi tiap bulan. Karyawan diharapkan hadir minimal (jumlah hari kerja − toleransi ini). Absen melebihi angka ini baru mengurangi skor.
         </div>
 
         <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Logo Perusahaan</label>

@@ -47,13 +47,13 @@ import FingerprintImport from './pages/hr/FingerprintImport';
 import AttendanceSettings from './pages/hr/AttendanceSettings';
 import PerformanceDashboard from './pages/hr/PerformanceDashboard';
 import PerformancePolicies from './pages/hr/PerformancePolicies';
-import LeaveRequests from './pages/hr/LeaveRequests';
+import Requests from './pages/hr/Requests';
 import KasbonDashboard from './pages/hr/KasbonDashboard';
 import KasbonForm from './pages/hr/KasbonForm';
 import KasbonDetail from './pages/hr/KasbonDetail';
 import PayrollDashboard from './pages/hr/PayrollDashboard';
 import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
-import OvertimePage from './pages/hr/OvertimePage';
+import Approvals from './pages/hr/Approvals';
 import HRSettings from './pages/hr/HRSettings';
 import ManpowerPlanning from './pages/hr/ManpowerPlanning';
 import './App.css';
@@ -124,7 +124,6 @@ function Nav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const user = getUser();
-  const isAdmin = user?.role === 'admin';
   const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
   const isStaff = user?.role === 'staff';
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -191,18 +190,14 @@ function Nav() {
 
         {(isAdminOrManager || isStaff) && (
           <NavDropdown label="HR" paths={['/hr']}>
-            {isAdminOrManager && menuLink('/hr/employees', 'Karyawan')}
             {menuLink('/hr/attendance', 'Absensi')}
-            {isAdminOrManager && menuLink('/hr/performance', 'Kinerja')}
-            {isAdminOrManager && menuLink('/hr/leave', 'Cuti')}
+            {isAdminOrManager && menuLink('/hr/performance', 'Evaluasi')}
+            {isAdminOrManager && menuLink('/hr/requests', 'Pengajuan')}
+            {isAdminOrManager && menuLink('/hr/approvals', 'Persetujuan')}
             {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
             {menuLink('/hr/kasbon', 'Kasbon')}
-            {isAdminOrManager && menuLink('/hr/overtime', 'Lembur')}
             {isAdminOrManager && menuLink('/hr/payroll', 'Penggajian')}
-            {isAdminOrManager && menuLink('/hr/import', 'Impor Karyawan')}
-            {isAdminOrManager && menuLink('/hr/positions', 'Jabatan')}
-            {isAdminOrManager && menuLink('/hr/wage-components', 'Komponen Gaji')}
-            {isAdmin && menuLink('/hr/settings', 'Pengaturan')}
+            {isAdminOrManager && menuLink('/hr/settings', 'Pengaturan')}
           </NavDropdown>
         )}
 
@@ -268,18 +263,14 @@ function Nav() {
 
           {(isAdminOrManager || isStaff) && (
             <MobileSection label="HR" paths={['/hr']}>
-              {isAdminOrManager && <Link to="/hr/employees" className={isActive('/hr/employees') ? 'active' : ''}>Karyawan</Link>}
               <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
-              {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Kinerja</Link>}
-              {isAdminOrManager && <Link to="/hr/leave" className={isActive('/hr/leave') ? 'active' : ''}>Cuti</Link>}
+              {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Evaluasi</Link>}
+              {isAdminOrManager && <Link to="/hr/requests" className={isActive('/hr/requests') ? 'active' : ''}>Pengajuan</Link>}
+              {isAdminOrManager && <Link to="/hr/approvals" className={isActive('/hr/approvals') ? 'active' : ''}>Persetujuan</Link>}
               <Link to="/hr/manpower" className={isActive('/hr/manpower') ? 'active' : ''}>Rencana Tenaga Kerja</Link>
               <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
-              {isAdminOrManager && <Link to="/hr/overtime" className={isActive('/hr/overtime') ? 'active' : ''}>Lembur</Link>}
               {isAdminOrManager && <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>}
-              {isAdminOrManager && <Link to="/hr/import" className={isActive('/hr/import') ? 'active' : ''}>Impor Karyawan</Link>}
-              {isAdminOrManager && <Link to="/hr/positions" className={isActive('/hr/positions') ? 'active' : ''}>Jabatan</Link>}
-              {isAdminOrManager && <Link to="/hr/wage-components" className={isActive('/hr/wage-components') ? 'active' : ''}>Komponen Gaji</Link>}
-              {isAdmin && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
+              {isAdminOrManager && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
             </MobileSection>
           )}
 
@@ -382,15 +373,18 @@ export default function App() {
                 <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance/policies" element={<RequireManagerOrAdmin><PerformancePolicies /></RequireManagerOrAdmin>} />
-                <Route path="/hr/leave" element={<RequireManagerOrAdmin><LeaveRequests /></RequireManagerOrAdmin>} />
+                <Route path="/hr/requests" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
+                <Route path="/hr/approvals" element={<RequireManagerOrAdmin><Approvals /></RequireManagerOrAdmin>} />
+                {/* back-compat: old leave/overtime links land on the merged requests screen */}
+                <Route path="/hr/leave" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
                 <Route path="/hr/manpower" element={<ManpowerPlanning />} />
                 <Route path="/hr/kasbon" element={<KasbonDashboard />} />
                 <Route path="/hr/kasbon/new" element={<RequireManagerOrAdmin><KasbonForm /></RequireManagerOrAdmin>} />
                 <Route path="/hr/kasbon/:id" element={<KasbonDetail />} />
-                <Route path="/hr/overtime" element={<RequireManagerOrAdmin><OvertimePage /></RequireManagerOrAdmin>} />
+                <Route path="/hr/overtime" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
-                <Route path="/hr/settings" element={<RequireAdmin><HRSettings /></RequireAdmin>} />
+                <Route path="/hr/settings" element={<RequireManagerOrAdmin><HRSettings /></RequireManagerOrAdmin>} />
               </Routes>
             </Layout>
           </RequireAuth>

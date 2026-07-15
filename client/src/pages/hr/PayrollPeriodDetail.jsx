@@ -573,7 +573,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
 
               {/* Performance */}
               <section style={{ marginBottom: 16 }}>
-                <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Kinerja</h3>
+                <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Evaluasi</h3>
                 <div style={{ marginBottom: 6 }}>Skor: <ScoreBadge score={line.performance_score} /></div>
                 {(data.violations || []).length === 0 ? (
                   <div style={{ fontSize: 13, color: '#889' }}>Tidak ada pelanggaran.</div>

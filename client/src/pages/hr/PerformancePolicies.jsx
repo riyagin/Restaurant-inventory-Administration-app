@@ -152,8 +152,8 @@ export default function PerformancePolicies() {
   return (
     <>
       <div className="page-header">
-        <h1>Kebijakan Kinerja</h1>
-        <Link to="/hr/performance" className="btn btn-secondary">Dasbor Kinerja</Link>
+        <h1>Kebijakan Evaluasi</h1>
+        <Link to="/hr/performance" className="btn btn-secondary">Dasbor Evaluasi</Link>
       </div>
 
       <p style={{ color: '#667', fontSize: '0.9rem', marginBottom: '1rem' }}>
@@ -223,7 +223,7 @@ export default function PerformancePolicies() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
           <div className="card" style={{ width: '100%', maxWidth: 560, padding: '2rem', margin: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-              <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Edit Kebijakan Kinerja</h2>
+              <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Edit Kebijakan Evaluasi</h2>
               <button onClick={() => setEditId(null)} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#aaa' }}>✕</button>
             </div>
             <PolicyForm form={editForm} setForm={setEditForm} onSubmit={handleUpdate} submitting={submitting} submitLabel="Simpan" />

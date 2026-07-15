@@ -320,6 +320,7 @@ func main() {
 		// HR Employees & Positions
 		// Read (list + detail) allowed for all authenticated users incl. staff.
 		r.Get("/api/hr/employees", hrEmployeesHandler.List)
+		r.Get("/api/hr/employees/contract-alerts", hrEmployeesHandler.ContractAlerts)
 		r.Get("/api/hr/employees/{id}", hrEmployeesHandler.Get)
 		r.Get("/api/hr/positions", hrEmployeesHandler.ListPositions)
 		// Mutations require admin or manager.
@@ -453,12 +454,19 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/reject", kasbonHandler.Reject)
 		})
 
-		// HR Overtime requests — read: admin/manager; write: admin only (enforced in handler).
+		// HR Overtime requests — read/create/cancel: admin/manager.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
 			r.Get("/api/hr/overtime", overtimeHandler.List)
 			r.Post("/api/hr/overtime", overtimeHandler.Create)
+			r.Post("/api/hr/overtime/{id}/cancel", overtimeHandler.Cancel)
 			r.Delete("/api/hr/overtime/{id}", overtimeHandler.Delete)
+		})
+		// HR Overtime approval / rejection — manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/overtime/{id}/approve", overtimeHandler.Approve)
+			r.Post("/api/hr/overtime/{id}/reject", overtimeHandler.Reject)
 		})
 
 		// HR Payroll (penggajian) — admin/manager only.

@@ -36,6 +36,14 @@ func validComponentType(t string) bool {
 	return false
 }
 
+func validCalcMethod(m string) bool {
+	switch m {
+	case service.CalcMethodFixed, service.CalcMethodPerPresentDay:
+		return true
+	}
+	return false
+}
+
 // ── Wage Components (master catalog) ─────────────────────────────────────────
 
 // ListComponents — GET /api/hr/wage-components?active=1
@@ -61,10 +69,37 @@ func (h *HRWagesHandler) ListComponents(w http.ResponseWriter, r *http.Request) 
 }
 
 type wageComponentBody struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	IsFixed  *bool  `json:"is_fixed"`
-	IsActive *bool  `json:"is_active"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	IsFixed    *bool  `json:"is_fixed"`
+	IsActive   *bool  `json:"is_active"`
+	CalcMethod string `json:"calc_method"`
+	// MinScore gates the component on the monthly performance score. nil / omitted =
+	// never gated; 0–100 = pay only when the period score meets the threshold.
+	MinScore *int32 `json:"min_score"`
+}
+
+// resolveCalcMethod defaults an empty calc_method to 'fixed' and validates it.
+// per_present_day only makes sense for allowance/bonus (a per-day addition) and
+// deduction (a per-day cut); the type check upstream already constrains that.
+func resolveCalcMethod(m string) (string, bool) {
+	m = strings.TrimSpace(m)
+	if m == "" {
+		return service.CalcMethodFixed, true
+	}
+	return m, validCalcMethod(m)
+}
+
+// resolveMinScore converts the optional min_score into a pgtype.Int4 (invalid when
+// omitted → no gate) and validates the 0–100 range.
+func resolveMinScore(v *int32) (pgtype.Int4, bool) {
+	if v == nil {
+		return pgtype.Int4{}, true
+	}
+	if *v < 0 || *v > 100 {
+		return pgtype.Int4{}, false
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}, true
 }
 
 // CreateComponent — POST /api/hr/wage-components
@@ -84,6 +119,16 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, atau deduction")
 		return
 	}
+	calcMethod, ok := resolveCalcMethod(body.CalcMethod)
+	if !ok {
+		respondError(w, http.StatusBadRequest, "metode perhitungan harus fixed atau per_present_day")
+		return
+	}
+	minScore, ok := resolveMinScore(body.MinScore)
+	if !ok {
+		respondError(w, http.StatusBadRequest, "skor minimum harus antara 0 dan 100")
+		return
+	}
 	isFixed := true
 	if body.IsFixed != nil {
 		isFixed = *body.IsFixed
@@ -95,10 +140,12 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	comp, err := h.queries.CreateWageComponent(ctx, &db.CreateWageComponentParams{
-		Name:     body.Name,
-		Type:     body.Type,
-		IsFixed:  isFixed,
-		IsActive: isActive,
+		Name:       body.Name,
+		Type:       body.Type,
+		IsFixed:    isFixed,
+		IsActive:   isActive,
+		CalcMethod: calcMethod,
+		MinScore:   minScore,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -144,6 +191,16 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, atau deduction")
 		return
 	}
+	calcMethod, ok := resolveCalcMethod(body.CalcMethod)
+	if !ok {
+		respondError(w, http.StatusBadRequest, "metode perhitungan harus fixed atau per_present_day")
+		return
+	}
+	minScore, ok := resolveMinScore(body.MinScore)
+	if !ok {
+		respondError(w, http.StatusBadRequest, "skor minimum harus antara 0 dan 100")
+		return
+	}
 	isFixed := true
 	if body.IsFixed != nil {
 		isFixed = *body.IsFixed
@@ -155,11 +212,13 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	comp, err := h.queries.UpdateWageComponent(ctx, &db.UpdateWageComponentParams{
-		Name:     body.Name,
-		Type:     body.Type,
-		IsFixed:  isFixed,
-		IsActive: isActive,
-		ID:       pgtype.UUID{Bytes: id, Valid: true},
+		Name:       body.Name,
+		Type:       body.Type,
+		IsFixed:    isFixed,
+		IsActive:   isActive,
+		CalcMethod: calcMethod,
+		MinScore:   minScore,
+		ID:         pgtype.UUID{Bytes: id, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

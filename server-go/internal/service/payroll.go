@@ -25,6 +25,50 @@ import (
 // convert to/from pgtype.Numeric only at the db boundary (numericToF / fToNumeric).
 // Rounding to whole rupiah is half-up.
 
+// Wage-component calculation methods (mirrors the wage_components.calc_method
+// CHECK constraint). A 'fixed' component contributes its stored amount as-is; a
+// 'per_present_day' component treats the stored amount as a per-day rate and
+// multiplies it by the number of 'present' attendance days in the period.
+const (
+	CalcMethodFixed         = "fixed"
+	CalcMethodPerPresentDay = "per_present_day"
+)
+
+// EffectiveComponentAmount resolves a wage-structure component's rupiah
+// contribution for a period given how many days the employee was present.
+func EffectiveComponentAmount(calcMethod string, amount int64, presentDays int32) int64 {
+	if calcMethod == CalcMethodPerPresentDay {
+		return amount * int64(presentDays)
+	}
+	return amount
+}
+
+// ScoreGatePasses reports whether a score-gated component should pay for the
+// period. A component with no min_score (minScore invalid) is never gated. When a
+// threshold is set the employee's performance score must meet it; a missing score
+// (evaluation not run yet) passes so pay is not silently withheld — the reviewer
+// can still zero the component at payroll review if the score later disqualifies it.
+func ScoreGatePasses(minScore, score pgtype.Int4) bool {
+	if !minScore.Valid {
+		return true
+	}
+	if !score.Valid {
+		return true
+	}
+	return score.Int32 >= minScore.Int32
+}
+
+// anyPerPresentDay reports whether any component uses the per_present_day method,
+// so callers can skip the attendance count for fixed-only wage structures.
+func anyPerPresentDay(components []*db.ListEmployeeWageComponentsRow) bool {
+	for _, c := range components {
+		if c.ComponentCalcMethod == CalcMethodPerPresentDay {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrLinesNotReviewed is returned by ClosePeriod when at least one line is still
 // unreviewed. The handler maps it to HTTP 409 Conflict.
 var ErrLinesNotReviewed = errors.New("semua baris penggajian harus direview sebelum periode ditutup")
@@ -273,15 +317,49 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		if err != nil {
 			return nil, err
 		}
+
+		// Present-day count drives per_present_day components. Only queried when at
+		// least one such component exists, so fixed-only structures skip the lookup.
+		var presentDays int32
+		if anyPerPresentDay(components) {
+			presentDays, err = qtx.CountPresentDays(ctx, &db.CountPresentDaysParams{
+				EmployeeID: emp.ID,
+				Date:       pgtype.Date{Time: dateOnly(start), Valid: true},
+				Date_2:     pgtype.Date{Time: dateOnly(end), Valid: true},
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Performance score snapshot (nullable) — also gates score-conditional
+		// components below, so it is resolved before component amounts.
+		var perfScore pgtype.Int4
+		score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
+			EmployeeID:  emp.ID,
+			PeriodMonth: pgtype.Date{Time: dateOnly(periodMonth), Valid: true},
+		})
+		if serr == nil && score != nil {
+			perfScore = pgtype.Int4{Int32: score.Score, Valid: true}
+		}
+
+		// Effective amount per component: per_present_day → rate × present days;
+		// score-gated components pay 0 when the score misses their min_score.
+		compAmounts := make(map[pgtype.UUID]int64, len(components))
 		var allowanceTotal, bonusTotal, deductionTotal int64
 		for _, c := range components {
+			amt := EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
+			if !ScoreGatePasses(c.ComponentMinScore, perfScore) {
+				amt = 0
+			}
+			compAmounts[c.WageComponentID] = amt
 			switch c.ComponentType {
 			case "allowance":
-				allowanceTotal += c.Amount
+				allowanceTotal += amt
 			case "bonus":
-				bonusTotal += c.Amount
+				bonusTotal += amt
 			case "deduction":
-				deductionTotal += c.Amount
+				deductionTotal += amt
 			}
 		}
 
@@ -321,16 +399,6 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 		unpaidDeduction := int64(unpaidDays) * ws.DailyRate
-
-		// Performance score snapshot (nullable).
-		var perfScore pgtype.Int4
-		score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
-			EmployeeID:  emp.ID,
-			PeriodMonth: pgtype.Date{Time: dateOnly(periodMonth), Valid: true},
-		})
-		if serr == nil && score != nil {
-			perfScore = pgtype.Int4{Int32: score.Score, Valid: true}
-		}
 
 		calc := CalcLine(CalcLineInput{
 			BaseSalary:              ws.BaseSalary,
@@ -375,14 +443,16 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 
-		// Denormalized component snapshots (drive the payslip breakdown).
+		// Denormalized component snapshots (drive the payslip breakdown). The snapshot
+		// stores the computed amount so per_present_day components show the resolved
+		// figure (rate × present days), which the reviewer can still adjust.
 		for _, c := range components {
 			if _, err := qtx.CreatePayrollLineComponent(ctx, &db.CreatePayrollLineComponentParams{
 				PayrollLineID:   line.ID,
 				WageComponentID: c.WageComponentID,
 				Name:            c.ComponentName,
 				Type:            c.ComponentType,
-				Amount:          c.Amount,
+				Amount:          compAmounts[c.WageComponentID],
 			}); err != nil {
 				return nil, err
 			}
@@ -450,7 +520,7 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 		OvertimeHourlyAmount: calc.OvertimeHourlyAmount,
 		ReviewedBy:           in.ReviewedBy,
 		ReviewNote:           in.ReviewNote,
-		ID:                  line.ID,
+		ID:                   line.ID,
 	})
 }
 
@@ -518,4 +588,3 @@ func ClosePeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollPeriod)
 
 	return qtx.ClosePayrollPeriod(ctx, period.ID)
 }
-

@@ -45,7 +45,7 @@ function CreateModal({ onClose, onSaved }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    getEmployees().then(r => setEmployees(r.data || [])).catch(() => setEmployees([]));
+    getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
     getLeaveTypes({ active: 1 }).then(r => setTypes(r.data || [])).catch(() => setTypes([]));
   }, []);
 

@@ -13,7 +13,7 @@ const empty = {
   position_id: '', branch_id: '',
   phone: '', email: '', address: '', national_id: '',
   bank_name: '', bank_account_number: '', bank_account_holder: '',
-  status: 'active',
+  status: 'active', employment_type: 'permanent', contract_end_date: '',
 };
 
 const toDateInput = (d) => d ? new Date(d).toISOString().slice(0, 10) : '';
@@ -58,6 +58,8 @@ export default function EmployeeForm() {
         bank_account_number: e.bank_account_number || '',
         bank_account_holder: e.bank_account_holder || '',
         status: e.status || 'active',
+        employment_type: e.employment_type || 'permanent',
+        contract_end_date: toDateInput(e.contract_end_date),
       });
       setPhotoPath(e.photo_path || '');
     }).catch(() => setError('Gagal memuat data karyawan'));
@@ -110,6 +112,9 @@ export default function EmployeeForm() {
     if (!form.position_id) { setError('Jabatan wajib dipilih'); return; }
     if (!form.branch_id) { setError('Cabang wajib dipilih'); return; }
     if (!form.join_date) { setError('Tanggal bergabung wajib diisi'); return; }
+    if (form.employment_type === 'contract' && !form.contract_end_date) {
+      setError('Tanggal berakhir kontrak wajib diisi untuk karyawan kontrak'); return;
+    }
 
     setSubmitting(true);
     try {
@@ -186,6 +191,27 @@ export default function EmployeeForm() {
                 <option value="inactive">Nonaktif</option>
               </select>
             </div>
+            <div className="form-group">
+              <label>Tipe Kepegawaian</label>
+              <select
+                value={form.employment_type}
+                onChange={e => setForm(f => ({
+                  ...f,
+                  employment_type: e.target.value,
+                  // Clear the contract date when switching back to permanent.
+                  contract_end_date: e.target.value === 'permanent' ? '' : f.contract_end_date,
+                }))}
+              >
+                <option value="permanent">Tetap</option>
+                <option value="contract">Kontrak</option>
+              </select>
+            </div>
+            {form.employment_type === 'contract' && (
+              <div className="form-group">
+                <label>Tanggal Berakhir Kontrak *</label>
+                <input type="date" value={form.contract_end_date} onChange={set('contract_end_date')} required />
+              </div>
+            )}
             <div className="form-group">
               <label>NIK / KTP</label>
               <input value={form.national_id} onChange={set('national_id')} />

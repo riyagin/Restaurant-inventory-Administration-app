@@ -7,7 +7,15 @@ const TYPE_LABELS = {
   deduction: 'Potongan',
 };
 
-const emptyForm = { name: '', type: 'allowance', is_fixed: true, is_active: true };
+const CALC_LABELS = {
+  fixed: 'Nominal tetap',
+  per_present_day: 'Per hari hadir',
+};
+
+const emptyForm = { name: '', type: 'allowance', is_fixed: true, is_active: true, calc_method: 'fixed', min_score: '' };
+
+// Empty min_score → null (no gate); otherwise a number the backend validates (0–100).
+const toMinScore = (v) => (v === '' || v == null ? null : Number(v));
 
 export default function WageComponents() {
   const [rows, setRows]   = useState([]);
@@ -31,6 +39,8 @@ export default function WageComponents() {
         type: form.type,
         is_fixed: form.is_fixed,
         is_active: form.is_active,
+        calc_method: form.calc_method,
+        min_score: toMinScore(form.min_score),
       });
       setForm(emptyForm);
       load();
@@ -43,7 +53,7 @@ export default function WageComponents() {
 
   const openEdit = (c) => {
     setEditId(c.id);
-    setEditForm({ name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: c.is_active });
+    setEditForm({ name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: c.is_active, calc_method: c.calc_method || 'fixed', min_score: c.min_score ?? '' });
     setError('');
   };
 
@@ -57,6 +67,8 @@ export default function WageComponents() {
         type: editForm.type,
         is_fixed: editForm.is_fixed,
         is_active: editForm.is_active,
+        calc_method: editForm.calc_method,
+        min_score: toMinScore(editForm.min_score),
       });
       setEditId(null);
       load();
@@ -82,7 +94,7 @@ export default function WageComponents() {
 
   const toggleActive = async (c) => {
     try {
-      await updateWageComponent(c.id, { name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: !c.is_active });
+      await updateWageComponent(c.id, { name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: !c.is_active, calc_method: c.calc_method || 'fixed', min_score: c.min_score ?? null });
       load();
     } catch (err) {
       alert(err.response?.data?.error || 'Gagal mengubah status komponen');
@@ -98,6 +110,8 @@ export default function WageComponents() {
       <p style={{ color: '#667', fontSize: '0.9rem', marginBottom: '1rem' }}>
         Katalog komponen yang dapat dipakai pada struktur gaji karyawan: Tunjangan, Bonus, dan Potongan.
         Komponen <strong>tetap</strong> (fixed) dihitung pada proyeksi gaji bulanan; komponen <strong>variabel</strong> diisi per periode.
+        Metode <strong>Per hari hadir</strong> memperlakukan nominal pada struktur gaji sebagai tarif harian dan mengalikannya dengan jumlah hari hadir karyawan pada periode penggajian.
+        <strong> Skor Min.</strong> membuat komponen hanya dibayar bila skor kinerja bulanan karyawan mencapai ambang tersebut (kosong = tanpa syarat).
       </p>
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -123,6 +137,18 @@ export default function WageComponents() {
               <option value="variable">Variabel</option>
             </select>
           </div>
+          <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 150 }}>
+            <label>Metode Hitung</label>
+            <select value={form.calc_method} onChange={e => setForm(f => ({ ...f, calc_method: e.target.value }))}>
+              <option value="fixed">Nominal tetap</option>
+              <option value="per_present_day">Per hari hadir</option>
+            </select>
+          </div>
+          <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 120 }}>
+            <label>Skor Min.</label>
+            <input type="number" min="0" max="100" value={form.min_score} placeholder="—"
+              onChange={e => setForm(f => ({ ...f, min_score: e.target.value }))} title="Kosongkan bila tidak bersyarat skor" />
+          </div>
           <button type="submit" className="btn btn-primary" disabled={submitting}>+ Tambah</button>
         </form>
       </div>
@@ -130,16 +156,18 @@ export default function WageComponents() {
       <div className="card" style={{ maxWidth: 760 }}>
         <table>
           <thead>
-            <tr><th>Nama</th><th>Tipe</th><th>Sifat</th><th>Status</th><th></th></tr>
+            <tr><th>Nama</th><th>Tipe</th><th>Sifat</th><th>Metode</th><th>Skor Min.</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada komponen gaji</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada komponen gaji</td></tr>
             ) : rows.map(c => (
               <tr key={c.id}>
                 <td style={{ fontWeight: 500 }}>{c.name}</td>
                 <td>{TYPE_LABELS[c.type] || c.type}</td>
                 <td>{c.is_fixed ? 'Tetap' : 'Variabel'}</td>
+                <td>{CALC_LABELS[c.calc_method] || CALC_LABELS.fixed}</td>
+                <td>{c.min_score == null ? '—' : `≥ ${c.min_score}`}</td>
                 <td>
                   <button
                     onClick={() => toggleActive(c)}
@@ -188,6 +216,18 @@ export default function WageComponents() {
                   <option value="fixed">Tetap</option>
                   <option value="variable">Variabel</option>
                 </select>
+              </div>
+              <div className="form-group">
+                <label>Metode Hitung</label>
+                <select value={editForm.calc_method} onChange={e => setEditForm(f => ({ ...f, calc_method: e.target.value }))}>
+                  <option value="fixed">Nominal tetap</option>
+                  <option value="per_present_day">Per hari hadir</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Skor Kinerja Minimum (kosong = tanpa syarat)</label>
+                <input type="number" min="0" max="100" value={editForm.min_score} placeholder="—"
+                  onChange={e => setEditForm(f => ({ ...f, min_score: e.target.value }))} />
               </div>
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

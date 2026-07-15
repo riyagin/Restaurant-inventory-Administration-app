@@ -988,15 +988,48 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 	if err != nil {
 		return err
 	}
+
+	// Present-day count drives per_present_day components (amount = rate × days).
+	var presentDays int32
+	for _, c := range components {
+		if c.ComponentCalcMethod == service.CalcMethodPerPresentDay {
+			presentDays, err = qtx.CountPresentDays(ctx, &db.CountPresentDaysParams{
+				EmployeeID: empID,
+				Date:       pgtype.Date{Time: start, Valid: true},
+				Date_2:     pgtype.Date{Time: end, Valid: true},
+			})
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+
+	// Performance score snapshot (nullable) — also gates score-conditional
+	// components, so it is resolved before component amounts.
+	var perfScore pgtype.Int4
+	if score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
+		EmployeeID:  empID,
+		PeriodMonth: pgtype.Date{Time: periodMonth, Valid: true},
+	}); serr == nil && score != nil {
+		perfScore = pgtype.Int4{Int32: score.Score, Valid: true}
+	}
+
+	compAmounts := make(map[pgtype.UUID]int64, len(components))
 	var allowanceTotal, bonusTotal, deductionTotal int64
 	for _, c := range components {
+		amt := service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
+		if !service.ScoreGatePasses(c.ComponentMinScore, perfScore) {
+			amt = 0
+		}
+		compAmounts[c.WageComponentID] = amt
 		switch c.ComponentType {
 		case "allowance":
-			allowanceTotal += c.Amount
+			allowanceTotal += amt
 		case "bonus":
-			bonusTotal += c.Amount
+			bonusTotal += amt
 		case "deduction":
-			deductionTotal += c.Amount
+			deductionTotal += amt
 		}
 	}
 
@@ -1033,14 +1066,6 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return err
 	}
 	unpaidDeduction := int64(unpaidDays) * ws.DailyRate
-
-	var perfScore pgtype.Int4
-	if score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
-		EmployeeID:  empID,
-		PeriodMonth: pgtype.Date{Time: periodMonth, Valid: true},
-	}); serr == nil && score != nil {
-		perfScore = pgtype.Int4{Int32: score.Score, Valid: true}
-	}
 
 	calc := service.CalcLine(service.CalcLineInput{
 		BaseSalary:              ws.BaseSalary,
@@ -1090,7 +1115,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 			WageComponentID: c.WageComponentID,
 			Name:            c.ComponentName,
 			Type:            c.ComponentType,
-			Amount:          c.Amount,
+			Amount:          compAmounts[c.WageComponentID],
 		}); err != nil {
 			return err
 		}

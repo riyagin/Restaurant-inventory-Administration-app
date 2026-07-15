@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getEmployees, getBranches, getPositions } from '../../api';
+import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
 
 const SERVER = 'http://localhost:5000';
 
@@ -12,6 +12,43 @@ const canEdit = () => {
   const role = getUser()?.role;
   return role === 'admin' || role === 'manager';
 };
+
+// Whole-day difference between a contract end date and today (negative = overdue).
+const DAY_MS = 86400000;
+function contractDaysLeft(dateStr) {
+  if (!dateStr) return null;
+  const end = new Date(dateStr); end.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((end - today) / DAY_MS);
+}
+
+// Label for the "days remaining" state of a contract that is in its final month.
+function expiryLabel(days) {
+  if (days == null) return '';
+  if (days < 0) return `Berakhir ${Math.abs(days)} hari lalu`;
+  if (days === 0) return 'Berakhir hari ini';
+  return `Berakhir dalam ${days} hari`;
+}
+
+function EmploymentBadge({ type, contractEnd }) {
+  if (type !== 'contract') {
+    return <span className="badge" style={{ background: '#eef1f6', color: '#445' }}>Tetap</span>;
+  }
+  const days = contractDaysLeft(contractEnd);
+  const expiring = days != null && days <= 30;
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+      <span className="badge" style={{ background: expiring ? '#fdece9' : '#e8f0fe', color: expiring ? '#c5221f' : '#1967d2' }}>
+        Kontrak{expiring ? ' ⚠' : ''}
+      </span>
+      {contractEnd && (
+        <span style={{ fontSize: '0.72rem', color: expiring ? '#c5221f' : '#8a93a6' }}>
+          {new Date(contractEnd).toLocaleDateString('id-ID')}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export default function Employees() {
   const navigate = useNavigate();
@@ -25,8 +62,11 @@ export default function Employees() {
   const [branchId, setBranchId]   = useState('');
   const [positionId, setPositionId] = useState('');
   const [status, setStatus]       = useState('');
+  const [employmentType, setEmploymentType] = useState('');
   const [page, setPage]           = useState(1);
   const limit = 25;
+
+  const [alerts, setAlerts] = useState([]);
 
   const editable = canEdit();
 
@@ -34,7 +74,7 @@ export default function Employees() {
 
   const load = () => {
     setLoading(true);
-    getEmployees({ q, branch_id: branchId, position_id: positionId, status, page, limit })
+    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, page, limit })
       .then(r => {
         setRows(r.data?.data || []);
         setTotal(r.data?.total || 0);
@@ -46,9 +86,10 @@ export default function Employees() {
   useEffect(() => {
     getBranches().then(r => setBranches(r.data)).catch(() => {});
     getPositions().then(r => setPositions(r.data)).catch(() => {});
+    getContractAlerts().then(r => setAlerts(r.data?.data || [])).catch(() => setAlerts([]));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, page]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -60,6 +101,38 @@ export default function Employees() {
           <Link to="/hr/employees/new" className="btn btn-primary">+ Tambah Karyawan</Link>
         )}
       </div>
+
+      {alerts.length > 0 && (
+        <div
+          className="card"
+          style={{ marginBottom: '1rem', borderLeft: '4px solid #f0a020', background: '#fffaf0' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+            <strong style={{ color: '#a06800' }}>
+              {alerts.length} kontrak karyawan memasuki bulan terakhir
+            </strong>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {alerts.map(a => (
+              <Link
+                key={a.id}
+                to={`/hr/employees/${a.id}`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                  padding: '0.3rem 0.6rem', borderRadius: '6px', background: '#fff',
+                  border: '1px solid #f0d090', fontSize: '0.85rem', textDecoration: 'none', color: '#333',
+                }}
+              >
+                <strong>{a.full_name}</strong>
+                <span style={{ color: a.days_remaining < 0 ? '#c5221f' : '#a06800' }}>
+                  · {expiryLabel(a.days_remaining)}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
@@ -93,6 +166,14 @@ export default function Employees() {
               <option value="inactive">Nonaktif</option>
             </select>
           </div>
+          <div className="form-group" style={{ margin: 0, flex: '1 1 140px' }}>
+            <label>Tipe</label>
+            <select value={employmentType} onChange={e => { setPage(1); setEmploymentType(e.target.value); }}>
+              <option value="">Semua Tipe</option>
+              <option value="permanent">Tetap</option>
+              <option value="contract">Kontrak</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -105,15 +186,16 @@ export default function Employees() {
               <th>Nama</th>
               <th>Jabatan</th>
               <th>Cabang</th>
+              <th>Tipe</th>
               <th>Tgl Bergabung</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
             ) : rows.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/hr/employees/${e.id}`)}>
                 <td>
@@ -133,6 +215,7 @@ export default function Employees() {
                 <td style={{ fontWeight: 500 }}>{e.full_name}</td>
                 <td>{e.position_name}</td>
                 <td>{e.branch_name}</td>
+                <td><EmploymentBadge type={e.employment_type} contractEnd={e.contract_end_date} /></td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmtDate(e.join_date)}</td>
                 <td>
                   <span className="badge" style={{ background: e.status === 'active' ? '#e6f4ea' : '#fce8e6', color: e.status === 'active' ? '#1e7e34' : '#c5221f' }}>

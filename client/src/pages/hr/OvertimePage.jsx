@@ -37,7 +37,7 @@ export default function OvertimePage() {
   }, [filterMonth, filterEmpId]);
 
   useEffect(() => {
-    getEmployees().then(r => setEmployees(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => {});
   }, []);
 
   useEffect(() => { load(); }, [load]);

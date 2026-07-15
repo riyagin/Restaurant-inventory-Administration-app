@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   getKasbons, getKasbon, approveKasbon, rejectKasbon, cancelKasbon, processKasbon,
 } from '../../api';
+import KasbonFormModal from './KasbonFormModal';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -144,6 +145,7 @@ export default function KasbonDashboard() {
   const [filters, setFilters] = useState({ status: '', q: '' });
   const [approval, setApproval] = useState(null);
   const [process, setProcess] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
   const manager = isManager();
 
   const load = useCallback(() => {
@@ -167,7 +169,7 @@ export default function KasbonDashboard() {
     <div>
       <div className="page-header">
         <h1>Kasbon</h1>
-        <Link to="/hr/kasbon/new" className="btn btn-primary">+ Pengajuan Kasbon</Link>
+        <button onClick={() => setShowCreate(true)} className="btn btn-primary">+ Pengajuan Kasbon</button>
       </div>
 
       {/* Filters */}
@@ -209,6 +211,7 @@ export default function KasbonDashboard() {
 
       {approval && <ApprovalModal kasbon={approval} onClose={() => setApproval(null)} onDone={() => { setApproval(null); load(); }} />}
       {process && <ProcessModal kasbon={process} onClose={() => setProcess(null)} onDone={() => { setProcess(null); load(); }} />}
+      {showCreate && <KasbonFormModal onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
     </div>
   );
 }

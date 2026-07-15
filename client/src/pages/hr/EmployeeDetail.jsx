@@ -1,4 +1,4 @@
-import { useEffect, useState, Fragment } from 'react';
+import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   getEmployee, deleteEmployee,
@@ -8,6 +8,7 @@ import {
   getEmployeeKasbons,
 } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
+import KasbonFormModal from './KasbonFormModal';
 import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
 
 const SERVER = 'http://localhost:5000';
@@ -16,13 +17,17 @@ const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potong
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
+// Per-hari-hadir components carry a daily rate, so project them across the structure's expected working days.
 function monthlyProjection(structure) {
   if (!structure) return 0;
+  const workDays = Number(structure.working_days_per_month || 0);
   let total = Number(structure.base_salary || 0);
   for (const c of structure.components || []) {
     if (!c.component_is_fixed) continue;
-    if (c.component_type === 'allowance') total += Number(c.amount || 0);
-    else if (c.component_type === 'deduction') total -= Number(c.amount || 0);
+    const perDay = c.component_calc_method === 'per_present_day';
+    const value = Number(c.amount || 0) * (perDay ? workDays : 1);
+    if (c.component_type === 'allowance') total += value;
+    else if (c.component_type === 'deduction') total -= value;
   }
   return total;
 }
@@ -44,6 +49,15 @@ const TABS = [
 ];
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '-';
+
+// Whole-day difference between a contract end date and today (negative = overdue).
+const DAY_MS = 86400000;
+function contractDaysLeft(dateStr) {
+  if (!dateStr) return null;
+  const end = new Date(dateStr); end.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((end - today) / DAY_MS);
+}
 
 function Field({ label, value }) {
   return (
@@ -145,7 +159,7 @@ function buildAttendancePrintHtml({ employee, month, rows, perf }) {
     <span class="chip">Cuti <b>${counts.leave}</b></span>
     <span class="chip">Libur <b>${counts.holiday}</b></span>
     <span class="chip">Terlambat <b>${lateCount}</b></span>
-    <span class="chip">Skor Kinerja <b>${score}/100</b> (${violCount} pelanggaran)</span>
+    <span class="chip">Skor Evaluasi <b>${score}/100</b> (${violCount} pelanggaran)</span>
   </div>
   <table>
     <thead><tr><th>Tanggal</th><th>Hari</th><th>Masuk</th><th>Pulang</th><th>Status</th><th>Keterangan</th></tr></thead>
@@ -207,11 +221,11 @@ function AttendanceTab({ employeeId, employee }) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.85rem 1rem', borderRadius: '6px', background: sc.bg, marginBottom: '1rem' }}>
         <div>
-          <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Skor Kinerja Bulan Ini</div>
+          <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Skor Evaluasi Bulan Ini</div>
           <div style={{ fontSize: '1.6rem', fontWeight: 700, color: sc.color }}>{score}<span style={{ fontSize: '0.85rem', color: '#999' }}> / 100</span></div>
         </div>
         <div style={{ fontSize: '0.85rem', color: '#667' }}>{violCount} pelanggaran</div>
-        <Link to="/hr/performance" style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>Lihat rincian kinerja →</Link>
+        <Link to="/hr/performance" style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>Lihat rincian evaluasi →</Link>
       </div>
       {loading ? (
         <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
@@ -345,14 +359,17 @@ function KasbonStatusChip({ status }) {
 function KasbonTab({ employeeId }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     setLoading(true);
     getEmployeeKasbons(employeeId)
       .then(r => setRows(r.data || []))
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
   }, [employeeId]);
+
+  useEffect(() => { load(); }, [load]);
 
   // Outstanding balance = sum of amounts for kasbons that are approved/processed
   // (disbursed but not yet fully resolved).
@@ -367,7 +384,7 @@ function KasbonTab({ employeeId }) {
           <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Saldo Kasbon Berjalan</div>
           <div style={{ fontSize: '1.6rem', fontWeight: 700, color: outstanding > 0 ? '#c5221f' : '#1e7e34' }}>{fmtIDR(outstanding)}</div>
         </div>
-        <Link to="/hr/kasbon/new" className="btn btn-primary btn-sm">+ Pengajuan Kasbon</Link>
+        <button onClick={() => setShowModal(true)} className="btn btn-primary btn-sm">+ Pengajuan Kasbon</button>
       </div>
 
       <div className="card">
@@ -396,6 +413,8 @@ function KasbonTab({ employeeId }) {
           </div>
         )}
       </div>
+
+      {showModal && <KasbonFormModal presetEmployeeId={employeeId} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); load(); }} />}
     </div>
   );
 }
@@ -414,10 +433,16 @@ function ComponentRows({ components }) {
       <tbody>
         {components.map(c => (
           <tr key={c.id}>
-            <td>{c.component_name}</td>
+            <td>
+              {c.component_name}
+              {c.component_min_score != null && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · syarat skor ≥ {c.component_min_score}</span>}
+            </td>
             <td>{TYPE_LABELS[c.component_type] || c.component_type}</td>
             <td>{c.component_is_fixed ? 'Tetap' : 'Variabel'}</td>
-            <td style={{ textAlign: 'right' }}>{fmtIDR(c.amount)}</td>
+            <td style={{ textAlign: 'right' }}>
+              {fmtIDR(c.amount)}
+              {c.component_calc_method === 'per_present_day' && <span style={{ color: '#8a93a6' }}> /hari</span>}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -622,7 +647,7 @@ function WageTab({ employeeId, editable }) {
                 <select value="" onChange={e => { addComponent(e.target.value); e.target.value = ''; }}>
                   <option value="">+ Tambah komponen dari katalog aktif...</option>
                   {catalog.filter(c => !picked.some(p => p.component_id === c.id)).map(c => (
-                    <option key={c.id} value={c.id}>{c.name} — {TYPE_LABELS[c.type]} ({c.is_fixed ? 'Tetap' : 'Variabel'})</option>
+                    <option key={c.id} value={c.id}>{c.name} — {TYPE_LABELS[c.type]} ({c.is_fixed ? 'Tetap' : 'Variabel'}){c.calc_method === 'per_present_day' ? ' · per hari hadir' : ''}</option>
                   ))}
                 </select>
               </div>
@@ -637,12 +662,14 @@ function WageTab({ employeeId, editable }) {
                   <tbody>
                     {picked.map(p => {
                       const meta = componentMeta(p.component_id);
+                      const perDay = meta.calc_method === 'per_present_day';
                       return (
                         <tr key={p.component_id}>
-                          <td>{meta.name || '-'}</td>
+                          <td>{meta.name || '-'}{perDay && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · per hari hadir</span>}</td>
                           <td>{TYPE_LABELS[meta.type] || '-'}</td>
                           <td>
                             <CurrencyInput value={p.amount} onChange={e => setComponentAmount(p.component_id, e.target.value)} />
+                            {perDay && <div style={{ fontSize: '0.72rem', color: '#8a93a6' }}>tarif per hari hadir</div>}
                           </td>
                           <td style={{ textAlign: 'right' }}>
                             <button type="button" className="btn btn-danger btn-sm" onClick={() => removeComponent(p.component_id)}>Hapus</button>
@@ -720,6 +747,30 @@ export default function EmployeeDetail() {
         ))}
       </div>
 
+      {(() => {
+        if (emp.employment_type !== 'contract' || !emp.contract_end_date) return null;
+        const days = contractDaysLeft(emp.contract_end_date);
+        if (days == null || days > 30) return null;
+        const overdue = days < 0;
+        const msg = overdue
+          ? `Kontrak telah berakhir ${Math.abs(days)} hari lalu (${fmtDate(emp.contract_end_date)}).`
+          : days === 0
+            ? `Kontrak berakhir hari ini (${fmtDate(emp.contract_end_date)}).`
+            : `Kontrak akan berakhir dalam ${days} hari (${fmtDate(emp.contract_end_date)}).`;
+        return (
+          <div
+            className="card"
+            style={{ marginBottom: '1rem', borderLeft: `4px solid ${overdue ? '#c5221f' : '#f0a020'}`, background: overdue ? '#fdece9' : '#fffaf0' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1.1rem' }}>{overdue ? '⛔' : '⚠️'}</span>
+              <strong style={{ color: overdue ? '#c5221f' : '#a06800' }}>{msg}</strong>
+              {editable && <Link to={`/hr/employees/${id}/edit`} style={{ marginLeft: 'auto', fontSize: '0.85rem' }}>Perpanjang / Ubah →</Link>}
+            </div>
+          </div>
+        );
+      })()}
+
       {tab === 'profil' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '1rem', alignItems: 'start' }}>
           <div>
@@ -734,6 +785,10 @@ export default function EmployeeDetail() {
                 <Field label="Tanggal Bergabung" value={fmtDate(emp.join_date)} />
                 <Field label="NIK / KTP" value={emp.national_id} />
                 <Field label="Status" value={emp.status === 'active' ? 'Aktif' : 'Nonaktif'} />
+                <Field label="Tipe Kepegawaian" value={emp.employment_type === 'contract' ? 'Kontrak' : 'Tetap'} />
+                {emp.employment_type === 'contract' && (
+                  <Field label="Berakhir Kontrak" value={fmtDate(emp.contract_end_date)} />
+                )}
               </div>
             </div>
 
