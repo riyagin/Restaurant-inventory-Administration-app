@@ -272,7 +272,7 @@ func (h *PayrollHandler) GetLineReview(w http.ResponseWriter, r *http.Request) {
 		Date_2:     period.EndDate,
 	})
 	if overtimeRequests == nil {
-		overtimeRequests = []*db.OvertimeRequest{}
+		overtimeRequests = []*db.ListOvertimeRequestsForEmployeeRow{}
 	}
 
 	mult, err := service.LoadMultipliers(ctx, h.queries)

@@ -257,9 +257,14 @@ type overtimeDecisionBody struct {
 
 // decide is the shared body for approve/reject/cancel. The query only touches a row
 // in the required source state, so pgx.ErrNoRows means "wrong status" → 400.
+//
+// fn wraps the specific sqlc call (ApproveOvertimeRequest / RejectOvertimeRequest /
+// CancelOvertimeRequest): sqlc generates a distinct Params/Row struct per query even
+// though the three are structurally identical, so there is no shared db.* type to
+// reference here — fn adapts each query's own types to this common shape instead.
 func (h *OvertimeHandler) decide(
 	w http.ResponseWriter, r *http.Request,
-	fn func(ctx context.Context, arg *db.OvertimeDecisionParams) (*db.OvertimeRequest, error),
+	fn func(ctx context.Context, id, decidedBy pgtype.UUID, note pgtype.Text) (row any, rowID pgtype.UUID, err error),
 	logDesc, badStateMsg string,
 ) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
@@ -274,11 +279,11 @@ func (h *OvertimeHandler) decide(
 	ctx := r.Context()
 	deciderID := middleware.UserIDFromCtx(ctx)
 
-	req, err := fn(ctx, &db.OvertimeDecisionParams{
-		ID:           pgtype.UUID{Bytes: id, Valid: true},
-		DecidedBy:    pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}},
-		DecisionNote: pgtype.Text{String: note, Valid: note != ""},
-	})
+	req, reqID, err := fn(ctx,
+		pgtype.UUID{Bytes: id, Valid: true},
+		pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}},
+		pgtype.Text{String: note, Valid: note != ""},
+	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			respondError(w, http.StatusBadRequest, badStateMsg)
@@ -293,7 +298,7 @@ func (h *OvertimeHandler) decide(
 		Username:    middleware.UsernameFromCtx(ctx),
 		Action:      "UPDATE",
 		EntityType:  "overtime_request",
-		EntityID:    req.ID.Bytes,
+		EntityID:    reqID.Bytes,
 		Description: logDesc,
 	})
 
@@ -302,22 +307,37 @@ func (h *OvertimeHandler) decide(
 
 // Approve — POST /api/hr/overtime/{id}/approve (manager only)
 func (h *OvertimeHandler) Approve(w http.ResponseWriter, r *http.Request) {
-	h.decide(w, r, h.queries.ApproveOvertimeRequest,
-		"Menyetujui permintaan lembur karyawan",
+	h.decide(w, r, func(ctx context.Context, id, decidedBy pgtype.UUID, note pgtype.Text) (any, pgtype.UUID, error) {
+		row, err := h.queries.ApproveOvertimeRequest(ctx, &db.ApproveOvertimeRequestParams{ID: id, DecidedBy: decidedBy, DecisionNote: note})
+		if err != nil {
+			return nil, pgtype.UUID{}, err
+		}
+		return row, row.ID, nil
+	}, "Menyetujui permintaan lembur karyawan",
 		"hanya pengajuan berstatus menunggu yang dapat disetujui")
 }
 
 // Reject — POST /api/hr/overtime/{id}/reject (manager only)
 func (h *OvertimeHandler) Reject(w http.ResponseWriter, r *http.Request) {
-	h.decide(w, r, h.queries.RejectOvertimeRequest,
-		"Menolak permintaan lembur karyawan",
+	h.decide(w, r, func(ctx context.Context, id, decidedBy pgtype.UUID, note pgtype.Text) (any, pgtype.UUID, error) {
+		row, err := h.queries.RejectOvertimeRequest(ctx, &db.RejectOvertimeRequestParams{ID: id, DecidedBy: decidedBy, DecisionNote: note})
+		if err != nil {
+			return nil, pgtype.UUID{}, err
+		}
+		return row, row.ID, nil
+	}, "Menolak permintaan lembur karyawan",
 		"hanya pengajuan berstatus menunggu yang dapat ditolak")
 }
 
 // Cancel — POST /api/hr/overtime/{id}/cancel (admin/manager)
 func (h *OvertimeHandler) Cancel(w http.ResponseWriter, r *http.Request) {
-	h.decide(w, r, h.queries.CancelOvertimeRequest,
-		"Membatalkan permintaan lembur karyawan",
+	h.decide(w, r, func(ctx context.Context, id, decidedBy pgtype.UUID, note pgtype.Text) (any, pgtype.UUID, error) {
+		row, err := h.queries.CancelOvertimeRequest(ctx, &db.CancelOvertimeRequestParams{ID: id, DecidedBy: decidedBy, DecisionNote: note})
+		if err != nil {
+			return nil, pgtype.UUID{}, err
+		}
+		return row, row.ID, nil
+	}, "Membatalkan permintaan lembur karyawan",
 		"hanya pengajuan menunggu atau disetujui yang dapat dibatalkan")
 }
 
