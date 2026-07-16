@@ -12,10 +12,15 @@ import (
 )
 
 // Kasbon (cash advance) business logic. Pure helpers (number generation, the
-// 2-month resolution window, installment-split validation, and status-transition
+// resolution window, installment-split validation, and status-transition
 // guards) are DB-free and unit-tested. ProcessKasbon performs the CoA debit in a
 // transaction. The payroll hooks (GetPendingInstallments / MarkInstallmentDeducted
 // / ResolveKasbonIfComplete) are consumed by prompt 08.
+
+// MaxRepaymentMonths is the furthest a resolution month / installment may fall
+// after the request month, i.e. the maximum number of monthly installments a
+// kasbon can be split into.
+const MaxRepaymentMonths = 12
 
 // PiutangKaryawanAccountNumber is the system asset account ("Piutang Karyawan",
 // employee receivable) seeded by migration 011. Processing a kasbon credits this
@@ -49,8 +54,8 @@ func monthsBetween(a, b time.Time) int {
 }
 
 // ValidateResolutionWindow checks that resolutionMonth (treated as a first-of-month
-// date) is no earlier than the request month and at most 2 calendar months after
-// the request date's month. Returns nil when in-window.
+// date) is no earlier than the request month and at most MaxRepaymentMonths calendar
+// months after the request date's month. Returns nil when in-window.
 func ValidateResolutionWindow(requestDate, resolutionMonth time.Time) error {
 	reqMonth := FirstOfMonth(requestDate)
 	resMonth := FirstOfMonth(resolutionMonth)
@@ -58,8 +63,8 @@ func ValidateResolutionWindow(requestDate, resolutionMonth time.Time) error {
 	if diff < 0 {
 		return errors.New("bulan penyelesaian tidak boleh sebelum bulan pengajuan")
 	}
-	if diff > 2 {
-		return errors.New("bulan penyelesaian maksimal 2 bulan setelah bulan pengajuan")
+	if diff > MaxRepaymentMonths {
+		return fmt.Errorf("bulan penyelesaian maksimal %d bulan setelah bulan pengajuan", MaxRepaymentMonths)
 	}
 	return nil
 }
@@ -71,17 +76,17 @@ type InstallmentInput struct {
 	Amount   int64
 }
 
-// ValidateInstallmentSplit validates a 1- or 2-installment deduction plan against
-// the total and the 2-month resolution window measured from requestDate:
-//   - 1 or 2 installments only,
+// ValidateInstallmentSplit validates a multi-installment deduction plan against the
+// total and the resolution window measured from requestDate:
+//   - between 1 and MaxRepaymentMonths installments,
 //   - each amount > 0,
 //   - amounts sum exactly to total,
-//   - each due_month within [request month, request month + 2],
-//   - (for 2 installments) distinct due months.
+//   - each due_month within [request month, request month + MaxRepaymentMonths],
+//   - distinct due months.
 func ValidateInstallmentSplit(total int64, requestDate time.Time, installments []InstallmentInput) error {
 	n := len(installments)
-	if n < 1 || n > 2 {
-		return errors.New("jumlah cicilan harus 1 atau 2")
+	if n < 1 || n > MaxRepaymentMonths {
+		return fmt.Errorf("jumlah cicilan harus antara 1 dan %d", MaxRepaymentMonths)
 	}
 	var sum int64
 	seen := map[string]bool{}

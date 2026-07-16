@@ -41,10 +41,10 @@ func TestValidateResolutionWindow(t *testing.T) {
 	}{
 		{"same month (in window)", mustDate("2026-06-01"), false},
 		{"one month after", mustDate("2026-07-15"), false},
-		{"two months after (boundary)", mustDate("2026-08-31"), false},
-		{"three months after (out of window)", mustDate("2026-09-01"), true},
+		{"six months after (in window)", mustDate("2026-12-25"), false},
+		{"twelve months after (boundary)", mustDate("2027-06-30"), false},
+		{"thirteen months after (out of window)", mustDate("2027-07-01"), true},
 		{"before request month", mustDate("2026-05-20"), true},
-		{"year boundary in window", mustDate("2026-12-25"), true}, // 6 months → out
 	}
 	for _, c := range cases {
 		err := ValidateResolutionWindow(req, c.resMon)
@@ -53,13 +53,13 @@ func TestValidateResolutionWindow(t *testing.T) {
 		}
 	}
 
-	// Year-crossing boundary: Nov 2026 request, Jan 2027 = 2 months → in window.
-	if err := ValidateResolutionWindow(mustDate("2026-11-05"), mustDate("2027-01-10")); err != nil {
-		t.Errorf("year-crossing 2-month window should be valid, got %v", err)
+	// Year-crossing boundary: Nov 2026 request, Nov 2027 = 12 months → in window.
+	if err := ValidateResolutionWindow(mustDate("2026-11-05"), mustDate("2027-11-10")); err != nil {
+		t.Errorf("year-crossing 12-month window should be valid, got %v", err)
 	}
-	// Nov 2026 → Feb 2027 = 3 months → out of window.
-	if err := ValidateResolutionWindow(mustDate("2026-11-05"), mustDate("2027-02-10")); err == nil {
-		t.Error("year-crossing 3-month window should be invalid")
+	// Nov 2026 → Dec 2027 = 13 months → out of window.
+	if err := ValidateResolutionWindow(mustDate("2026-11-05"), mustDate("2027-12-10")); err == nil {
+		t.Error("year-crossing 13-month window should be invalid")
 	}
 }
 
@@ -89,13 +89,22 @@ func TestValidateInstallmentSplit(t *testing.T) {
 		t.Error("sum mismatch should be rejected")
 	}
 
-	// More than 2 installments.
+	// A valid 3-way split summing to total, all within the window.
 	if err := ValidateInstallmentSplit(900_000, req, []InstallmentInput{
 		{DueMonth: mustDate("2026-06-01"), Amount: 300_000},
 		{DueMonth: mustDate("2026-07-01"), Amount: 300_000},
 		{DueMonth: mustDate("2026-08-01"), Amount: 300_000},
-	}); err == nil {
-		t.Error(">2 installments should be rejected")
+	}); err != nil {
+		t.Errorf("valid 3-way split rejected: %v", err)
+	}
+
+	// More than MaxRepaymentMonths installments should be rejected.
+	tooMany := make([]InstallmentInput, 0, MaxRepaymentMonths+1)
+	for i := 0; i <= MaxRepaymentMonths; i++ {
+		tooMany = append(tooMany, InstallmentInput{DueMonth: req.AddDate(0, i, 0), Amount: 1_000})
+	}
+	if err := ValidateInstallmentSplit(int64(len(tooMany))*1_000, req, tooMany); err == nil {
+		t.Errorf(">%d installments should be rejected", MaxRepaymentMonths)
 	}
 
 	// Zero / negative amount.

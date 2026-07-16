@@ -53,6 +53,8 @@ import KasbonForm from './pages/hr/KasbonForm';
 import KasbonDetail from './pages/hr/KasbonDetail';
 import PayrollDashboard from './pages/hr/PayrollDashboard';
 import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
+import ThrDashboard from './pages/hr/ThrDashboard';
+import ThrRunDetail from './pages/hr/ThrRunDetail';
 import Approvals from './pages/hr/Approvals';
 import HRSettings from './pages/hr/HRSettings';
 import ManpowerPlanning from './pages/hr/ManpowerPlanning';
@@ -197,6 +199,7 @@ function Nav() {
             {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
             {menuLink('/hr/kasbon', 'Kasbon')}
             {isAdminOrManager && menuLink('/hr/payroll', 'Penggajian')}
+            {isAdminOrManager && menuLink('/hr/thr', 'THR')}
             {isAdminOrManager && menuLink('/hr/settings', 'Pengaturan')}
           </NavDropdown>
         )}
@@ -270,6 +273,7 @@ function Nav() {
               <Link to="/hr/manpower" className={isActive('/hr/manpower') ? 'active' : ''}>Rencana Tenaga Kerja</Link>
               <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
               {isAdminOrManager && <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>}
+              {isAdminOrManager && <Link to="/hr/thr" className={isActive('/hr/thr') ? 'active' : ''}>THR</Link>}
               {isAdminOrManager && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
             </MobileSection>
           )}
@@ -384,6 +388,8 @@ export default function App() {
                 <Route path="/hr/overtime" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
+                <Route path="/hr/thr" element={<RequireManagerOrAdmin><ThrDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/thr/:id" element={<RequireManagerOrAdmin><ThrRunDetail /></RequireManagerOrAdmin>} />
                 <Route path="/hr/settings" element={<RequireManagerOrAdmin><HRSettings /></RequireManagerOrAdmin>} />
               </Routes>
             </Layout>

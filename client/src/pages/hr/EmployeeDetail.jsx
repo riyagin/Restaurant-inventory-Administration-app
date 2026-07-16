@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  getEmployee, deleteEmployee,
+  getEmployee, deleteEmployee, transitionEmployeeToPermanent,
   getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents,
   getAttendance, getEmployeePerformance,
   getLeaveBalance, getEmployeeLeaveRequests,
@@ -450,7 +450,7 @@ function ComponentRows({ components }) {
   );
 }
 
-function WageTab({ employeeId, editable }) {
+function WageTab({ employeeId, editable, isContract }) {
   const [current, setCurrent] = useState(null);
   const [history, setHistory] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -566,6 +566,25 @@ function WageTab({ employeeId, editable }) {
               <span>Proyeksi Gaji Bulanan (pokok + tunjangan tetap − potongan tetap)</span>
               <span>{fmtIDR(projection)}</span>
             </div>
+            {current.thr ? (
+              <div style={{ marginTop: '0.75rem', padding: '0.75rem 1rem', background: '#f5f9ff', border: '1px solid #d9e6fb', borderRadius: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 600 }}>
+                  <span>THR (Tunjangan Hari Raya)</span>
+                  <span style={{ color: '#1967d2' }}>{fmtIDR(current.thr.amount)}</span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#667', marginTop: 4 }}>
+                  Masa kerja {current.thr.months_worked} bulan → {current.thr.months_worked >= 12 ? '1 bulan penuh' : `${current.thr.months_worked}/12`} × gaji pokok
+                  {' '}(estimasi per {fmtDateShort(current.thr.as_of)}). Dibayarkan melalui run THR.
+                  {current.thr.transitioned && (
+                    <span> Dihitung sejak tanggal status tetap ({fmtDateShort(current.thr.tenure_since)}).</span>
+                  )}
+                </div>
+              </div>
+            ) : isContract && (
+              <div style={{ marginTop: '0.75rem', padding: '0.75rem 1rem', background: '#f6f7fa', border: '1px solid #e6e8ee', borderRadius: 8, fontSize: '0.82rem', color: '#667' }}>
+                <strong>THR (Tunjangan Hari Raya):</strong> Karyawan kontrak (PKWT) tidak menerima THR.
+              </div>
+            )}
           </>
         )}
       </div>
@@ -701,14 +720,17 @@ export default function EmployeeDetail() {
   const [emp, setEmp]   = useState(null);
   const [tab, setTab]   = useState('profil');
   const [error, setError] = useState('');
+  const [showTransition, setShowTransition] = useState(false);
 
   const editable = canEdit();
 
-  useEffect(() => {
+  const loadEmployee = useCallback(() => {
     getEmployee(id)
       .then(r => setEmp(r.data))
       .catch(() => setError('Karyawan tidak ditemukan'));
   }, [id]);
+
+  useEffect(() => { loadEmployee(); }, [loadEmployee]);
 
   const handleDelete = async () => {
     if (!confirm('Yakin hapus karyawan ini? Sebaiknya ubah status menjadi nonaktif jika sudah ada data terkait.')) return;
@@ -729,6 +751,11 @@ export default function EmployeeDetail() {
         <h1>{emp.full_name}</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={() => navigate('/hr/employees')} className="btn btn-secondary">Kembali</button>
+          {editable && emp.employment_type === 'contract' && (
+            <button onClick={() => setShowTransition(true)} className="btn btn-primary" style={{ background: '#1e7e34', borderColor: '#1e7e34' }}>
+              Jadikan Karyawan Tetap
+            </button>
+          )}
           {editable && <Link to={`/hr/employees/${id}/edit`} className="btn btn-primary">Edit</Link>}
           {editable && <button onClick={handleDelete} className="btn btn-danger">Hapus</button>}
         </div>
@@ -789,6 +816,9 @@ export default function EmployeeDetail() {
                 {emp.employment_type === 'contract' && (
                   <Field label="Berakhir Kontrak" value={fmtDate(emp.contract_end_date)} />
                 )}
+                {emp.employment_type === 'permanent' && emp.permanent_since && (
+                  <Field label="Tetap Sejak" value={fmtDate(emp.permanent_since)} />
+                )}
               </div>
             </div>
 
@@ -823,10 +853,66 @@ export default function EmployeeDetail() {
         </div>
       )}
 
-      {tab === 'gaji' && <WageTab employeeId={id} editable={editable} />}
+      {tab === 'gaji' && <WageTab employeeId={id} editable={editable} isContract={emp.employment_type === 'contract'} />}
       {tab === 'absensi' && <AttendanceTab employeeId={id} employee={emp} />}
       {tab === 'kasbon' && <KasbonTab employeeId={id} />}
       {tab === 'cuti' && <CutiTab employeeId={id} />}
+
+      {showTransition && (
+        <TransitionPermanentModal
+          employee={emp}
+          onClose={() => setShowTransition(false)}
+          onDone={() => { setShowTransition(false); loadEmployee(); }}
+        />
+      )}
     </>
+  );
+}
+
+function TransitionPermanentModal({ employee, onClose, onDone }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!date) { setError('Tanggal wajib diisi'); return; }
+    setBusy(true); setError('');
+    try {
+      await transitionEmployeeToPermanent(employee.id, { effective_date: date });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Gagal mengubah status karyawan');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '3rem 1rem' }}>
+      <div className="card" style={{ width: '100%', maxWidth: 460, padding: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+          <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Jadikan Karyawan Tetap</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#aaa' }}>✕</button>
+        </div>
+        <p style={{ color: '#667', fontSize: '0.85rem', marginTop: 0 }}>
+          Mengubah <strong>{employee.full_name}</strong> dari karyawan kontrak (PKWT) menjadi karyawan tetap (PKWTT).
+          Tanggal status tetap menjadi titik awal (hari ke-0) perhitungan masa kerja THR.
+        </p>
+        {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label>Tanggal Status Tetap</label>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} required />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+            <button type="button" onClick={onClose} className="btn btn-secondary" disabled={busy}>Batal</button>
+            <button type="submit" className="btn btn-primary" disabled={busy} style={{ background: '#1e7e34', borderColor: '#1e7e34' }}>
+              {busy ? 'Menyimpan…' : 'Ubah Status'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

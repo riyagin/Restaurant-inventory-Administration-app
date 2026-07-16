@@ -93,6 +93,36 @@ tr:hover td { background: #fafbff; }
 .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.55rem 0.75rem; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; outline: none; transition: border-color 0.2s; font-family: inherit; box-sizing: border-box; }
 .form-group textarea { min-height: 3.5rem; resize: vertical; }
 .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: #4f8ef7; }
+
+/* Clean, consistent dropdowns: hide the native arrow and draw our own chevron. */
+.select-clean, .form-group select, .filters select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  padding-right: 2rem;
+  cursor: pointer;
+}
+.select-clean {
+  width: 100%; padding-top: 0.55rem; padding-bottom: 0.55rem; padding-left: 0.75rem;
+  border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; font-family: inherit;
+  outline: none; box-sizing: border-box; transition: border-color 0.2s;
+  color: #223;
+}
+.select-clean:focus { border-color: #4f8ef7; }
+.select-clean:disabled { background-color: #f4f5f7; color: #99a; cursor: not-allowed; }
+
+/* Standalone text/number input styled to match .select-clean (for inputs outside .form-group). */
+.input-clean {
+  width: 100%; padding: 0.55rem 0.75rem;
+  border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; font-family: inherit;
+  outline: none; box-sizing: border-box; transition: border-color 0.2s;
+  background-color: #fff; color: #223;
+}
+.input-clean:focus { border-color: #4f8ef7; }
+.input-clean:disabled { background-color: #f4f5f7; color: #99a; cursor: not-allowed; }
+
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 .form-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
 .error-msg { color: #e74c3c; font-size: 0.85rem; margin-bottom: 1rem; }

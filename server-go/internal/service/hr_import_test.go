@@ -28,7 +28,9 @@ func baseRef() HRImportRefData {
 			"pusat":  fakeUUID(3),
 			"cabang": fakeUUID(4),
 		},
-		ExistingCodes:   map[string]bool{"EMP-0001": true},
+		ExistingByCode: map[string]*ExistingEmployeeSnapshot{
+			"emp-0001": {ID: fakeUUID(99), EmploymentType: "permanent", Status: "active"},
+		},
 		ExistingNameDob: map[string]bool{"budi|1990-01-01": true},
 		Components: map[string]*db.WageComponent{
 			"Makan": makan,
@@ -131,13 +133,19 @@ func TestParseHRImport_UnknownPosition(t *testing.T) {
 	}
 }
 
-func TestParseHRImport_DuplicateCodeVsExisting(t *testing.T) {
+func TestParseHRImport_CodeVsExistingIsUpdate(t *testing.T) {
 	rows := [][]string{
 		{"EMP-0001", "Gita", "1990-03-03", "2024-03-01", "Barista", "Pusat", "", "", "", "", "", "", "", "5000000", "26", "2024-03-01", "0", "0"},
 	}
 	p := ParseHRImportRows("test.xlsx", hdr, rows, componentCols(), baseRef())
-	if p.Rows[0].Status != "error" {
-		t.Fatalf("expected error for code duplicate vs DB, got %s", p.Rows[0].Status)
+	if p.Rows[0].Status == "error" {
+		t.Fatalf("expected code vs DB match to be updatable, not an error: %+v", p.Rows[0].Messages)
+	}
+	if p.Rows[0].Action != "update" {
+		t.Errorf("action = %s, want update", p.Rows[0].Action)
+	}
+	if p.UpdateCount != 1 || p.CreateCount != 0 {
+		t.Errorf("update_count=%d create_count=%d, want 1/0", p.UpdateCount, p.CreateCount)
 	}
 }
 

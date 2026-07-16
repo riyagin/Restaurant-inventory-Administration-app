@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { downloadHrImportTemplate, parseHrImport, confirmHrImport } from '../../api';
+import { downloadHrImportTemplate, exportHrEmployees, parseHrImport, confirmHrImport } from '../../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v || 0);
@@ -19,6 +19,20 @@ const statusBadge = (status) => {
   );
 };
 
+const actionBadge = (action) => {
+  const isUpdate = action === 'update';
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', padding: '0.15rem 0.5rem', borderRadius: '4px',
+      fontWeight: 600, fontSize: '0.78rem',
+      background: isUpdate ? '#e3f2fd' : '#f1f8e9',
+      color: isUpdate ? '#1565c0' : '#33691e',
+    }}>
+      {isUpdate ? 'Perbarui' : 'Baru'}
+    </span>
+  );
+};
+
 export default function HRImport() {
   const [preview, setPreview]   = useState(null);
   const [batchId, setBatchId]   = useState('');
@@ -26,27 +40,45 @@ export default function HRImport() {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
-  const [done, setDone]   = useState(null); // { employees_created }
+  const [done, setDone]   = useState(null); // { employees_created, employees_updated }
   const fileRef = useRef();
+
+  const downloadBlob = (data, filename) => {
+    const url = window.URL.createObjectURL(new Blob([data]));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  };
 
   const handleDownloadTemplate = async () => {
     setError('');
     setDownloading(true);
     try {
       const r = await downloadHrImportTemplate();
-      const url = window.URL.createObjectURL(new Blob([r.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'template-impor-karyawan.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      downloadBlob(r.data, 'template-impor-karyawan.xlsx');
     } catch {
       setError('Gagal mengunduh template');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleExport = async () => {
+    setError('');
+    setExporting(true);
+    try {
+      const r = await exportHrEmployees();
+      downloadBlob(r.data, 'data-karyawan.xlsx');
+    } catch {
+      setError('Gagal mengekspor data karyawan');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -108,7 +140,7 @@ export default function HRImport() {
       {/* Success state */}
       {done && (
         <div style={{ background: '#e6f9f0', border: '1px solid #b2dfdb', borderRadius: '8px', padding: '1rem 1.5rem', marginBottom: '1.5rem', color: '#1b5e45', fontWeight: 500 }}>
-          Impor berhasil! {done.employees_created} karyawan beserta struktur gaji awal telah dibuat.
+          Impor berhasil! {done.employees_created} karyawan baru dibuat, {done.employees_updated || 0} karyawan diperbarui.
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem' }}>
             <Link to="/hr/employees" className="btn btn-primary btn-sm">Lihat Daftar Karyawan</Link>
             <button onClick={reset} className="btn btn-secondary btn-sm">Impor Lagi</button>
@@ -123,12 +155,18 @@ export default function HRImport() {
             <div>
               <h2 style={{ fontSize: '1rem', marginBottom: '0.25rem' }}>Unggah File Excel Karyawan</h2>
               <p style={{ fontSize: '0.85rem', color: '#888', margin: 0 }}>
-                Unduh template, isi data karyawan, lalu unggah kembali untuk pratinjau.
+                Unduh template (karyawan baru) atau ekspor data karyawan saat ini (untuk memperbarui), isi/ubah datanya, lalu unggah kembali untuk pratinjau.
+                Baris dengan kode karyawan yang sudah ada akan memperbarui karyawan tersebut, bukan membuat duplikat.
               </p>
             </div>
-            <button onClick={handleDownloadTemplate} disabled={downloading} className="btn btn-secondary btn-sm">
-              {downloading ? 'Menyiapkan…' : 'Unduh Template'}
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button onClick={handleExport} disabled={exporting} className="btn btn-secondary btn-sm">
+                {exporting ? 'Menyiapkan…' : 'Ekspor Data Karyawan'}
+              </button>
+              <button onClick={handleDownloadTemplate} disabled={downloading} className="btn btn-secondary btn-sm">
+                {downloading ? 'Menyiapkan…' : 'Unduh Template'}
+              </button>
+            </div>
           </div>
 
           <div
@@ -164,6 +202,8 @@ export default function HRImport() {
                 <span style={{ color: '#2e7d32', fontWeight: 700 }}>{preview.ok_count} valid</span>
                 {preview.warning_count > 0 && <span style={{ color: '#b45309', fontWeight: 700 }}>{preview.warning_count} peringatan</span>}
                 <span style={{ color: preview.error_count > 0 ? '#c62828' : '#aaa', fontWeight: 700 }}>{preview.error_count} error</span>
+                <span style={{ color: '#33691e' }}>{preview.create_count || 0} baru</span>
+                <span style={{ color: '#1565c0' }}>{preview.update_count || 0} perbarui</span>
                 <span style={{ color: '#555' }}>dari {preview.total_rows} baris</span>
               </div>
               <button onClick={reset} className="btn btn-secondary btn-sm">Ganti File</button>
@@ -177,6 +217,7 @@ export default function HRImport() {
                 <tr>
                   <th>#</th>
                   <th>Status</th>
+                  <th>Aksi</th>
                   <th>Kode</th>
                   <th>Nama</th>
                   <th>Jabatan</th>
@@ -193,6 +234,7 @@ export default function HRImport() {
                   <tr key={row.row_number} style={{ background: row.status === 'error' ? '#fff7f7' : row.status === 'warning' ? '#fffdf5' : undefined }}>
                     <td style={{ color: '#999', fontSize: '0.82rem' }}>{row.row_number}</td>
                     <td>{statusBadge(row.status)}</td>
+                    <td>{actionBadge(row.action)}</td>
                     <td style={{ fontSize: '0.82rem', fontFamily: 'monospace' }}>{row.employee_code}</td>
                     <td style={{ fontWeight: 500 }}>{row.full_name || <span style={{ color: '#ccc' }}>—</span>}</td>
                     <td style={{ fontSize: '0.85rem' }}>{row.position || '—'}</td>

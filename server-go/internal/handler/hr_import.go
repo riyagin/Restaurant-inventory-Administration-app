@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,7 @@ func (h *HRImportHandler) loadRefData(r *http.Request) (service.HRImportRefData,
 	ref := service.HRImportRefData{
 		Positions:       map[string]pgtype.UUID{},
 		Branches:        map[string]pgtype.UUID{},
-		ExistingCodes:   map[string]bool{},
+		ExistingByCode:  map[string]*service.ExistingEmployeeSnapshot{},
 		ExistingNameDob: map[string]bool{},
 		Components:      map[string]*db.WageComponent{},
 	}
@@ -72,25 +73,94 @@ func (h *HRImportHandler) loadRefData(r *http.Request) (service.HRImportRefData,
 		ref.Components[c.Name] = c
 	}
 
-	// Existing employee codes + name|dob and the max code sequence.
-	rows, err := h.pool.Query(ctx, `SELECT employee_code, full_name, dob FROM employees`)
+	// Existing employees keyed by lower(employee_code), plus name|dob set.
+	snapshotsByID := map[pgtype.UUID]*service.ExistingEmployeeSnapshot{}
+	rows, err := h.pool.Query(ctx, `
+		SELECT id, employee_code, full_name, dob, user_id, status, employment_type, contract_end_date
+		FROM employees`)
 	if err != nil {
 		return ref, nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var code, fullName string
-		var dob pgtype.Date
-		if err := rows.Scan(&code, &fullName, &dob); err != nil {
+		var id, userID pgtype.UUID
+		var code, fullName, status, employmentType string
+		var dob, contractEnd pgtype.Date
+		if err := rows.Scan(&id, &code, &fullName, &dob, &userID, &status, &employmentType, &contractEnd); err != nil {
 			return ref, nil, err
 		}
-		ref.ExistingCodes[code] = true
+		snap := &service.ExistingEmployeeSnapshot{
+			ID:                id,
+			EmploymentType:    employmentType,
+			ContractEndDate:   contractEnd,
+			UserID:            userID,
+			Status:            status,
+			CurrentComponents: map[string]int64{},
+		}
+		snapshotsByID[id] = snap
+		ref.ExistingByCode[strings.ToLower(code)] = snap
 		if dob.Valid {
 			key := strings.ToLower(fullName) + "|" + dob.Time.Format("2006-01-02")
 			ref.ExistingNameDob[key] = true
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return ref, nil, err
+	}
+
+	// Current (open) wage structure per employee.
+	wsRows, err := h.pool.Query(ctx, `
+		SELECT employee_id, base_salary, working_days_per_month, effective_date
+		FROM wage_structures
+		WHERE end_date IS NULL`)
+	if err != nil {
+		return ref, nil, err
+	}
+	defer wsRows.Close()
+	for wsRows.Next() {
+		var empID pgtype.UUID
+		var baseSalary int64
+		var workingDays int32
+		var effDate pgtype.Date
+		if err := wsRows.Scan(&empID, &baseSalary, &workingDays, &effDate); err != nil {
+			return ref, nil, err
+		}
+		if snap, ok := snapshotsByID[empID]; ok {
+			snap.HasWage = true
+			snap.CurrentBaseSalary = baseSalary
+			snap.CurrentWorkingDays = workingDays
+			if effDate.Valid {
+				snap.CurrentEffDate = effDate.Time.Format("2006-01-02")
+			}
+		}
+	}
+	if err := wsRows.Err(); err != nil {
+		return ref, nil, err
+	}
+
+	// Component amounts on each employee's current wage structure.
+	compRows, err := h.pool.Query(ctx, `
+		SELECT ws.employee_id, wc.name, ewc.amount
+		FROM employee_wage_components ewc
+		JOIN wage_structures ws ON ws.id = ewc.wage_structure_id
+		JOIN wage_components wc ON wc.id = ewc.wage_component_id
+		WHERE ws.end_date IS NULL`)
+	if err != nil {
+		return ref, nil, err
+	}
+	defer compRows.Close()
+	for compRows.Next() {
+		var empID pgtype.UUID
+		var name string
+		var amount int64
+		if err := compRows.Scan(&empID, &name, &amount); err != nil {
+			return ref, nil, err
+		}
+		if snap, ok := snapshotsByID[empID]; ok {
+			snap.CurrentComponents[strings.ToLower(name)] = amount
+		}
+	}
+	if err := compRows.Err(); err != nil {
 		return ref, nil, err
 	}
 
@@ -236,6 +306,222 @@ func (h *HRImportHandler) Template(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(buf.Bytes())
 }
 
+// exportEmployeeRow holds one employee's current master + wage data for Export.
+type exportEmployeeRow struct {
+	ID                                             pgtype.UUID
+	Code, FullName, Position, Branch               string
+	Dob, JoinDate                                  pgtype.Date
+	Phone, Email, Address, NationalID              pgtype.Text
+	BankName, BankAccountNumber, BankAccountHolder pgtype.Text
+	HasWage                                        bool
+	BaseSalary                                     int64
+	WorkingDays                                    int32
+	EffectiveDate                                  pgtype.Date
+	Components                                     map[string]int64 // lower(component name) -> amount
+}
+
+// Export — GET /api/hr/import/export
+// Streams an .xlsx of every current employee, in the exact same "Karyawan"
+// sheet layout as Template (fixed columns + one column per active wage
+// component), pre-filled with each employee's current master data and wage
+// structure. Because employee_code is populated, re-uploading the file
+// through Parse/Confirm updates the matching employees instead of creating
+// duplicates — this is the round-trip bulk-edit path.
+func (h *HRImportHandler) Export(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	components, err := h.queries.ListActiveWageComponents(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil komponen gaji")
+		return
+	}
+	sort.SliceStable(components, func(i, j int) bool {
+		if components[i].Type != components[j].Type {
+			return components[i].Type < components[j].Type
+		}
+		return components[i].Name < components[j].Name
+	})
+
+	rows, err := h.pool.Query(ctx, `
+		SELECT
+		    e.id, e.employee_code, e.full_name, e.dob, e.join_date,
+		    p.name, b.name,
+		    e.phone, e.email, e.address, e.national_id,
+		    e.bank_name, e.bank_account_number, e.bank_account_holder
+		FROM employees e
+		JOIN positions p ON p.id = e.position_id
+		JOIN branches  b ON b.id = e.branch_id
+		ORDER BY e.employee_code`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	defer rows.Close()
+
+	byID := map[pgtype.UUID]*exportEmployeeRow{}
+	var ordered []*exportEmployeeRow
+	for rows.Next() {
+		er := &exportEmployeeRow{Components: map[string]int64{}}
+		if err := rows.Scan(
+			&er.ID, &er.Code, &er.FullName, &er.Dob, &er.JoinDate,
+			&er.Position, &er.Branch,
+			&er.Phone, &er.Email, &er.Address, &er.NationalID,
+			&er.BankName, &er.BankAccountNumber, &er.BankAccountHolder,
+		); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
+			return
+		}
+		byID[er.ID] = er
+		ordered = append(ordered, er)
+	}
+	if err := rows.Err(); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
+		return
+	}
+	rows.Close()
+
+	wsRows, err := h.pool.Query(ctx, `
+		SELECT employee_id, base_salary, working_days_per_month, effective_date
+		FROM wage_structures
+		WHERE end_date IS NULL`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil struktur gaji")
+		return
+	}
+	for wsRows.Next() {
+		var empID pgtype.UUID
+		var baseSalary int64
+		var workingDays int32
+		var effDate pgtype.Date
+		if err := wsRows.Scan(&empID, &baseSalary, &workingDays, &effDate); err != nil {
+			wsRows.Close()
+			respondError(w, http.StatusInternalServerError, "gagal membaca struktur gaji")
+			return
+		}
+		if er, ok := byID[empID]; ok {
+			er.HasWage = true
+			er.BaseSalary = baseSalary
+			er.WorkingDays = workingDays
+			er.EffectiveDate = effDate
+		}
+	}
+	werr := wsRows.Err()
+	wsRows.Close()
+	if werr != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membaca struktur gaji")
+		return
+	}
+
+	compRows, err := h.pool.Query(ctx, `
+		SELECT ws.employee_id, wc.name, ewc.amount
+		FROM employee_wage_components ewc
+		JOIN wage_structures ws ON ws.id = ewc.wage_structure_id
+		JOIN wage_components wc ON wc.id = ewc.wage_component_id
+		WHERE ws.end_date IS NULL`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil komponen gaji karyawan")
+		return
+	}
+	for compRows.Next() {
+		var empID pgtype.UUID
+		var name string
+		var amount int64
+		if err := compRows.Scan(&empID, &name, &amount); err != nil {
+			compRows.Close()
+			respondError(w, http.StatusInternalServerError, "gagal membaca komponen gaji karyawan")
+			return
+		}
+		if er, ok := byID[empID]; ok {
+			er.Components[strings.ToLower(name)] = amount
+		}
+	}
+	cerr := compRows.Err()
+	compRows.Close()
+	if cerr != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membaca komponen gaji karyawan")
+		return
+	}
+
+	f := excelize.NewFile()
+	defer f.Close()
+
+	const sheet = "Karyawan"
+	f.SetSheetName(f.GetSheetName(0), sheet)
+
+	headers := append([]string{}, service.HRImportFixedHeaders...)
+	for _, c := range components {
+		headers = append(headers, service.ComponentColumnHeader(c))
+	}
+
+	boldStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true},
+		Fill: excelize.Fill{Type: "pattern", Color: []string{"D9E1F2"}, Pattern: 1},
+	})
+	for i, hcell := range headers {
+		col, _ := excelize.ColumnNumberToName(i + 1)
+		cell := fmt.Sprintf("%s1", col)
+		f.SetCellStr(sheet, cell, hcell)
+		f.SetCellStyle(sheet, cell, cell, boldStyle)
+	}
+	f.SetPanes(sheet, &excelize.Panes{
+		Freeze:      true,
+		YSplit:      1,
+		TopLeftCell: "A2",
+		ActivePane:  "bottomLeft",
+	})
+
+	dateStr := func(d pgtype.Date) string {
+		if !d.Valid {
+			return ""
+		}
+		return d.Time.Format("2006-01-02")
+	}
+	textStr := func(t pgtype.Text) string {
+		if !t.Valid {
+			return ""
+		}
+		return t.String
+	}
+
+	rowIdx := 2
+	for _, er := range ordered {
+		vals := []string{
+			er.Code, er.FullName, dateStr(er.Dob), dateStr(er.JoinDate),
+			er.Position, er.Branch,
+			textStr(er.Phone), textStr(er.Email), textStr(er.Address), textStr(er.NationalID),
+			textStr(er.BankName), textStr(er.BankAccountNumber), textStr(er.BankAccountHolder),
+		}
+		if er.HasWage {
+			vals = append(vals, strconv.FormatInt(er.BaseSalary, 10), strconv.Itoa(int(er.WorkingDays)), dateStr(er.EffectiveDate))
+		} else {
+			vals = append(vals, "", "", "")
+		}
+		for _, c := range components {
+			if amt, ok := er.Components[strings.ToLower(c.Name)]; ok {
+				vals = append(vals, strconv.FormatInt(amt, 10))
+			} else {
+				vals = append(vals, "")
+			}
+		}
+		for i, v := range vals {
+			col, _ := excelize.ColumnNumberToName(i + 1)
+			f.SetCellStr(sheet, fmt.Sprintf("%s%d", col, rowIdx), v)
+		}
+		rowIdx++
+	}
+
+	var buf bytes.Buffer
+	if err := f.Write(&buf); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat file ekspor")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", `attachment; filename="data-karyawan.xlsx"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+}
+
 // Parse — POST /api/hr/import/parse
 // Validates every row (no DB writes), persists the preview as a batch, and
 // returns the preview JSON (with the batch id) for the user to review.
@@ -368,12 +654,13 @@ func (h *HRImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
-		UserID:      userID,
-		Username:    username,
-		Action:      "CREATE",
-		EntityType:  "hr_import",
-		EntityID:    batchID,
-		Description: fmt.Sprintf("Impor massal %d karyawan dari %s", result.EmployeesCreated, batch.Filename),
+		UserID:     userID,
+		Username:   username,
+		Action:     "CREATE",
+		EntityType: "hr_import",
+		EntityID:   batchID,
+		Description: fmt.Sprintf("Impor massal karyawan dari %s: %d dibuat, %d diperbarui",
+			batch.Filename, result.EmployeesCreated, result.EmployeesUpdated),
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -383,5 +670,6 @@ func (h *HRImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusCreated, map[string]any{
 		"employees_created": result.EmployeesCreated,
+		"employees_updated": result.EmployeesUpdated,
 	})
 }

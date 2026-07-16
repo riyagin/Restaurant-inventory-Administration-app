@@ -39,12 +39,20 @@ SELECT
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
-    e.employment_type, e.contract_end_date,
+    e.employment_type, e.contract_end_date, e.permanent_since,
     e.created_at, e.updated_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
 WHERE e.id = $1;
+
+-- name: TransitionEmployeeToPermanent :exec
+UPDATE employees
+SET employment_type = 'permanent',
+    permanent_since = $2,
+    contract_end_date = NULL,
+    updated_at = now()
+WHERE id = $1;
 
 -- name: ListExpiringContracts :many
 -- Active contract employees whose contract ends within the given window

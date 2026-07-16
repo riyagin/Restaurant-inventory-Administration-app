@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS thr_lines;
+DROP TABLE IF EXISTS thr_runs;

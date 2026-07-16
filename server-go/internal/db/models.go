@@ -131,6 +131,7 @@ type Employee struct {
 	Status            string             `json:"status"`
 	EmploymentType    string             `json:"employment_type"`
 	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
+	PermanentSince    pgtype.Date        `json:"permanent_since"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
@@ -370,6 +371,34 @@ type PayrollSetting struct {
 	ID                 int32          `json:"id"`
 	OvertimeMultiplier pgtype.Numeric `json:"overtime_multiplier"`
 	HolidayMultiplier  pgtype.Numeric `json:"holiday_multiplier"`
+}
+
+type ThrRun struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	PaymentDate pgtype.Date        `json:"payment_date"`
+	Status      string             `json:"status"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	ClosedAt    pgtype.Timestamptz `json:"closed_at"`
+	PaidAt      pgtype.Timestamptz `json:"paid_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ThrLine struct {
+	ID              pgtype.UUID        `json:"id"`
+	ThrRunID        pgtype.UUID        `json:"thr_run_id"`
+	EmployeeID      pgtype.UUID        `json:"employee_id"`
+	WageStructureID pgtype.UUID        `json:"wage_structure_id"`
+	BaseSalary      int64              `json:"base_salary"`
+	JoinDate        pgtype.Date        `json:"join_date"`
+	MonthsWorked    int32              `json:"months_worked"`
+	ThrRatio        pgtype.Numeric     `json:"thr_ratio"`
+	ComputedAmount  int64              `json:"computed_amount"`
+	ThrAmount       int64              `json:"thr_amount"`
+	Reviewed        bool               `json:"reviewed"`
+	ReviewedBy      pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt      pgtype.Timestamptz `json:"reviewed_at"`
+	ReviewNote      pgtype.Text        `json:"review_note"`
 }
 
 type PerformancePolicy struct {

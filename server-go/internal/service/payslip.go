@@ -30,6 +30,10 @@ type PayslipData struct {
 	LogoPath      string // absolute path on disk; ignored if empty / unreadable
 	PayslipFooter string
 
+	// Title is the slip heading (right block). Defaults to "SLIP GAJI" when empty;
+	// the THR payslip passes "SLIP THR".
+	Title string
+
 	// Employee + period identity.
 	EmployeeName string
 	EmployeeCode string
@@ -118,9 +122,13 @@ func BuildPayslipPDF(d PayslipData) ([]byte, error) {
 	}
 
 	// Right block.
+	title := strings.TrimSpace(d.Title)
+	if title == "" {
+		title = "SLIP GAJI"
+	}
 	pdf.SetXY(left+contentW/2, headerTop)
 	pdf.SetFont("Arial", "B", 16)
-	pdf.CellFormat(contentW/2, 8, "SLIP GAJI", "", 2, "R", false, 0, "")
+	pdf.CellFormat(contentW/2, 8, tr(title), "", 2, "R", false, 0, "")
 	pdf.SetFont("Arial", "", 10)
 	pdf.SetX(left + contentW/2)
 	pdf.CellFormat(contentW/2, 6, tr("Periode: "+d.PeriodLabel), "", 1, "R", false, 0, "")

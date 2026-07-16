@@ -80,7 +80,7 @@ type kasbonView struct {
 }
 
 // buildInstallments validates the split (or builds a single default installment in
-// resolution_month) against the total and the 2-month window.
+// resolution_month) against the total and the resolution window.
 func buildInstallments(total int64, requestDate, resolutionMonth time.Time, raw []kasbonInstallmentInput) ([]service.InstallmentInput, error) {
 	if len(raw) == 0 {
 		return []service.InstallmentInput{{DueMonth: resolutionMonth, Amount: total}}, nil

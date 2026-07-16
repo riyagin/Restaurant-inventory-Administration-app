@@ -544,6 +544,76 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, emp)
 }
 
+type transitionPermanentBody struct {
+	EffectiveDate string `json:"effective_date"` // "YYYY-MM-DD" — permanent-status date (THR day 0)
+}
+
+// TransitionToPermanent — POST /api/hr/employees/:id/transition-permanent
+// Converts a contract (PKWT) employee to permanent (PKWTT), stamping the permanent
+// status date. That date becomes the THR tenure "day 0" for the employee.
+func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	var body transitionPermanentBody
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	effDate, err := time.Parse("2006-01-02", strings.TrimSpace(body.EffectiveDate))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "tanggal efektif tidak valid")
+		return
+	}
+
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	if emp.EmploymentType != service.EmploymentTypeContract {
+		respondError(w, http.StatusConflict, "karyawan sudah berstatus tetap")
+		return
+	}
+	if effDate.Before(emp.JoinDate.Time) {
+		respondError(w, http.StatusBadRequest, "tanggal status tetap tidak boleh sebelum tanggal bergabung")
+		return
+	}
+
+	if err := h.queries.TransitionEmployeeToPermanent(ctx, &db.TransitionEmployeeToPermanentParams{
+		ID:             pgID,
+		PermanentSince: pgtype.Date{Time: effDate, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengubah status karyawan")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "employee",
+		EntityID:    id,
+		Description: fmt.Sprintf("Mengubah status %s menjadi karyawan tetap (berlaku %s)", emp.FullName, effDate.Format("2006-01-02")),
+	})
+
+	updated, err := h.queries.GetEmployeeByID(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
 // Delete — DELETE /api/hr/employees/:id
 func (h *HREmployeesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))

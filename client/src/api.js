@@ -225,6 +225,7 @@ export const getContractAlerts = (params) => api.get('/hr/employees/contract-ale
 export const getEmployee    = (id)     => api.get(`/hr/employees/${id}`);
 export const createEmployee = (data)   => api.post('/hr/employees', data);
 export const updateEmployee = (id, data) => api.put(`/hr/employees/${id}`, data);
+export const transitionEmployeeToPermanent = (id, data) => api.post(`/hr/employees/${id}/transition-permanent`, data);
 export const deleteEmployee = (id)     => api.delete(`/hr/employees/${id}`);
 export const uploadEmployeePhoto = (id, file) => {
   const form = new FormData();
@@ -250,6 +251,7 @@ export const createEmployeeWage     = (id, data) => api.post(`/hr/employees/${id
 
 // ── HR: Impor Massal Karyawan ───────────────────────────────────────────────
 export const downloadHrImportTemplate = () => api.get('/hr/import/template', { responseType: 'blob' });
+export const exportHrEmployees         = () => api.get('/hr/import/export', { responseType: 'blob' });
 export const parseHrImport             = (formData) => api.post('/hr/import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const confirmHrImport           = (data) => api.post('/hr/import/confirm', data);
 
@@ -354,6 +356,21 @@ export const markPayrollPeriodPaid = (id) => api.post(`/hr/payroll/periods/${id}
 export const deletePayrollPeriod = (id) => api.delete(`/hr/payroll/periods/${id}`);
 export const getPayrollBonusEligible = (id, wageComponentId) => api.get(`/hr/payroll/periods/${id}/bonus-eligible`, { params: { wage_component_id: wageComponentId } });
 export const applyPayrollBonus = (id, data) => api.post(`/hr/payroll/periods/${id}/apply-bonus`, data);
+
+// ── HR: THR (Tunjangan Hari Raya) ───────────────────────────────────────────
+export const getThrRuns      = () => api.get('/hr/thr/runs');
+export const createThrRun    = (data) => api.post('/hr/thr/runs', data);
+export const getThrRun       = (id) => api.get(`/hr/thr/runs/${id}`);
+export const getThrLines     = (id, params) => api.get(`/hr/thr/runs/${id}/lines`, { params });
+export const deleteThrRun    = (id) => api.delete(`/hr/thr/runs/${id}`);
+export const closeThrRun     = (id) => api.post(`/hr/thr/runs/${id}/close`);
+export const markThrRunPaid  = (id) => api.post(`/hr/thr/runs/${id}/mark-paid`);
+export const reviewAllThrLines = (id) => api.post(`/hr/thr/runs/${id}/review-all`);
+export const regenerateThrLine = (id, employeeId) => api.post(`/hr/thr/runs/${id}/regenerate-line/${employeeId}`);
+export const reviewThrLine   = (lineId, data) => api.post(`/hr/thr/lines/${lineId}/review`, data);
+export const unreviewThrLine = (lineId) => api.post(`/hr/thr/lines/${lineId}/unreview`);
+export const downloadThrPayslip     = (lineId) => api.get(`/hr/thr/lines/${lineId}/payslip`, { responseType: 'blob' });
+export const downloadThrRunPayslips = (runId)  => api.get(`/hr/thr/runs/${runId}/payslips`, { responseType: 'blob' });
 
 // ── HR: Slip Gaji (Payslips) + Pengaturan HR ────────────────────────────────
 export const downloadPayslip        = (lineId)   => api.get(`/hr/payroll/lines/${lineId}/payslip`, { responseType: 'blob' });

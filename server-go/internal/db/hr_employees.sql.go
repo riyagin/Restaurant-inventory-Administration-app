@@ -132,7 +132,7 @@ SELECT
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
-    e.employment_type, e.contract_end_date,
+    e.employment_type, e.contract_end_date, e.permanent_since,
     e.created_at, e.updated_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
@@ -162,6 +162,7 @@ type GetEmployeeByIDRow struct {
 	Status            string             `json:"status"`
 	EmploymentType    string             `json:"employment_type"`
 	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
+	PermanentSince    pgtype.Date        `json:"permanent_since"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
@@ -191,10 +192,33 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmpl
 		&i.Status,
 		&i.EmploymentType,
 		&i.ContractEndDate,
+		&i.PermanentSince,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
+}
+
+const transitionEmployeeToPermanent = `-- name: TransitionEmployeeToPermanent :exec
+UPDATE employees
+SET employment_type = 'permanent',
+    permanent_since = $2,
+    contract_end_date = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+type TransitionEmployeeToPermanentParams struct {
+	ID             pgtype.UUID `json:"id"`
+	PermanentSince pgtype.Date `json:"permanent_since"`
+}
+
+// TransitionEmployeeToPermanent converts a contract (PKWT) employee to permanent
+// (PKWTT), stamping permanent_since (the THR tenure "day 0") and clearing the contract
+// end date.
+func (q *Queries) TransitionEmployeeToPermanent(ctx context.Context, arg *TransitionEmployeeToPermanentParams) error {
+	_, err := q.db.Exec(ctx, transitionEmployeeToPermanent, arg.ID, arg.PermanentSince)
+	return err
 }
 
 const listExpiringContracts = `-- name: ListExpiringContracts :many

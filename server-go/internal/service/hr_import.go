@@ -45,10 +45,18 @@ var HRImportFixedHeaders = []string{
 }
 
 // HRImportComponentValue is one wage component amount parsed for a row.
+// ComponentID is resolved once at parse time (from the unambiguous positional
+// column -> *db.WageComponent mapping) and carried through the persisted
+// batch payload, rather than being re-resolved by name at confirm time —
+// wage_components.name is only unique case-sensitively, so two components
+// differing only by case would otherwise collide under a case-insensitive
+// name lookup and get inserted as duplicate (wage_structure_id,
+// wage_component_id) rows.
 type HRImportComponentValue struct {
-	ComponentName string `json:"component_name"`
-	ComponentType string `json:"component_type"`
-	Amount        int64  `json:"amount"`
+	ComponentID   pgtype.UUID `json:"component_id"`
+	ComponentName string      `json:"component_name"`
+	ComponentType string      `json:"component_type"`
+	Amount        int64       `json:"amount"`
 }
 
 // HRImportRow is a single parsed + validated employee row in the preview.
@@ -72,6 +80,9 @@ type HRImportRow struct {
 	WorkingDaysPerMonth int32                    `json:"working_days_per_month"`
 	EffectiveDate       string                   `json:"effective_date"`
 	Components          []HRImportComponentValue `json:"components"`
+	Action              string                   `json:"action"` // create | update
+	ExistingEmployeeID  pgtype.UUID              `json:"-"`
+	WageChanged         bool                     `json:"wage_changed"`
 	Status              string                   `json:"status"` // ok | warning | error
 	Messages            []string                 `json:"messages"`
 }
@@ -87,15 +98,34 @@ type HRImportPreview struct {
 	OKCount       int           `json:"ok_count"`
 	WarningCount  int           `json:"warning_count"`
 	ErrorCount    int           `json:"error_count"`
+	CreateCount   int           `json:"create_count"`
+	UpdateCount   int           `json:"update_count"`
+}
+
+// ExistingEmployeeSnapshot is the current DB state for an employee matched by
+// employee_code during import — used both to detect whether a row's wage data
+// actually changed, and to preserve fields the import template doesn't carry
+// (status, employment_type, contract_end_date, user_id) across an update.
+type ExistingEmployeeSnapshot struct {
+	ID                 pgtype.UUID
+	EmploymentType     string
+	ContractEndDate    pgtype.Date
+	UserID             pgtype.UUID
+	Status             string
+	HasWage            bool
+	CurrentBaseSalary  int64
+	CurrentWorkingDays int32
+	CurrentEffDate     string           // YYYY-MM-DD, only meaningful if HasWage
+	CurrentComponents  map[string]int64 // lower(component name) -> amount
 }
 
 // HRImportRefData carries the DB-derived reference sets the validator needs.
 // All maps are keyed by lower-cased names so matching is case-insensitive.
 type HRImportRefData struct {
-	Positions          map[string]pgtype.UUID // lower(name) -> position id
-	Branches           map[string]pgtype.UUID // lower(name) -> branch id
-	ExistingCodes      map[string]bool        // existing employee_code (as stored)
-	ExistingNameDob    map[string]bool        // lower(full_name)|dob -> exists
+	Positions          map[string]pgtype.UUID               // lower(name) -> position id
+	Branches           map[string]pgtype.UUID               // lower(name) -> branch id
+	ExistingByCode     map[string]*ExistingEmployeeSnapshot // lower(employee_code) -> snapshot
+	ExistingNameDob    map[string]bool                      // lower(full_name)|dob -> exists
 	Components         map[string]*db.WageComponent
 	MaxEmployeeCodeSeq int32
 }
@@ -192,10 +222,13 @@ func ParseHRImportRows(filename string, headerRow []string, dataRows [][]string,
 	}
 
 	// Local copies/working sets so we never mutate the caller's maps.
-	seenCodes := map[string]bool{}
-	for code := range ref.ExistingCodes {
-		seenCodes[strings.ToLower(code)] = true
+	// takenCodes tracks every code (existing in DB or already claimed within
+	// this file) so auto-generated codes never collide with either.
+	takenCodes := map[string]bool{}
+	for code := range ref.ExistingByCode {
+		takenCodes[code] = true
 	}
+	usedInFile := map[string]bool{}
 	nextSeq := ref.MaxEmployeeCodeSeq
 
 	get := func(cells []string, idx int) string {
@@ -275,10 +308,12 @@ func ParseHRImportRows(filename string, headerRow []string, dataRows [][]string,
 			addErr("Format tanggal bergabung tidak valid (gunakan YYYY-MM-DD)")
 		}
 
+		effDateOK := false
 		if row.EffectiveDate == "" {
 			addErr("Tanggal berlaku gaji wajib diisi")
 		} else if d, ok := parseHRImportDate(row.EffectiveDate); ok {
 			row.EffectiveDate = d
+			effDateOK = true
 		} else {
 			addErr("Format tanggal berlaku tidak valid (gunakan YYYY-MM-DD)")
 		}
@@ -331,28 +366,60 @@ func ParseHRImportRows(filename string, headerRow []string, dataRows [][]string,
 				continue
 			}
 			row.Components = append(row.Components, HRImportComponentValue{
+				ComponentID:   comp.ID,
 				ComponentName: comp.Name,
 				ComponentType: comp.Type,
 				Amount:        v, // whole rupiah, stored as-is
 			})
 		}
 
-		// ── employee_code: blank => auto-generate; else dup check ──
+		// ── employee_code: blank => auto-generate (create); else update if it
+		// matches an existing employee, otherwise a new create ──
 		if row.EmployeeCode == "" {
 			nextSeq++
 			row.EmployeeCode = NextEmployeeCode(nextSeq - 1)
-			seenCodes[strings.ToLower(row.EmployeeCode)] = true
+			key := strings.ToLower(row.EmployeeCode)
+			takenCodes[key] = true
+			usedInFile[key] = true
+			row.Action = "create"
 		} else {
 			key := strings.ToLower(row.EmployeeCode)
-			if seenCodes[key] {
-				addErr(fmt.Sprintf("Kode karyawan \"%s\" sudah digunakan (di file atau di database)", row.EmployeeCode))
+			if usedInFile[key] {
+				addErr(fmt.Sprintf("Kode karyawan \"%s\" muncul lebih dari sekali di file", row.EmployeeCode))
 			} else {
-				seenCodes[key] = true
+				usedInFile[key] = true
+				takenCodes[key] = true
+				if existing, ok := ref.ExistingByCode[key]; ok {
+					row.Action = "update"
+					row.ExistingEmployeeID = existing.ID
+				} else {
+					row.Action = "create"
+				}
 			}
 		}
 
+		// ── Wage change detection (update rows only; create rows always get
+		// an initial wage structure) ──
+		if row.Action == "update" {
+			existing := ref.ExistingByCode[strings.ToLower(row.EmployeeCode)]
+			addWarn(fmt.Sprintf("Kode karyawan \"%s\" sudah ada — data karyawan akan diperbarui", row.EmployeeCode))
+			if existing != nil && wageDataChanged(existing, row) {
+				row.WageChanged = true
+				if effDateOK && existing.HasWage && row.EffectiveDate <= existing.CurrentEffDate {
+					addErr(fmt.Sprintf(
+						"Ada perubahan nominal gaji — tanggal berlaku (%s) harus setelah tanggal berlaku saat ini (%s)",
+						row.EffectiveDate, existing.CurrentEffDate))
+				} else {
+					addWarn("Struktur gaji akan diperbarui (versi baru)")
+				}
+			}
+		} else {
+			row.WageChanged = true
+		}
+
 		// ── Duplicate full_name + dob in DB => warning (still importable) ──
-		if row.FullName != "" && row.Dob != "" {
+		// Skipped for update rows: the match is expected to be the same person.
+		if row.Action != "update" && row.FullName != "" && row.Dob != "" {
 			ndKey := strings.ToLower(row.FullName) + "|" + row.Dob
 			if ref.ExistingNameDob[ndKey] {
 				addWarn(fmt.Sprintf("Karyawan dengan nama \"%s\" dan tanggal lahir sama sudah ada", row.FullName))
@@ -371,9 +438,39 @@ func ParseHRImportRows(filename string, headerRow []string, dataRows [][]string,
 		default:
 			preview.OKCount++
 		}
+		if preview.Rows[i].Action == "update" {
+			preview.UpdateCount++
+		} else {
+			preview.CreateCount++
+		}
 	}
 	preview.TotalRows = len(preview.Rows)
 	return preview
+}
+
+// wageDataChanged reports whether a row's base salary, working days, or
+// component amounts differ from the employee's current open wage structure.
+// An employee with no current wage structure always counts as changed.
+func wageDataChanged(existing *ExistingEmployeeSnapshot, row HRImportRow) bool {
+	if !existing.HasWage {
+		return true
+	}
+	if existing.CurrentBaseSalary != row.BaseSalary || existing.CurrentWorkingDays != row.WorkingDaysPerMonth {
+		return true
+	}
+	rowComps := make(map[string]int64, len(row.Components))
+	for _, c := range row.Components {
+		rowComps[strings.ToLower(c.ComponentName)] = c.Amount
+	}
+	if len(rowComps) != len(existing.CurrentComponents) {
+		return true
+	}
+	for name, amt := range rowComps {
+		if existing.CurrentComponents[name] != amt {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseHRImportExcel reads an uploaded .xlsx, locates the "Karyawan" sheet,
@@ -423,20 +520,21 @@ func ParseHRImportExcel(file io.Reader, filename string, components []*db.WageCo
 // HRImportConfirmResult summarizes a confirmed batch.
 type HRImportConfirmResult struct {
 	EmployeesCreated int `json:"employees_created"`
+	EmployeesUpdated int `json:"employees_updated"`
 }
 
-// ConfirmHRImport inserts every row of a previously-parsed preview within the
-// caller's transaction (qtx). It is all-or-nothing: the first failure returns
-// an error and the caller rolls back. For each row it creates the employee,
-// then an INITIAL wage structure + components via the prompt-02 wage service
-// (so daily_rate + versioning invariants hold). Amounts are stored as WHOLE
-// RUPIAH (see money convention note above).
+// ConfirmHRImport inserts/updates every row of a previously-parsed preview
+// within the caller's transaction (qtx). It is all-or-nothing: the first
+// failure returns an error and the caller rolls back. Rows whose
+// employee_code matched an existing employee (Action == "update") update the
+// employee master record instead of creating a new one; fields the template
+// doesn't carry (status, employment_type, contract_end_date, user_id) are
+// preserved from the existing record. A new wage structure version is only
+// created when the row's wage data actually differs from the employee's
+// current version (WageChanged), via the same CreateWageVersion service used
+// by the manual wage-entry API (so daily_rate + versioning invariants hold).
+// Amounts are stored as WHOLE RUPIAH (see money convention note above).
 func ConfirmHRImport(ctx context.Context, qtx *db.Queries, preview *HRImportPreview, ref HRImportRefData, createdBy pgtype.UUID) (*HRImportConfirmResult, error) {
-	componentByName := map[string]*db.WageComponent{}
-	for k, c := range ref.Components {
-		componentByName[strings.ToLower(k)] = c
-	}
-
 	res := &HRImportConfirmResult{}
 
 	for _, row := range preview.Rows {
@@ -461,40 +559,79 @@ func ConfirmHRImport(ctx context.Context, qtx *db.Queries, preview *HRImportPrev
 		if err != nil || !joinDate.Valid {
 			return nil, fmt.Errorf("baris %d: tanggal bergabung tidak valid", row.RowNumber)
 		}
+
+		var empID pgtype.UUID
+		if row.Action == "update" {
+			existing := ref.ExistingByCode[strings.ToLower(row.EmployeeCode)]
+			if existing == nil {
+				return nil, fmt.Errorf("baris %d: data karyawan \"%s\" tidak ditemukan untuk diperbarui", row.RowNumber, row.EmployeeCode)
+			}
+			empID = existing.ID
+			if _, err := qtx.UpdateEmployee(ctx, &db.UpdateEmployeeParams{
+				EmployeeCode:      row.EmployeeCode,
+				FullName:          row.FullName,
+				Dob:               dob,
+				JoinDate:          joinDate,
+				PositionID:        positionID,
+				BranchID:          branchID,
+				Phone:             textOrEmpty(row.Phone),
+				Email:             textOrEmpty(row.Email),
+				Address:           textOrEmpty(row.Address),
+				NationalID:        textOrEmpty(row.NationalID),
+				BankName:          textOrEmpty(row.BankName),
+				BankAccountNumber: textOrEmpty(row.BankAccountNumber),
+				BankAccountHolder: textOrEmpty(row.BankAccountHolder),
+				UserID:            existing.UserID,
+				Status:            existing.Status,
+				EmploymentType:    existing.EmploymentType,
+				ContractEndDate:   existing.ContractEndDate,
+				ID:                empID,
+			}); err != nil {
+				return nil, fmt.Errorf("baris %d: gagal memperbarui karyawan %s: %w", row.RowNumber, row.FullName, err)
+			}
+			res.EmployeesUpdated++
+		} else {
+			empID, err = qtx.CreateEmployee(ctx, &db.CreateEmployeeParams{
+				EmployeeCode:      row.EmployeeCode,
+				FullName:          row.FullName,
+				Dob:               dob,
+				JoinDate:          joinDate,
+				PositionID:        positionID,
+				BranchID:          branchID,
+				Phone:             textOrEmpty(row.Phone),
+				Email:             textOrEmpty(row.Email),
+				Address:           textOrEmpty(row.Address),
+				NationalID:        textOrEmpty(row.NationalID),
+				BankName:          textOrEmpty(row.BankName),
+				BankAccountNumber: textOrEmpty(row.BankAccountNumber),
+				BankAccountHolder: textOrEmpty(row.BankAccountHolder),
+				UserID:            pgtype.UUID{},
+				Status:            "active",
+				EmploymentType:    "permanent",
+				ContractEndDate:   pgtype.Date{},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("baris %d: gagal membuat karyawan %s: %w", row.RowNumber, row.FullName, err)
+			}
+			res.EmployeesCreated++
+		}
+
+		if !row.WageChanged {
+			continue
+		}
+
 		effDate, err := time.Parse("2006-01-02", row.EffectiveDate)
 		if err != nil {
 			return nil, fmt.Errorf("baris %d: tanggal berlaku tidak valid", row.RowNumber)
 		}
 
-		empID, err := qtx.CreateEmployee(ctx, &db.CreateEmployeeParams{
-			EmployeeCode:      row.EmployeeCode,
-			FullName:          row.FullName,
-			Dob:               dob,
-			JoinDate:          joinDate,
-			PositionID:        positionID,
-			BranchID:          branchID,
-			Phone:             textOrEmpty(row.Phone),
-			Email:             textOrEmpty(row.Email),
-			Address:           textOrEmpty(row.Address),
-			NationalID:        textOrEmpty(row.NationalID),
-			BankName:          textOrEmpty(row.BankName),
-			BankAccountNumber: textOrEmpty(row.BankAccountNumber),
-			BankAccountHolder: textOrEmpty(row.BankAccountHolder),
-			UserID:            pgtype.UUID{},
-			Status:            "active",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("baris %d: gagal membuat karyawan %s: %w", row.RowNumber, row.FullName, err)
-		}
-
 		var comps []WageComponentInput
 		for _, cv := range row.Components {
-			comp, ok := componentByName[strings.ToLower(cv.ComponentName)]
-			if !ok {
-				return nil, fmt.Errorf("baris %d: komponen \"%s\" tidak ditemukan", row.RowNumber, cv.ComponentName)
+			if !cv.ComponentID.Valid {
+				return nil, fmt.Errorf("baris %d: komponen \"%s\" tidak valid (unggah ulang file)", row.RowNumber, cv.ComponentName)
 			}
 			comps = append(comps, WageComponentInput{
-				ComponentID: comp.ID,
+				ComponentID: cv.ComponentID,
 				Amount:      cv.Amount, // whole rupiah, NO ×100
 			})
 		}
@@ -507,10 +644,8 @@ func ConfirmHRImport(ctx context.Context, qtx *db.Queries, preview *HRImportPrev
 			CreatedBy:     createdBy,
 			Components:    comps,
 		}); err != nil {
-			return nil, fmt.Errorf("baris %d: gagal membuat struktur gaji untuk %s: %w", row.RowNumber, row.FullName, err)
+			return nil, fmt.Errorf("baris %d: gagal menyimpan struktur gaji untuk %s: %w", row.RowNumber, row.FullName, err)
 		}
-
-		res.EmployeesCreated++
 	}
 
 	return res, nil

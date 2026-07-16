@@ -138,6 +138,8 @@ func main() {
 	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
+	thrHandler := handler.NewThrHandler(pool, queries)
+	thrHandler.SetUploadsDir(cfg.UploadsDir)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -328,6 +330,7 @@ func main() {
 			r.Use(appmiddleware.RequireAdminOrManager)
 			r.Post("/api/hr/employees", hrEmployeesHandler.Create)
 			r.Put("/api/hr/employees/{id}", hrEmployeesHandler.Update)
+			r.Post("/api/hr/employees/{id}/transition-permanent", hrEmployeesHandler.TransitionToPermanent)
 			r.Delete("/api/hr/employees/{id}", hrEmployeesHandler.Delete)
 			r.Post("/api/hr/employees/{id}/photo", hrEmployeesHandler.UploadPhoto)
 			r.Delete("/api/hr/employees/{id}/photo", hrEmployeesHandler.DeletePhoto)
@@ -354,6 +357,7 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
 			r.Get("/api/hr/import/template", hrImportHandler.Template)
+			r.Get("/api/hr/import/export", hrImportHandler.Export)
 			r.Post("/api/hr/import/parse", hrImportHandler.Parse)
 			r.Post("/api/hr/import/confirm", hrImportHandler.Confirm)
 		})
@@ -490,6 +494,22 @@ func main() {
 			// Payslips (slip gaji) — PDF single + ZIP batch. Reject open periods (409).
 			r.Get("/api/hr/payroll/lines/{id}/payslip", payslipHandler.DownloadPayslip)
 			r.Get("/api/hr/payroll/periods/{id}/payslips", payslipHandler.DownloadPeriodPayslips)
+
+			// THR (Tunjangan Hari Raya) — runs mirror payroll periods.
+			r.Get("/api/hr/thr/runs", thrHandler.ListRuns)
+			r.Post("/api/hr/thr/runs", thrHandler.CreateRun)
+			r.Get("/api/hr/thr/runs/{id}", thrHandler.GetRun)
+			r.Get("/api/hr/thr/runs/{id}/lines", thrHandler.ListLines)
+			r.Delete("/api/hr/thr/runs/{id}", thrHandler.DeleteRun)
+			r.Post("/api/hr/thr/runs/{id}/close", thrHandler.CloseRun)
+			r.Post("/api/hr/thr/runs/{id}/mark-paid", thrHandler.MarkPaid)
+			r.Post("/api/hr/thr/runs/{id}/review-all", thrHandler.ReviewAll)
+			r.Post("/api/hr/thr/runs/{id}/regenerate-line/{employeeId}", thrHandler.RegenerateLine)
+			r.Get("/api/hr/thr/lines/{id}/review", thrHandler.GetLineReview)
+			r.Post("/api/hr/thr/lines/{id}/review", thrHandler.ReviewLine)
+			r.Post("/api/hr/thr/lines/{id}/unreview", thrHandler.UnreviewLine)
+			r.Get("/api/hr/thr/lines/{id}/payslip", thrHandler.DownloadPayslip)
+			r.Get("/api/hr/thr/runs/{id}/payslips", thrHandler.DownloadRunPayslips)
 
 			// HR settings — read is admin/manager (header info needed to preview).
 			r.Get("/api/hr/settings", payslipHandler.GetSettings)

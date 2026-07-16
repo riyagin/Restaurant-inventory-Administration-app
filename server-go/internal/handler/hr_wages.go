@@ -321,10 +321,29 @@ func (h *HRWagesHandler) DeleteComponent(w http.ResponseWriter, r *http.Request)
 
 // ── Employee Wage Structures ─────────────────────────────────────────────────
 
-// wageStructureView is a wage structure plus its expanded components.
+// wageStructureView is a wage structure plus its expanded components. Thr carries the
+// computed THR (Tunjangan Hari Raya) entitlement — 1 month base salary prorated by
+// tenure — so it surfaces as a base part of the employee's wage structure. It is only
+// populated for the current open structure (nil in history rows).
 type wageStructureView struct {
 	*db.WageStructure
 	Components []*db.ListEmployeeWageComponentsRow `json:"components"`
+	Thr        *thrPreview                         `json:"thr,omitempty"`
+}
+
+// thrPreview is the computed THR entitlement shown on the wage structure, measured as
+// of AsOf (today). It mirrors service.ComputeThrEntitlement so the figure matches what
+// a THR run generated today would pay.
+type thrPreview struct {
+	MonthsWorked int32   `json:"months_worked"`
+	Ratio        float64 `json:"ratio"`
+	Amount       int64   `json:"amount"`
+	AsOf         string  `json:"as_of"`
+	// TenureSince is the THR tenure "day 0" used for the calculation (permanent-status
+	// date for transitioned employees, otherwise the join date). Transitioned is true
+	// when it comes from permanent_since rather than the join date.
+	TenureSince  string `json:"tenure_since"`
+	Transitioned bool   `json:"transitioned"`
 }
 
 func (h *HRWagesHandler) loadComponents(ctx context.Context, structureID pgtype.UUID) ([]*db.ListEmployeeWageComponentsRow, error) {
@@ -364,7 +383,29 @@ func (h *HRWagesHandler) GetCurrentWage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	respondJSON(w, http.StatusOK, wageStructureView{WageStructure: ws, Components: comps})
+	respondJSON(w, http.StatusOK, wageStructureView{WageStructure: ws, Components: comps, Thr: h.thrForStructure(ctx, empID, ws)})
+}
+
+// thrForStructure computes the current THR entitlement for the given open wage
+// structure, measured as of today. Returns nil when the employee's join date can't be
+// resolved, or when the employee is a contract (PKWT) worker (not THR-eligible), so the
+// wage view simply omits the THR line rather than showing an amount they won't receive.
+func (h *HRWagesHandler) thrForStructure(ctx context.Context, empID pgtype.UUID, ws *db.WageStructure) *thrPreview {
+	emp, err := h.queries.GetEmployeeByID(ctx, empID)
+	if err != nil || !emp.JoinDate.Valid || emp.EmploymentType == service.EmploymentTypeContract {
+		return nil
+	}
+	now := time.Now()
+	start := service.ThrTenureStart(emp.JoinDate, emp.PermanentSince)
+	ent := service.ComputeThrEntitlement(ws.BaseSalary, start, now)
+	return &thrPreview{
+		MonthsWorked: ent.MonthsWorked,
+		Ratio:        ent.Ratio,
+		Amount:       ent.Amount,
+		AsOf:         now.Format("2006-01-02"),
+		TenureSince:  start.Format("2006-01-02"),
+		Transitioned: emp.PermanentSince.Valid,
+	}
 }
 
 // GetWageHistory — GET /api/hr/employees/:id/wage/history
