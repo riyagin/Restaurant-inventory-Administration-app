@@ -39,6 +39,13 @@ Thumbs.db
 *.sln
 *.sw?
 
+# Claude Code skills (installed per-developer via `npx impeccable skills install`)
+.claude/skills/
+
+# Excel files (local data dumps / exports — not source)
+*.xls
+*.xlsx
+
 # Local-only assets (per-developer)
 client/public/favicon.local.*
 

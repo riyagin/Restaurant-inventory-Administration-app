@@ -245,7 +245,8 @@ function StockFlowCard({ branchId }) {
       )}
 
       {/* range controls — sit directly above the chart */}
-      <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '0.75rem', marginBottom: '0.75rem' }}>
+      <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '0.75rem', marginBottom: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.75rem 1rem', alignItems: 'center', justifyContent: 'space-between' }}>
+        {/* preset ranges */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
           {QUICK_RANGES.map(opt => (
             <button
@@ -257,9 +258,10 @@ function StockFlowCard({ branchId }) {
               {opt.label}
             </button>
           ))}
+        </div>
 
-          <span style={{ color: '#ddd', margin: '0 0.15rem' }}>|</span>
-
+        {/* custom range — stays together as one unit when it wraps */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
           <input
             type="date"
             value={draft.start}
@@ -308,7 +310,7 @@ const tileStyle = (bg, color) => ({
 });
 const tileLabelStyle = { fontSize: '0.75rem', color: '#666', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.35rem' };
 const tileValueStyle  = { fontSize: '1.1rem', fontWeight: 700, color: '#1a1a2e' };
-const dateInputStyle  = { fontSize: '0.8rem', padding: '0.25rem 0.4rem', borderRadius: 5, border: '1px solid #ddd' };
+const dateInputStyle  = { fontSize: '0.82rem', padding: '0.4rem 0.5rem', borderRadius: 6, border: '1px solid #ddd', background: '#fff', color: '#223' };
 
 // ─── daily sales card ─────────────────────────────────────────────────────────
 function DailySalesCard() {
