@@ -162,8 +162,26 @@ func AbsenceGraceDays(ctx context.Context, q *db.Queries) int {
 // absent_no_leave violation once the employee already has `graceDays` earlier
 // absent days that month.
 func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceRecord, graceDays int) error {
-	// late
-	if rec.IsLate && rec.LateMinutes > 0 {
+	// half_day — a manual correction reclassifies a very-late arrival as a partial
+	// day. It is evaluated by its own 'half_day' policy INSTEAD of the late /
+	// early_leave rules (those are skipped below), so the day is not penalized
+	// twice for the same lateness. First active half_day policy applies (no
+	// threshold), like missing_checkout.
+	if rec.IsHalfDay {
+		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "half_day")
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			p := rows[0]
+			if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+				return err
+			}
+		}
+	}
+
+	// late (skipped for half-day records — replaced by the half_day rule above)
+	if !rec.IsHalfDay && rec.IsLate && rec.LateMinutes > 0 {
 		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "late")
 		if err != nil {
 			return err
@@ -176,8 +194,8 @@ func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceReco
 		}
 	}
 
-	// early_leave
-	if rec.IsEarlyLeave && rec.EarlyLeaveMinutes > 0 {
+	// early_leave (skipped for half-day records)
+	if !rec.IsHalfDay && rec.IsEarlyLeave && rec.EarlyLeaveMinutes > 0 {
 		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "early_leave")
 		if err != nil {
 			return err

@@ -370,6 +370,9 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAttendanceAccess)
 			r.Put("/api/hr/attendance/{id}", attendanceHandler.Update)
+			// Half-day correction (manual reclassification, no approval).
+			r.Post("/api/hr/attendance/{id}/half-day", attendanceHandler.SetHalfDay)
+			r.Delete("/api/hr/attendance/{id}/half-day", attendanceHandler.ClearHalfDay)
 		})
 		// Attendance configuration & batch operations require admin/manager.
 		r.Group(func(r chi.Router) {
@@ -524,6 +527,7 @@ func main() {
 
 		// Reports & Stats — all authenticated
 		r.Get("/api/reports/financial", reportsHandler.Financial)
+		r.Get("/api/reports/cash-summary", reportsHandler.CashSummary)
 		r.Get("/api/reports/daily", reportsHandler.Daily)
 		r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
 		r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)

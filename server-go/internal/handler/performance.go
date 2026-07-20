@@ -29,7 +29,7 @@ func NewPerformanceHandler(pool *pgxpool.Pool, queries *db.Queries) *Performance
 
 func validRuleType(t string) bool {
 	switch t {
-	case "late", "early_leave", "missing_checkout", "absent_no_leave", "manual":
+	case "late", "early_leave", "missing_checkout", "absent_no_leave", "half_day", "manual":
 		return true
 	}
 	return false

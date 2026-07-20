@@ -31,6 +31,7 @@ import Productions from './pages/Productions';
 import Enumerations from './pages/Enumerations';
 import SalesImport from './pages/SalesImport';
 import FinancialReport from './pages/FinancialReport';
+import FinancialStatement from './pages/FinancialStatement';
 import AccountAdjustments from './pages/AccountAdjustments';
 import InvoiceTemplates from './pages/InvoiceTemplates';
 import DailyReport from './pages/DailyReport';
@@ -45,6 +46,7 @@ import HRImport from './pages/hr/HRImport';
 import AttendanceDashboard from './pages/hr/AttendanceDashboard';
 import FingerprintImport from './pages/hr/FingerprintImport';
 import AttendanceSettings from './pages/hr/AttendanceSettings';
+import AttendanceCorrections from './pages/hr/AttendanceCorrections';
 import PerformanceDashboard from './pages/hr/PerformanceDashboard';
 import PerformancePolicies from './pages/hr/PerformancePolicies';
 import Requests from './pages/hr/Requests';
@@ -193,6 +195,7 @@ function Nav() {
         {(isAdminOrManager || isStaff) && (
           <NavDropdown label="HR" paths={['/hr']}>
             {menuLink('/hr/attendance', 'Absensi')}
+            {isAdminOrManager && menuLink('/hr/attendance/corrections', 'Koreksi Kehadiran')}
             {isAdminOrManager && menuLink('/hr/performance', 'Evaluasi')}
             {isAdminOrManager && menuLink('/hr/requests', 'Pengajuan')}
             {isAdminOrManager && menuLink('/hr/approvals', 'Persetujuan')}
@@ -207,6 +210,7 @@ function Nav() {
         <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
           {menuLink('/reports/daily', 'Laporan Harian')}
           {menuLink('/reports/financial', 'Laporan Keuangan')}
+          {menuLink('/reports/statement', 'Dokumen Laporan Keuangan')}
           {menuLink('/expense-report', 'Laporan Pengeluaran')}
           {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
         </NavDropdown>
@@ -281,6 +285,7 @@ function Nav() {
           <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
             <Link to="/reports/daily" className={isActive('/reports/daily') ? 'active' : ''}>Laporan Harian</Link>
             <Link to="/reports/financial" className={isActive('/reports/financial') ? 'active' : ''}>Laporan Keuangan</Link>
+            <Link to="/reports/statement" className={isActive('/reports/statement') ? 'active' : ''}>Dokumen Laporan Keuangan</Link>
             <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
             <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
           </MobileSection>
@@ -345,6 +350,7 @@ export default function App() {
                 <Route path="/expense-report" element={<ExpenseReport />} />
                 <Route path="/reports/inventory-value" element={<InventoryValueReport />} />
                 <Route path="/reports/financial" element={<FinancialReport />} />
+                <Route path="/reports/statement" element={<FinancialStatement />} />
                 <Route path="/reports/daily" element={<DailyReport />} />
                 <Route path="/account-adjustments" element={<AccountAdjustments />} />
                 <Route path="/transfers" element={<StockTransfers />} />
@@ -373,6 +379,7 @@ export default function App() {
                 <Route path="/hr/positions" element={<RequireManagerOrAdmin><Positions /></RequireManagerOrAdmin>} />
                 <Route path="/hr/wage-components" element={<RequireManagerOrAdmin><WageComponents /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance" element={<AttendanceDashboard />} />
+                <Route path="/hr/attendance/corrections" element={<RequireManagerOrAdmin><AttendanceCorrections /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance/import" element={<RequireManagerOrAdmin><FingerprintImport /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />

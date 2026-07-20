@@ -376,9 +376,18 @@ func ParseHRImportRows(filename string, headerRow []string, dataRows [][]string,
 		// ── employee_code: blank => auto-generate (create); else update if it
 		// matches an existing employee, otherwise a new create ──
 		if row.EmployeeCode == "" {
-			nextSeq++
-			row.EmployeeCode = NextEmployeeCode(nextSeq - 1)
-			key := strings.ToLower(row.EmployeeCode)
+			// Skip past any sequence number already claimed — by the DB, or by
+			// an earlier row in this same file (auto-generated or manually
+			// typed) — so a blank row never silently collides with one.
+			var key string
+			for {
+				nextSeq++
+				row.EmployeeCode = NextEmployeeCode(nextSeq - 1)
+				key = strings.ToLower(row.EmployeeCode)
+				if !takenCodes[key] {
+					break
+				}
+			}
 			takenCodes[key] = true
 			usedInFile[key] = true
 			row.Action = "create"

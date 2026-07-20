@@ -33,6 +33,13 @@ type AttendanceState struct {
 	IsEarlyLeave      bool
 	EarlyLeaveMinutes int
 	IsMissingCheckout bool
+
+	// Half-day correction: a manager reclassified this day as a partial day
+	// (arrival past the max late threshold). HalfDayLostMinutes is the wall-clock
+	// gap between the scheduled work start and the actual entry — the lost working
+	// time that drives the payroll wage deduction.
+	IsHalfDay          bool
+	HalfDayLostMinutes int
 }
 
 // minutesSinceMidnight returns the wall-clock minute offset of t within its day.
@@ -100,6 +107,22 @@ func ComputeOvertimeMinutes(checkOut *time.Time, sched Schedule) int {
 		return 0
 	}
 	return outMin - sched.WorkEndMinutes
+}
+
+// ComputeLostMinutes returns the wall-clock minutes between a branch's scheduled
+// work start and an actual check-in — the "lost working time" of a half-day
+// correction (0 when there's no check-in or the person arrived at/before start).
+// Mirrors ComputeOvertimeMinutes but at the start of the day; used to seed the
+// payroll half-day wage deduction from the corrected entry time.
+func ComputeLostMinutes(checkIn *time.Time, sched Schedule) int {
+	if checkIn == nil {
+		return 0
+	}
+	inMin := minutesSinceMidnight(*checkIn)
+	if inMin <= sched.WorkStartMinutes {
+		return 0
+	}
+	return inMin - sched.WorkStartMinutes
 }
 
 const dedupWindow = 5 * time.Minute

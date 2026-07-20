@@ -10,6 +10,7 @@ const RULE_LABELS = {
   early_leave: 'Pulang Awal',
   missing_checkout: 'Tidak Absen Pulang',
   absent_no_leave: 'Absen Tanpa Cuti',
+  half_day: 'Setengah Hari',
   manual: 'Manual',
 };
 
@@ -21,6 +22,7 @@ const SEED_EXAMPLES = [
   { name: 'Pulang lebih awal', rule_type: 'early_leave', threshold_minutes: 30, points: 2, max_occurrences_per_month: null },
   { name: 'Tidak absen pulang', rule_type: 'missing_checkout', threshold_minutes: null, points: 1, max_occurrences_per_month: null },
   { name: 'Absen tanpa cuti', rule_type: 'absent_no_leave', threshold_minutes: null, points: 10, max_occurrences_per_month: null },
+  { name: 'Setengah hari', rule_type: 'half_day', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
 ];
 
 const emptyForm = { name: '', rule_type: 'late', threshold_minutes: '', points: 2, max_occurrences_per_month: '', is_active: true };

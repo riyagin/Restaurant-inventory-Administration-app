@@ -100,7 +100,8 @@ WHERE employee_id = $1 AND date = $2;
 -- name: GetAttendanceRecordByID :one
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note
+       is_early_leave, early_leave_minutes, is_missing_checkout, note,
+       is_half_day, half_day_lost_minutes
 FROM attendance_records
 WHERE id = $1;
 
@@ -133,11 +134,14 @@ UPDATE attendance_records SET
     is_early_leave = $10,
     early_leave_minutes = $11,
     is_missing_checkout = $12,
-    note = $13
-WHERE id = $14
+    note = $13,
+    is_half_day = $14,
+    half_day_lost_minutes = $15
+WHERE id = $16
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
-          is_early_leave, early_leave_minutes, is_missing_checkout, note;
+          is_early_leave, early_leave_minutes, is_missing_checkout, note,
+          is_half_day, half_day_lost_minutes;
 
 -- name: InsertAbsentRecord :exec
 INSERT INTO attendance_records (id, employee_id, date, status)

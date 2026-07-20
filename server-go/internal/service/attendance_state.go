@@ -17,9 +17,11 @@ func StateFromRecord(rec *db.AttendanceRecord) *AttendanceState {
 		CheckOutSource:    textVal(rec.CheckOutSource),
 		IsLate:            rec.IsLate,
 		LateMinutes:       int(rec.LateMinutes),
-		IsEarlyLeave:      rec.IsEarlyLeave,
-		EarlyLeaveMinutes: int(rec.EarlyLeaveMinutes),
-		IsMissingCheckout: rec.IsMissingCheckout,
+		IsEarlyLeave:       rec.IsEarlyLeave,
+		EarlyLeaveMinutes:  int(rec.EarlyLeaveMinutes),
+		IsMissingCheckout:  rec.IsMissingCheckout,
+		IsHalfDay:          rec.IsHalfDay,
+		HalfDayLostMinutes: int(rec.HalfDayLostMinutes),
 	}
 	if rec.CheckIn.Valid {
 		t := rec.CheckIn.Time
@@ -86,6 +88,8 @@ func FillUpdateParams(p *db.UpdateAttendanceRecordParams, s *AttendanceState) {
 	p.IsEarlyLeave = s.IsEarlyLeave
 	p.EarlyLeaveMinutes = int32(s.EarlyLeaveMinutes)
 	p.IsMissingCheckout = s.IsMissingCheckout
+	p.IsHalfDay = s.IsHalfDay
+	p.HalfDayLostMinutes = int32(s.HalfDayLostMinutes)
 }
 
 // DayIsOver reports whether the work day for `date` has ended relative to `now`.

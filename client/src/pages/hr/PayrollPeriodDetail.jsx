@@ -98,7 +98,7 @@ export default function PayrollPeriodDetail() {
 
   const totalGross = lines.reduce((a, l) => a + numVal(l.gross_pay), 0);
   const totalNet = lines.reduce((a, l) => a + numVal(l.net_pay), 0);
-  const totalDeductions = lines.reduce((a, l) => a + numVal(l.component_deduction_total) + numVal(l.kasbon_deduction) + numVal(l.unpaid_leave_deduction), 0);
+  const totalDeductions = lines.reduce((a, l) => a + numVal(l.component_deduction_total) + numVal(l.kasbon_deduction) + numVal(l.unpaid_leave_deduction) + numVal(l.half_day_deduction), 0);
 
   const reviewedCount = summary?.reviewed_count ?? lines.filter((l) => l.reviewed).length;
   const lineCount = summary?.line_count ?? lines.length;
@@ -462,7 +462,7 @@ function calcAmounts(line, mult, overtimeDays, overtimeHours, holidayDays, compo
   const allowTotal = components.filter(c => c.type === 'allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const bonusTotal = components.filter(c => c.type === 'bonus').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const gross = Number(line.base_salary) + allowTotal + bonusTotal + overtimeAmt + overtimeHourlyAmt + holidayAmt;
-  const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction);
+  const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction) - Number(line.half_day_deduction || 0);
   return { overtimeAmt, overtimeHourlyAmt, holidayAmt, gross, net };
 }
 
@@ -724,6 +724,12 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 <span>Gaji Bruto</span>
                 <strong>{fmtIDR(live ? live.gross : line.gross_pay)}</strong>
               </div>
+              {numVal(line.half_day_deduction) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, color: '#c5221f', fontSize: 12 }}>
+                  <span>Potongan Setengah Hari ({Number(line.half_day_hours || 0).toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam)</span>
+                  <span>−{fmtIDR(line.half_day_deduction)}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
                 <span>Gaji Bersih</span>
                 <strong style={{ color: '#1e7e34', fontSize: 15 }}>{fmtIDR(live ? live.net : line.net_pay)}</strong>

@@ -64,6 +64,8 @@ export default function Employees() {
   const [status, setStatus]       = useState('');
   const [employmentType, setEmploymentType] = useState('');
   const [page, setPage]           = useState(1);
+  const [sort, setSort]           = useState('name'); // name | join_date | code
+  const [dir, setDir]             = useState('asc');   // asc | desc
   const limit = 25;
 
   const [alerts, setAlerts] = useState([]);
@@ -74,7 +76,7 @@ export default function Employees() {
 
   const load = () => {
     setLoading(true);
-    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, page, limit })
+    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, sort, dir, page, limit })
       .then(r => {
         setRows(r.data?.data || []);
         setTotal(r.data?.total || 0);
@@ -89,9 +91,33 @@ export default function Employees() {
     getContractAlerts().then(r => setAlerts(r.data?.data || [])).catch(() => setAlerts([]));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, page]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, sort, dir, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  // Toggle sort: click a column to sort by it; click again to flip direction.
+  const toggleSort = (col) => {
+    setPage(1);
+    if (sort === col) {
+      setDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSort(col);
+      setDir('asc');
+    }
+  };
+
+  const SortHeader = ({ col, children }) => (
+    <th
+      onClick={() => toggleSort(col)}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      title="Klik untuk mengurutkan"
+    >
+      {children}
+      <span style={{ color: sort === col ? '#1967d2' : '#c3c8d2', marginLeft: 4 }}>
+        {sort === col ? (dir === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </th>
+  );
 
   return (
     <>
@@ -182,12 +208,12 @@ export default function Employees() {
           <thead>
             <tr>
               <th>Foto</th>
-              <th>Kode</th>
-              <th>Nama</th>
+              <SortHeader col="code">Kode</SortHeader>
+              <SortHeader col="name">Nama</SortHeader>
               <th>Jabatan</th>
               <th>Cabang</th>
               <th>Tipe</th>
-              <th>Tgl Bergabung</th>
+              <SortHeader col="join_date">Tgl Bergabung</SortHeader>
               <th>Status</th>
             </tr>
           </thead>

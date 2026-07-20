@@ -209,6 +209,7 @@ export const getExpenseReport = (params) => api.get('/expense-report', { params 
 export const getInventoryValueReport = (params) => api.get('/reports/inventory-value', { params });
 export const getExpenseSummaryReport  = (params) => api.get('/reports/expense-summary', { params });
 export const getFinancialReport       = (params)  => api.get('/reports/financial', { params });
+export const getCashSummaryReport     = (params)  => api.get('/reports/cash-summary', { params });
 
 export const getDailyReport           = (params) => api.get('/reports/daily', { params });
 export const getAccountAdjustments    = (params) => api.get('/account-adjustments', { params });
@@ -259,6 +260,10 @@ export const confirmHrImport           = (data) => api.post('/hr/import/confirm'
 export const getAttendance        = (params) => api.get('/hr/attendance', { params });
 export const updateAttendance     = (id, data) => api.put(`/hr/attendance/${id}`, data);
 export const reconcileAttendance  = (date) => api.post('/hr/attendance/reconcile', null, { params: { date } });
+
+// Half-day corrections (manual reclassification, no approval)
+export const setAttendanceHalfDay   = (id, data) => api.post(`/hr/attendance/${id}/half-day`, data);
+export const clearAttendanceHalfDay = (id) => api.delete(`/hr/attendance/${id}/half-day`);
 
 export const parseFingerprintImport   = (formData) => api.post('/hr/attendance/fingerprint-import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const confirmFingerprintImport = (formData) => api.post('/hr/attendance/fingerprint-import/confirm', formData, { headers: { 'Content-Type': 'multipart/form-data' } });

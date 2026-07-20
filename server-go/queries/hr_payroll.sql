@@ -39,7 +39,7 @@ ORDER BY p.period_month DESC;
 SELECT
     COALESCE(SUM(l.gross_pay), 0)::bigint AS total_gross,
     COALESCE(SUM(l.net_pay), 0)::bigint AS total_net,
-    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction), 0)::bigint AS total_deductions,
+    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction + l.half_day_deduction), 0)::bigint AS total_deductions,
     COUNT(l.id)::int AS line_count,
     COUNT(l.id) FILTER (WHERE l.reviewed)::int AS reviewed_count
 FROM payroll_lines l
@@ -69,7 +69,8 @@ INSERT INTO payroll_lines (
     overtime_amount, public_holiday_amount, allowance_total, bonus_total,
     component_deduction_total, kasbon_deduction, unpaid_leave_days,
     unpaid_leave_deduction, gross_pay, net_pay, performance_score,
-    overtime_hours, overtime_hourly_rate, overtime_hourly_amount
+    overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
+    half_day_hours, half_day_deduction
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3,
@@ -77,14 +78,16 @@ VALUES (
     $8, $9, $10, $11,
     $12, $13, $14,
     $15, $16, $17, $18,
-    $19, $20, $21
+    $19, $20, $21,
+    $22, $23
 )
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
+          half_day_hours, half_day_deduction;
 
 -- name: GetPayrollLineByID :one
 SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
@@ -92,7 +95,8 @@ SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily
        allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
        performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
+       overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
+       half_day_hours, half_day_deduction
 FROM payroll_lines
 WHERE id = $1;
 
@@ -114,6 +118,7 @@ SELECT
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay,
     l.performance_score, l.reviewed, l.reviewed_by, l.reviewed_at, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
+    l.half_day_hours, l.half_day_deduction,
     e.full_name AS employee_name, e.employee_code,
     e.position_id, pos.name AS position_name,
     e.branch_id, b.name AS branch_name
@@ -157,7 +162,8 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
+          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
+          half_day_hours, half_day_deduction;
 
 -- name: UnreviewPayrollLine :one
 UPDATE payroll_lines
@@ -213,6 +219,13 @@ WHERE employee_id = $1
   AND date >= $2 AND date <= $3
   AND status = 'present';
 
+-- name: SumHalfDayLostMinutes :one
+-- Total lost minutes across an employee's half-day corrections in a date range,
+-- used to derive the payroll half-day wage deduction (lost hours × hourly rate).
+SELECT COALESCE(SUM(half_day_lost_minutes), 0)::bigint AS total
+FROM attendance_records
+WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND is_half_day = true;
+
 -- name: ListHolidaysWorked :many
 SELECT ph.id, ph.date, ph.name
 FROM attendance_records ar
@@ -251,6 +264,7 @@ SELECT
     l.allowance_total, l.bonus_total, l.component_deduction_total, l.kasbon_deduction,
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
+    l.half_day_hours, l.half_day_deduction,
     e.full_name AS employee_name, e.employee_code, e.join_date,
     pos.name AS position_name,
     b.name   AS branch_name,

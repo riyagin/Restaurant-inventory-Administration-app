@@ -325,7 +325,8 @@ func (q *Queries) ListActivePerformancePoliciesByRule(ctx context.Context, ruleT
 const listAttendanceRecordsForDate = `-- name: ListAttendanceRecordsForDate :many
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note
+       is_early_leave, early_leave_minutes, is_missing_checkout, note,
+       is_half_day, half_day_lost_minutes
 FROM attendance_records
 WHERE date = $1
 `
@@ -356,6 +357,8 @@ func (q *Queries) ListAttendanceRecordsForDate(ctx context.Context, date pgtype.
 			&i.EarlyLeaveMinutes,
 			&i.IsMissingCheckout,
 			&i.Note,
+			&i.IsHalfDay,
+			&i.HalfDayLostMinutes,
 		); err != nil {
 			return nil, err
 		}

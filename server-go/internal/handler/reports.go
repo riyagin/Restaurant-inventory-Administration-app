@@ -285,6 +285,116 @@ FROM combined GROUP BY account_id`
 	respondJSON(w, http.StatusOK, result)
 }
 
+// CashSummary — GET /api/reports/cash-summary
+// Params: start_date (or from), end_date (or to) — both required.
+// Returns a simple cash-in / cash-out summary for the period, derived from the
+// same operating sources the financial report uses (POS revenue, manual sales,
+// purchase & expense invoices) plus payroll disbursements and kasbon payouts.
+func (h *ReportsHandler) CashSummary(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	startDate := firstNonEmpty(q.Get("start_date"), q.Get("from"))
+	endDate := firstNonEmpty(q.Get("end_date"), q.Get("to"))
+	if startDate == "" || endDate == "" {
+		respondError(w, http.StatusBadRequest, "parameter 'start_date' dan 'end_date' diperlukan (YYYY-MM-DD)")
+		return
+	}
+	ctx := r.Context()
+
+	scalar := func(sql string) (int64, error) {
+		var v int64
+		err := h.pool.QueryRow(ctx, sql, startDate, endDate).Scan(&v)
+		return v, err
+	}
+
+	type line struct {
+		Label  string `json:"label"`
+		Amount int64  `json:"amount"`
+	}
+
+	posRevenue, err := scalar(`
+		SELECT COALESCE(SUM(pil.amount), 0)::BIGINT
+		FROM pos_import_lines pil
+		JOIN pos_imports pi ON pi.id = pil.import_id
+		WHERE pil.line_type = 'revenue' AND pi.date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung pendapatan POS")
+		return
+	}
+	manualSales, err := scalar(`
+		SELECT COALESCE(SUM(amount), 0)::BIGINT
+		FROM sales WHERE date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung penjualan manual")
+		return
+	}
+	purchases, err := scalar(`
+		SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT
+		FROM invoices inv
+		JOIN invoice_items ii ON ii.invoice_id = inv.id
+		WHERE inv.invoice_type = 'purchase' AND inv.date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung pembelian")
+		return
+	}
+	expenses, err := scalar(`
+		SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT
+		FROM invoices inv
+		JOIN invoice_items ii ON ii.invoice_id = inv.id
+		WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung beban operasional")
+		return
+	}
+	payroll, err := scalar(`
+		SELECT COALESCE(SUM(pl.net_pay), 0)::BIGINT
+		FROM payroll_lines pl
+		JOIN payroll_periods pp ON pp.id = pl.payroll_period_id
+		WHERE pp.status = 'paid' AND pp.paid_at::date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung penggajian")
+		return
+	}
+	kasbon, err := scalar(`
+		SELECT COALESCE(SUM(amount), 0)::BIGINT
+		FROM kasbons
+		WHERE status IN ('processed', 'resolved')
+		  AND processed_at IS NOT NULL
+		  AND processed_at::date BETWEEN $1 AND $2`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung kasbon")
+		return
+	}
+
+	inflows := []line{
+		{Label: "Penjualan POS", Amount: posRevenue},
+		{Label: "Penjualan Manual", Amount: manualSales},
+	}
+	outflows := []line{
+		{Label: "Pembelian Persediaan", Amount: purchases},
+		{Label: "Beban Operasional", Amount: expenses},
+		{Label: "Penggajian", Amount: payroll},
+		{Label: "Pencairan Kasbon", Amount: kasbon},
+	}
+
+	var totalIn, totalOut int64
+	for _, l := range inflows {
+		totalIn += l.Amount
+	}
+	for _, l := range outflows {
+		totalOut += l.Amount
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"start_date":    startDate,
+		"end_date":      endDate,
+		"inflows":       inflows,
+		"outflows":      outflows,
+		"total_inflow":  totalIn,
+		"total_outflow": totalOut,
+		"net_cash_flow": totalIn - totalOut,
+	})
+}
+
 // Daily — GET /api/reports/daily
 // Params: date (required), branch_id (optional)
 func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {

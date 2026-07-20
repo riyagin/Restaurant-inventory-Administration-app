@@ -112,7 +112,8 @@ ORDER BY v.date, v.created_at;
 -- name: ListAttendanceRecordsForDate :many
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note
+       is_early_leave, early_leave_minutes, is_missing_checkout, note,
+       is_half_day, half_day_lost_minutes
 FROM attendance_records
 WHERE date = $1;
 

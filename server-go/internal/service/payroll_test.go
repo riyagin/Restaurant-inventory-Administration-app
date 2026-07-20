@@ -91,6 +91,21 @@ func TestCalcLineNetWithAllDeductions(t *testing.T) {
 	}
 }
 
+func TestCalcLineHalfDayDeduction(t *testing.T) {
+	r := CalcLine(CalcLineInput{
+		BaseSalary:       4_000_000,
+		DailyRate:        160_000,
+		HalfDayDeduction: 60_000, // e.g. 3 lost hours × 20000/hour
+	})
+	// gross = base only = 4_000_000; net = gross − half-day = 3_940_000
+	if r.GrossPay != 4_000_000 {
+		t.Errorf("gross = %d, want 4000000", r.GrossPay)
+	}
+	if r.NetPay != 3_940_000 {
+		t.Errorf("net = %d, want 3940000", r.NetPay)
+	}
+}
+
 func TestAllLinesReviewed(t *testing.T) {
 	if AllLinesReviewed(0, 0) {
 		t.Error("empty period should not be considered fully reviewed")

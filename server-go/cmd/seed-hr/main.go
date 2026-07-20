@@ -210,6 +210,19 @@ func main() {
 		fmt.Printf("Performance policy Keterlambatan: %s\n", policyID)
 	}
 
+	// Half-day policy: applied (instead of the late rule) when a manager marks a
+	// very-late arrival as a half day on the attendance corrections page.
+	_, err = pool.Exec(ctx,
+		`INSERT INTO performance_policies (name, rule_type, threshold_minutes, points, is_active)
+		 SELECT 'Setengah Hari', 'half_day', NULL, 5, true
+		 WHERE NOT EXISTS (SELECT 1 FROM performance_policies WHERE rule_type = 'half_day')`,
+	)
+	if err != nil {
+		fmt.Printf("Half-day policy seed skipped: %v\n", err)
+	} else {
+		fmt.Printf("Performance policy Setengah Hari (half_day) ensured\n")
+	}
+
 	// ── Summary ───────────────────────────────────────────────────────────────
 	var empCount int64
 	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM employees`).Scan(&empCount)

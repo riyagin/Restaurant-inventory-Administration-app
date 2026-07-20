@@ -161,6 +161,12 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 			Amount: line.UnpaidLeaveDeduction,
 		})
 	}
+	if line.HalfDayDeduction != 0 {
+		deductions = append(deductions, service.PayslipLineItem{
+			Label:  fmt.Sprintf("Setengah Hari (%s jam)", trimDays(line.HalfDayHours)),
+			Amount: line.HalfDayDeduction,
+		})
+	}
 
 	totalDeduction := line.GrossPay - line.NetPay
 

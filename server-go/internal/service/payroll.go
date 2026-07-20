@@ -141,6 +141,7 @@ type CalcLineInput struct {
 	ComponentDeductionTotal int64
 	KasbonDeduction         int64
 	UnpaidLeaveDeduction    int64
+	HalfDayDeduction        int64
 }
 
 // CalcLineResult holds the derived amounts for a payroll line.
@@ -170,7 +171,7 @@ func CalcLine(in CalcLineInput) CalcLineResult {
 	holiday := roundHalfUp(in.PublicHolidayDays * float64(in.DailyRate) * in.HolidayMultiplier)
 
 	gross := in.BaseSalary + in.AllowanceTotal + in.BonusTotal + overtime + overtimeHourly + holiday
-	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction
+	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction - in.HalfDayDeduction
 
 	return CalcLineResult{
 		OvertimeAmount:       overtime,
@@ -221,6 +222,29 @@ func GetOvertimeHours(ctx context.Context, qtx *db.Queries, employeeID pgtype.UU
 		totalMinutes += ComputeOvertimeMinutes(&checkOut, sched)
 	}
 	return float64(totalMinutes) / 60, nil
+}
+
+// HalfDayDeductionForPeriod sums the lost minutes of an employee's half-day
+// corrections in [from, to] and converts them to a wage deduction:
+//
+//	hours     = totalLostMinutes / 60
+//	deduction = round(hours × hourlyRate)
+//
+// hourlyRate is the daily-rate-derived hourly rate (HourlyRateFromDaily), so the
+// deduction is the pay for the working time the employee missed by arriving late.
+// Returns both the hours (for the payroll snapshot) and the rupiah deduction.
+func HalfDayDeductionForPeriod(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time, hourlyRate int64) (float64, int64, error) {
+	lostMin, err := qtx.SumHalfDayLostMinutes(ctx, &db.SumHalfDayLostMinutesParams{
+		EmployeeID: employeeID,
+		Date:       pgtype.Date{Time: dateOnly(from), Valid: true},
+		Date_2:     pgtype.Date{Time: dateOnly(to), Valid: true},
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	hours := float64(lostMin) / 60
+	deduction := roundHalfUp(hours * float64(hourlyRate))
+	return hours, deduction, nil
 }
 
 // AllLinesReviewed reports whether every line in a period has been reviewed. Used by
@@ -400,6 +424,13 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		}
 		unpaidDeduction := int64(unpaidDays) * ws.DailyRate
 
+		// Half-day corrections: deduct pay for the lost working hours (arrival past
+		// the max late threshold), reclassified manually on the corrections page.
+		halfDayHours, halfDayDeduction, err := HalfDayDeductionForPeriod(ctx, qtx, emp.ID, start, end, hourlyRate)
+		if err != nil {
+			return nil, err
+		}
+
 		calc := CalcLine(CalcLineInput{
 			BaseSalary:              ws.BaseSalary,
 			DailyRate:               ws.DailyRate,
@@ -414,6 +445,7 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			ComponentDeductionTotal: deductionTotal,
 			KasbonDeduction:         kasbonDeduction,
 			UnpaidLeaveDeduction:    unpaidDeduction,
+			HalfDayDeduction:        halfDayDeduction,
 		})
 
 		line, err := qtx.CreatePayrollLine(ctx, &db.CreatePayrollLineParams{
@@ -438,6 +470,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			OvertimeHours:           NumericFromFloat(overtimeHours),
 			OvertimeHourlyRate:      hourlyRate,
 			OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
+			HalfDayHours:            NumericFromFloat(halfDayHours),
+			HalfDayDeduction:        halfDayDeduction,
 		})
 		if err != nil {
 			return nil, err
@@ -505,6 +539,7 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 		ComponentDeductionTotal: line.ComponentDeductionTotal,
 		KasbonDeduction:         line.KasbonDeduction,
 		UnpaidLeaveDeduction:    line.UnpaidLeaveDeduction,
+		HalfDayDeduction:        line.HalfDayDeduction,
 	})
 
 	return qtx.UpdatePayrollLineReview(ctx, &db.UpdatePayrollLineReviewParams{

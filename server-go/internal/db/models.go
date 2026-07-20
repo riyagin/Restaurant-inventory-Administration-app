@@ -66,6 +66,8 @@ type AttendanceRecord struct {
 	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
 	IsMissingCheckout bool               `json:"is_missing_checkout"`
 	Note              pgtype.Text        `json:"note"`
+	IsHalfDay         bool               `json:"is_half_day"`
+	HalfDayLostMinutes int32             `json:"half_day_lost_minutes"`
 }
 
 type Branch struct {
@@ -344,6 +346,8 @@ type PayrollLine struct {
 	OvertimeHours           pgtype.Numeric     `json:"overtime_hours"`
 	OvertimeHourlyRate      int64              `json:"overtime_hourly_rate"`
 	OvertimeHourlyAmount    int64              `json:"overtime_hourly_amount"`
+	HalfDayHours            pgtype.Numeric     `json:"half_day_hours"`
+	HalfDayDeduction        int64              `json:"half_day_deduction"`
 }
 
 type PayrollLineComponent struct {

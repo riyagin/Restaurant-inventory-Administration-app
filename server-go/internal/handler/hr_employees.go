@@ -152,6 +152,26 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 	status := strings.TrimSpace(q.Get("status"))
 	employmentType := strings.TrimSpace(q.Get("employment_type"))
 
+	// Sorting — whitelist column + direction to keep the ORDER BY injection-safe.
+	sortColumns := map[string]string{
+		"name":      "e.full_name",
+		"join_date": "e.join_date",
+		"code":      "e.employee_code",
+	}
+	sortCol, ok := sortColumns[strings.TrimSpace(q.Get("sort"))]
+	if !ok {
+		sortCol = "e.full_name"
+	}
+	sortDir := "ASC"
+	if strings.EqualFold(strings.TrimSpace(q.Get("dir")), "desc") {
+		sortDir = "DESC"
+	}
+	// Deterministic tiebreaker so paging stays stable when the sort key ties.
+	orderBy := sortCol + " " + sortDir
+	if sortCol != "e.employee_code" {
+		orderBy += ", e.employee_code ASC"
+	}
+
 	pageNum, pageSize := 1, 25
 	if p := q.Get("page"); p != "" {
 		if v, err := strconv.Atoi(p); err == nil && v > 0 {
@@ -209,8 +229,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		JOIN positions p ON p.id = e.position_id
 		JOIN branches  b ON b.id = e.branch_id
 		%s
-		ORDER BY e.full_name
-		LIMIT $%d OFFSET $%d`, whereClause, limitIdx, offsetIdx)
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d`, whereClause, orderBy, limitIdx, offsetIdx)
 
 	rows, err := h.pool.Query(ctx, listSQL, args...)
 	if err != nil {

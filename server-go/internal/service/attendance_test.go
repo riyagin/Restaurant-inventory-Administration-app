@@ -58,6 +58,31 @@ func TestComputeAnomalies_LateBoundary(t *testing.T) {
 	}
 }
 
+// ── Half-day lost-minutes math ───────────────────────────────────────────────
+
+func TestComputeLostMinutes(t *testing.T) {
+	sched := stdSchedule() // work start 08:00
+
+	cases := []struct {
+		name    string
+		checkIn *time.Time
+		want    int
+	}{
+		{"nil check-in", nil, 0},
+		{"before start", ptr(mustTime(t, "2026-06-09 07:30")), 0},
+		{"exactly at start", ptr(mustTime(t, "2026-06-09 08:00")), 0},
+		{"arrives 12:00 (half day)", ptr(mustTime(t, "2026-06-09 12:00")), 240},
+		{"arrives 13:30", ptr(mustTime(t, "2026-06-09 13:30")), 330},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ComputeLostMinutes(c.checkIn, sched); got != c.want {
+				t.Errorf("ComputeLostMinutes = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
 // ── Early-leave math across boundary ─────────────────────────────────────────
 
 func TestComputeAnomalies_EarlyLeaveBoundary(t *testing.T) {

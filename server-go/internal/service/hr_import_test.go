@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -184,6 +185,50 @@ func TestParseHRImport_AutoCodeGenerationNoCollision(t *testing.T) {
 	}
 	if p.ErrorCount != 0 {
 		t.Errorf("auto-generated codes should not produce errors, got %d", p.ErrorCount)
+	}
+}
+
+// A manually-typed code that happens to match what the next auto-generated
+// code would be (MaxEmployeeCodeSeq=1 => next is EMP-0002) must not collide
+// with a later blank row in the same file — the auto-generator has to skip
+// past codes already claimed within the file, not just codes from the DB.
+func TestParseHRImport_AutoCodeSkipsManualCollision(t *testing.T) {
+	rows := [][]string{
+		{"EMP-0002", "Lina", "1990-03-03", "2024-03-01", "Barista", "Pusat", "", "", "", "", "", "", "", "5000000", "26", "2024-03-01", "0", "0"},
+		{"", "Mira", "1991-04-04", "2024-03-01", "Kasir", "Cabang", "", "", "", "", "", "", "", "5000000", "26", "2024-03-01", "0", "0"},
+	}
+	p := ParseHRImportRows("test.xlsx", hdr, rows, componentCols(), baseRef())
+	if p.ErrorCount != 0 {
+		t.Fatalf("expected 0 errors, got %d: row1=%v row2=%v", p.ErrorCount, findRow(p, 1).Messages, findRow(p, 2).Messages)
+	}
+	c1 := findRow(p, 1).EmployeeCode
+	c2 := findRow(p, 2).EmployeeCode
+	if c1 != "EMP-0002" {
+		t.Errorf("manual code = %s, want EMP-0002", c1)
+	}
+	if c2 == c1 {
+		t.Fatalf("auto-generated code collided with manually-typed code: both %s", c1)
+	}
+	if c2 != "EMP-0003" {
+		t.Errorf("auto code should skip the claimed EMP-0002 and use EMP-0003, got %s", c2)
+	}
+}
+
+// Same collision, but with the manual code lower-cased — the auto-generator's
+// collision check must be case-insensitive, matching the rest of the code-
+// dedup logic.
+func TestParseHRImport_AutoCodeSkipsManualCollisionCaseInsensitive(t *testing.T) {
+	rows := [][]string{
+		{"emp-0002", "Nina", "1990-03-03", "2024-03-01", "Barista", "Pusat", "", "", "", "", "", "", "", "5000000", "26", "2024-03-01", "0", "0"},
+		{"", "Omar", "1991-04-04", "2024-03-01", "Kasir", "Cabang", "", "", "", "", "", "", "", "5000000", "26", "2024-03-01", "0", "0"},
+	}
+	p := ParseHRImportRows("test.xlsx", hdr, rows, componentCols(), baseRef())
+	if p.ErrorCount != 0 {
+		t.Fatalf("expected 0 errors, got %d: row1=%v row2=%v", p.ErrorCount, findRow(p, 1).Messages, findRow(p, 2).Messages)
+	}
+	c2 := findRow(p, 2).EmployeeCode
+	if strings.EqualFold(c2, "emp-0002") {
+		t.Fatalf("auto-generated code collided with manually-typed code (case-insensitive): %s", c2)
 	}
 }
 
