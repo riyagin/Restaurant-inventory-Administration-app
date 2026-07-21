@@ -132,7 +132,7 @@ SELECT
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
-    e.employment_type, e.contract_end_date, e.permanent_since,
+    e.employment_type, e.contract_end_date, e.permanent_since, e.resign_date,
     e.created_at, e.updated_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
@@ -163,6 +163,7 @@ type GetEmployeeByIDRow struct {
 	EmploymentType    string             `json:"employment_type"`
 	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
 	PermanentSince    pgtype.Date        `json:"permanent_since"`
+	ResignDate        pgtype.Date        `json:"resign_date"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
@@ -193,10 +194,31 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmpl
 		&i.EmploymentType,
 		&i.ContractEndDate,
 		&i.PermanentSince,
+		&i.ResignDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return &i, err
+}
+
+const resignEmployee = `-- name: ResignEmployee :exec
+UPDATE employees
+SET status = 'resigned',
+    resign_date = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type ResignEmployeeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	ResignDate pgtype.Date `json:"resign_date"`
+}
+
+// ResignEmployee marks an employee as resigned (mengundurkan diri), stamping the
+// effective resignation date.
+func (q *Queries) ResignEmployee(ctx context.Context, arg *ResignEmployeeParams) error {
+	_, err := q.db.Exec(ctx, resignEmployee, arg.ID, arg.ResignDate)
+	return err
 }
 
 const transitionEmployeeToPermanent = `-- name: TransitionEmployeeToPermanent :exec

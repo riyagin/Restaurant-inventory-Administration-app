@@ -58,6 +58,33 @@ func (q *Queries) CountAbsentDaysBeforeInMonth(ctx context.Context, arg *CountAb
 	return count, err
 }
 
+const countConsecutiveAbsentDays = `-- name: CountConsecutiveAbsentDays :one
+SELECT COUNT(*)
+FROM (
+  SELECT SUM(CASE WHEN status <> 'absent' THEN 1 ELSE 0 END)
+           OVER (ORDER BY date DESC ROWS UNBOUNDED PRECEDING) AS non_absent_seen
+  FROM attendance_records
+  WHERE employee_id = $1 AND date <= $2
+) t
+WHERE non_absent_seen = 0
+`
+
+type CountConsecutiveAbsentDaysParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+}
+
+// Length of the run of consecutive 'absent' attendance records ending on $2
+// (inclusive). Attendance records are the unit of "consecutive", so weekends and
+// holidays (which have no record) do not break a streak. Returns 0 when the record
+// on $2 is not 'absent'.
+func (q *Queries) CountConsecutiveAbsentDays(ctx context.Context, arg *CountConsecutiveAbsentDaysParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countConsecutiveAbsentDays, arg.EmployeeID, arg.Date)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPolicyViolations = `-- name: CountPolicyViolations :one
 SELECT COUNT(*) FROM performance_violations WHERE policy_id = $1
 `

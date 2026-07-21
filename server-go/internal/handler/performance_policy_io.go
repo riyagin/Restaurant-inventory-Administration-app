@@ -36,8 +36,9 @@ var ruleTypeLabels = map[string]string{
 	"no_punch":         "Tidak Absen Masuk & Pulang",
 	"half_day_late":    "Setengah Hari (Datang Siang)",
 	"half_day_early":   "Setengah Hari (Pulang Awal)",
-	"absent_no_leave":  "Absen Tanpa Cuti",
-	"manual":           "Manual",
+	"absent_no_leave":    "Absen Tanpa Cuti",
+	"consecutive_absent": "Absen Berturut-turut",
+	"manual":             "Manual",
 }
 
 // labelToRuleType is the reverse of ruleTypeLabels (lowercased) so imports may
@@ -119,7 +120,7 @@ func (h *PerformanceHandler) ExportPolicies(w http.ResponseWriter, r *http.Reque
 	}
 	for _, code := range []string{
 		"late", "early_leave", "missing_checkout", "missing_checkin", "no_punch",
-		"half_day_late", "half_day_early", "absent_no_leave", "manual",
+		"absent_no_leave", "consecutive_absent", "half_day_late", "half_day_early", "manual",
 	} {
 		lines = append(lines, "  - "+code+"  =  "+ruleTypeLabels[code])
 	}
@@ -239,7 +240,7 @@ func (h *PerformanceHandler) ImportPolicies(w http.ResponseWriter, r *http.Reque
 		}
 
 		var threshold pgtype.Int4
-		if ruleType == "late" || ruleType == "early_leave" {
+		if ruleType == "late" || ruleType == "early_leave" || ruleType == "consecutive_absent" {
 			if v := cell(row, "threshold_minutes"); v != "" {
 				n, terr := strconv.Atoi(v)
 				if terr != nil || n < 0 {

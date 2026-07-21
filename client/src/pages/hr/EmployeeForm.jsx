@@ -189,6 +189,7 @@ export default function EmployeeForm() {
               <select value={form.status} onChange={set('status')}>
                 <option value="active">Aktif</option>
                 <option value="inactive">Nonaktif</option>
+                <option value="resigned">Resign</option>
               </select>
             </div>
             <div className="form-group">

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { getBranches, getDivisions, getExpenseReport } from '../api';
@@ -6,6 +6,16 @@ import { getBranches, getDivisions, getExpenseReport } from '../api';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
+
+// yyyy-mm-dd for <input type="date">
+const isoDate = (d) => d.toLocaleDateString('en-CA');
+// Default range = last 1 month up to today
+const defaultDates = () => {
+  const to = new Date();
+  const from = new Date();
+  from.setMonth(from.getMonth() - 1);
+  return { date_from: isoDate(from), date_to: isoDate(to) };
+};
 
 const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian' };
 const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial' };
@@ -20,12 +30,14 @@ const TAB_STYLE = (active) => ({
 export default function ExpenseReport() {
   const [branches, setBranches]       = useState([]);
   const [divisions, setDivisions]     = useState([]);
-  const [filters, setFilters]         = useState({ branch_id: '', division_id: '', date_from: '', date_to: '' });
+  // `filters` = draft the user is editing; `applied` = what the loaded data reflects
+  const [filters, setFilters]         = useState(() => ({ branch_id: '', division_id: '', ...defaultDates() }));
   const [groups, setGroups]           = useState([]);
   const [expandedKey, setExpandedKey] = useState(null);
   // per-group tab: 'items' | 'invoices'
   const [groupTab, setGroupTab]       = useState({});
   const [loading, setLoading]         = useState(false);
+  const [loaded, setLoaded]           = useState(false); // has at least one fetch completed?
 
   useEffect(() => { getBranches().then(r => setBranches(r.data)); }, []);
 
@@ -36,19 +48,25 @@ export default function ExpenseReport() {
     if (val) getDivisions({ branch_id: val }).then(r => setDivisions(r.data));
   };
 
-  const load = useCallback(() => {
+  const load = useCallback((f) => {
     setLoading(true);
+    setGroups([]);         // clear current results so the page shows loading, not stale data
+    setExpandedKey(null);
     const params = {};
-    if (filters.branch_id)   params.branch_id   = filters.branch_id;
-    if (filters.division_id) params.division_id = filters.division_id;
-    if (filters.date_from)   params.date_from   = filters.date_from;
-    if (filters.date_to)     params.date_to     = filters.date_to;
+    if (f.branch_id)   params.branch_id   = f.branch_id;
+    if (f.division_id) params.division_id = f.division_id;
+    if (f.date_from)   params.date_from   = f.date_from;
+    if (f.date_to)     params.date_to     = f.date_to;
     getExpenseReport(params)
       .then(r => setGroups(r.data))
-      .finally(() => setLoading(false));
-  }, [filters]);
+      .finally(() => { setLoading(false); setLoaded(true); });
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Initial load with the default 1-month range
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  useEffect(() => { load(filters); }, []);
+
+  const applyFilters = () => load(filters);
 
   const grandTotal = groups.reduce((s, g) => s + Number(g.total_amount), 0);
   const grandCount = groups.reduce((s, g) => s + g.invoice_count, 0);
@@ -90,7 +108,38 @@ export default function ExpenseReport() {
     }
     XLSX.utils.book_append_sheet(wb, ws1, 'Item Usage');
 
-    // ── Sheet 2: Invoices ──
+    // ── Sheet 2: Vendor Spend ──
+    const vendorRows = [
+      ['Expense Report — Spend per Vendor'],
+      dateRange ? [`Period: ${dateRange}`] : [],
+      [],
+      ['Branch', 'Division', 'Vendor', 'Item / Description', 'Total Qty', 'Total Value (IDR)'],
+    ].filter(r => r.length);
+
+    for (const g of groups) {
+      for (const v of (g.vendor_usage ?? [])) {
+        for (const it of v.items) {
+          vendorRows.push([g.branch_name, g.division_name, v.vendor_name, it.description, Number(it.total_qty), Number(it.total_value)]);
+        }
+        vendorRows.push(['', '', v.vendor_name, 'Subtotal Vendor', '', Number(v.total_value)]);
+      }
+      vendorRows.push(['', '', '', 'Subtotal Divisi', '', Number(g.total_amount)]);
+      vendorRows.push([]);
+    }
+    vendorRows.push(['', '', '', 'GRAND TOTAL', '', grandTotal]);
+
+    const wsV = XLSX.utils.aoa_to_sheet(vendorRows);
+    wsV['!cols'] = [{ wch: 20 }, { wch: 20 }, { wch: 24 }, { wch: 32 }, { wch: 12 }, { wch: 20 }];
+    const rV = XLSX.utils.decode_range(wsV['!ref']);
+    for (let r = 0; r <= rV.e.r; r++) {
+      for (const c of [4, 5]) {
+        const cell = wsV[XLSX.utils.encode_cell({ r, c })];
+        if (cell && typeof cell.v === 'number') cell.z = '#,##0';
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, wsV, 'Per Vendor');
+
+    // ── Sheet 3: Invoices ──
     const invRows = [
       ['Expense Report — Invoices'],
       dateRange ? [`Period: ${dateRange}`] : [],
@@ -157,7 +206,10 @@ export default function ExpenseReport() {
 
       <div className="card">
         <div className="card-header">
-          <h2>{loading ? 'Memuat…' : `${groups.length} grup`}</h2>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            {loading && <span className="spinner" />}
+            {loading ? 'Memuat…' : `${groups.length} grup`}
+          </h2>
           <div className="filters">
             <select value={filters.branch_id} onChange={onBranchChange}>
               <option value="">Semua Cabang</option>
@@ -172,6 +224,9 @@ export default function ExpenseReport() {
             {(filters.date_from || filters.date_to) && (
               <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
+            <button type="button" onClick={applyFilters} disabled={loading} className="btn btn-primary btn-sm">
+              Terapkan Filter
+            </button>
           </div>
         </div>
 
@@ -186,9 +241,16 @@ export default function ExpenseReport() {
             </tr>
           </thead>
           <tbody>
-            {groups.length === 0 ? (
+            {loading ? (
+              <tr><td colSpan={5} style={{ padding: 0 }}>
+                <div className="loading-block">
+                  <span className="spinner spinner-lg" />
+                  <span className="loading-text">Memuat data pengeluaran…</span>
+                </div>
+              </td></tr>
+            ) : groups.length === 0 ? (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-                {loading ? 'Memuat…' : 'Tidak ada invoice pengeluaran ditemukan'}
+                {loaded ? 'Tidak ada invoice pengeluaran ditemukan' : 'Tekan “Terapkan Filter” untuk memuat data'}
               </td></tr>
             ) : groups.map(g => {
               const key = `${g.branch_id}::${g.division_id}`;
@@ -222,7 +284,8 @@ export default function ExpenseReport() {
                         {/* Tab bar */}
                         <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.75rem', background: '#f0f0f0', borderRadius: '7px', padding: '0.25rem', width: 'fit-content' }}
                              onClick={e => e.stopPropagation()}>
-                          <button style={TAB_STYLE(tab === 'items')}   onClick={() => setTab(key, 'items')}>Pemakaian Barang</button>
+                          <button style={TAB_STYLE(tab === 'items')}    onClick={() => setTab(key, 'items')}>Pemakaian Barang</button>
+                          <button style={TAB_STYLE(tab === 'vendors')}  onClick={() => setTab(key, 'vendors')}>Per Vendor</button>
                           <button style={TAB_STYLE(tab === 'invoices')} onClick={() => setTab(key, 'invoices')}>Invoice</button>
                         </div>
 
@@ -260,12 +323,57 @@ export default function ExpenseReport() {
                           </table>
                         )}
 
+                        {/* ── Per Vendor tab ── */}
+                        {tab === 'vendors' && (
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                            <thead>
+                              <tr>
+                                {['Vendor / Barang', 'Total Qty', 'Total Nilai'].map((h, i) => (
+                                  <th key={h} style={{ textAlign: i > 0 ? 'right' : 'left', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(!g.vendor_usage || g.vendor_usage.length === 0) ? (
+                                <tr><td colSpan={3} style={{ padding: '0.75rem 0.6rem', color: '#bbb', fontStyle: 'italic' }}>Tidak ada vendor</td></tr>
+                              ) : g.vendor_usage.map((v, vi) => (
+                                <Fragment key={v.vendor_id ?? vi}>
+                                  {/* Vendor header row */}
+                                  <tr style={{ background: '#eef3ff' }}>
+                                    <td style={{ padding: '0.4rem 0.6rem', fontWeight: 700, color: '#3b5bdb' }}>{v.vendor_name}</td>
+                                    <td></td>
+                                    <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 700, color: '#e74c3c' }}>{idr(v.total_value)}</td>
+                                  </tr>
+                                  {/* Item rows for this vendor */}
+                                  {v.items.map((it, idx) => (
+                                    <tr key={idx}>
+                                      <td style={{ padding: '0.25rem 0.6rem 0.25rem 1.6rem', color: '#555' }}>{it.description ?? '—'}</td>
+                                      <td style={{ padding: '0.25rem 0.6rem', textAlign: 'right', fontWeight: 600 }}>
+                                        {Number(it.total_qty).toLocaleString('id-ID')}
+                                      </td>
+                                      <td style={{ padding: '0.25rem 0.6rem', textAlign: 'right', color: '#555' }}>
+                                        {idr(it.total_value)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </Fragment>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr>
+                                <td colSpan={2} style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 600, color: '#555' }}>Total:</td>
+                                <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontWeight: 700, color: '#e74c3c' }}>{idr(g.total_amount)}</td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        )}
+
                         {/* ── Invoices tab ── */}
                         {tab === 'invoices' && (
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                             <thead>
                               <tr>
-                                {['No. Invoice', 'Tanggal', 'Sumber', 'Status', 'Total', ''].map((h, i) => (
+                                {['No. Invoice', 'Tanggal', 'Sumber', 'Status', 'Total', ''].map((h) => (
                                   <th key={h} style={{ textAlign: h === 'Total' ? 'right' : 'left', padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8' }}>{h}</th>
                                 ))}
                               </tr>

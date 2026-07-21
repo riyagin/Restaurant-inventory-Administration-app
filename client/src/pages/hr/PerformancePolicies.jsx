@@ -13,12 +13,15 @@ const RULE_LABELS = {
   missing_checkin: 'Tidak Absen Masuk',
   no_punch: 'Tidak Absen Masuk & Pulang',
   absent_no_leave: 'Absen Tanpa Cuti',
+  consecutive_absent: 'Absen Berturut-turut',
   half_day_late: 'Setengah Hari (Datang Siang)',
   half_day_early: 'Setengah Hari (Pulang Awal)',
   manual: 'Manual',
 };
 
-const THRESHOLD_RULES = ['late', 'early_leave'];
+const THRESHOLD_RULES = ['late', 'early_leave', 'consecutive_absent'];
+// consecutive_absent's threshold is a DAY count, not minutes.
+const DAY_THRESHOLD_RULES = ['consecutive_absent'];
 
 const SEED_EXAMPLES = [
   { name: 'Terlambat > 15 menit', rule_type: 'late', threshold_minutes: 15, points: 2, max_occurrences_per_month: null },
@@ -28,6 +31,7 @@ const SEED_EXAMPLES = [
   { name: 'Tidak absen masuk', rule_type: 'missing_checkin', threshold_minutes: null, points: 1, max_occurrences_per_month: null },
   { name: 'Tidak absen masuk & pulang', rule_type: 'no_punch', threshold_minutes: null, points: 2, max_occurrences_per_month: null },
   { name: 'Absen tanpa cuti', rule_type: 'absent_no_leave', threshold_minutes: null, points: 10, max_occurrences_per_month: null },
+  { name: 'Absen 2 hari berturut-turut', rule_type: 'consecutive_absent', threshold_minutes: 2, points: 5, max_occurrences_per_month: null },
   { name: 'Setengah hari (datang siang)', rule_type: 'half_day_late', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
   { name: 'Setengah hari (pulang awal)', rule_type: 'half_day_early', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
 ];
@@ -48,6 +52,7 @@ function toPayload(f) {
 
 function PolicyForm({ form, setForm, onSubmit, submitting, submitLabel }) {
   const hasThreshold = THRESHOLD_RULES.includes(form.rule_type);
+  const isDayThreshold = DAY_THRESHOLD_RULES.includes(form.rule_type);
   return (
     <form onSubmit={onSubmit} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
       <div className="form-group" style={{ margin: 0, flex: 2, minWidth: 180 }}>
@@ -61,10 +66,10 @@ function PolicyForm({ form, setForm, onSubmit, submitting, submitLabel }) {
         </select>
       </div>
       <div className="form-group" style={{ margin: 0, width: 120 }}>
-        <label>Ambang (menit)</label>
-        <input type="number" min="0" value={form.threshold_minutes} disabled={!hasThreshold}
+        <label>{isDayThreshold ? 'Ambang (hari)' : 'Ambang (menit)'}</label>
+        <input type="number" min={isDayThreshold ? '1' : '0'} value={form.threshold_minutes} disabled={!hasThreshold}
           onChange={e => setForm(f => ({ ...f, threshold_minutes: e.target.value }))}
-          placeholder={hasThreshold ? 'mis. 15' : '—'} />
+          placeholder={hasThreshold ? (isDayThreshold ? 'mis. 2' : 'mis. 15') : '—'} />
       </div>
       <div className="form-group" style={{ margin: 0, width: 90 }}>
         <label>Poin</label>
@@ -258,7 +263,7 @@ export default function PerformancePolicies() {
               <tr key={p.id}>
                 <td style={{ fontWeight: 500 }}>{p.name}</td>
                 <td>{RULE_LABELS[p.rule_type] || p.rule_type}</td>
-                <td>{p.threshold_minutes ?? '—'}</td>
+                <td>{p.threshold_minutes == null ? '—' : (p.rule_type === 'consecutive_absent' ? `${p.threshold_minutes} hari` : `${p.threshold_minutes} mnt`)}</td>
                 <td>−{p.points}</td>
                 <td>{p.max_occurrences_per_month ?? '∞'}</td>
                 <td>

@@ -227,6 +227,7 @@ export const getEmployee    = (id)     => api.get(`/hr/employees/${id}`);
 export const createEmployee = (data)   => api.post('/hr/employees', data);
 export const updateEmployee = (id, data) => api.put(`/hr/employees/${id}`, data);
 export const transitionEmployeeToPermanent = (id, data) => api.post(`/hr/employees/${id}/transition-permanent`, data);
+export const resignEmployee = (id, data) => api.post(`/hr/employees/${id}/resign`, data);
 export const deleteEmployee = (id)     => api.delete(`/hr/employees/${id}`);
 export const uploadEmployeePhoto = (id, file) => {
   const form = new FormData();

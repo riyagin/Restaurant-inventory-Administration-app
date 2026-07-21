@@ -15,6 +15,7 @@ const RULE_LABELS = {
   half_day_late: 'Setengah Hari (Datang Siang)',
   half_day_early: 'Setengah Hari (Pulang Awal)',
   absent_no_leave: 'Absen Tanpa Cuti',
+  consecutive_absent: 'Absen Berturut-turut',
   manual: 'Manual',
 };
 

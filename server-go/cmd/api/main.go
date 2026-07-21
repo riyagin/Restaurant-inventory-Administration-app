@@ -331,6 +331,7 @@ func main() {
 			r.Post("/api/hr/employees", hrEmployeesHandler.Create)
 			r.Put("/api/hr/employees/{id}", hrEmployeesHandler.Update)
 			r.Post("/api/hr/employees/{id}/transition-permanent", hrEmployeesHandler.TransitionToPermanent)
+			r.Post("/api/hr/employees/{id}/resign", hrEmployeesHandler.Resign)
 			r.Delete("/api/hr/employees/{id}", hrEmployeesHandler.Delete)
 			r.Post("/api/hr/employees/{id}/photo", hrEmployeesHandler.UploadPhoto)
 			r.Delete("/api/hr/employees/{id}/photo", hrEmployeesHandler.DeletePhoto)

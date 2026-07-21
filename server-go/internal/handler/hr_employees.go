@@ -351,8 +351,8 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if status == "" {
 		status = "active"
 	}
-	if status != "active" && status != "inactive" {
-		respondError(w, http.StatusBadRequest, "status harus active atau inactive")
+	if status != "active" && status != "inactive" && status != "resigned" {
+		respondError(w, http.StatusBadRequest, "status harus active, inactive, atau resigned")
 		return
 	}
 
@@ -488,8 +488,8 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if status == "" {
 		status = "active"
 	}
-	if status != "active" && status != "inactive" {
-		respondError(w, http.StatusBadRequest, "status harus active atau inactive")
+	if status != "active" && status != "inactive" && status != "resigned" {
+		respondError(w, http.StatusBadRequest, "status harus active, inactive, atau resigned")
 		return
 	}
 
@@ -624,6 +624,76 @@ func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *htt
 		EntityType:  "employee",
 		EntityID:    id,
 		Description: fmt.Sprintf("Mengubah status %s menjadi karyawan tetap (berlaku %s)", emp.FullName, effDate.Format("2006-01-02")),
+	})
+
+	updated, err := h.queries.GetEmployeeByID(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+type resignBody struct {
+	ResignDate string `json:"resign_date"` // "YYYY-MM-DD" — effective resignation date
+}
+
+// Resign — POST /api/hr/employees/:id/resign
+// Marks an employee as resigned (mengundurkan diri), stamping the effective date.
+// Preserves the row and its HR history (unlike a hard delete).
+func (h *HREmployeesHandler) Resign(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	var body resignBody
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	resignDate, err := time.Parse("2006-01-02", strings.TrimSpace(body.ResignDate))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "tanggal resign tidak valid")
+		return
+	}
+
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	if emp.Status == "resigned" {
+		respondError(w, http.StatusConflict, "karyawan sudah berstatus resign")
+		return
+	}
+	if resignDate.Before(emp.JoinDate.Time) {
+		respondError(w, http.StatusBadRequest, "tanggal resign tidak boleh sebelum tanggal bergabung")
+		return
+	}
+
+	if err := h.queries.ResignEmployee(ctx, &db.ResignEmployeeParams{
+		ID:         pgID,
+		ResignDate: pgtype.Date{Time: resignDate, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengubah status karyawan")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "employee",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menandai %s sebagai resign (berlaku %s)", emp.FullName, resignDate.Format("2006-01-02")),
 	})
 
 	updated, err := h.queries.GetEmployeeByID(ctx, pgID)

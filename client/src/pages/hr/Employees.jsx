@@ -30,6 +30,17 @@ function expiryLabel(days) {
   return `Berakhir dalam ${days} hari`;
 }
 
+const STATUS_STYLES = {
+  active:   { label: 'Aktif',    bg: '#e6f4ea', color: '#1e7e34' },
+  inactive: { label: 'Nonaktif', bg: '#fce8e6', color: '#c5221f' },
+  resigned: { label: 'Resign',   bg: '#f3e8ff', color: '#7b2cbf' },
+};
+
+function StatusBadge({ status }) {
+  const s = STATUS_STYLES[status] || STATUS_STYLES.inactive;
+  return <span className="badge" style={{ background: s.bg, color: s.color }}>{s.label}</span>;
+}
+
 function EmploymentBadge({ type, contractEnd }) {
   if (type !== 'contract') {
     return <span className="badge" style={{ background: '#eef1f6', color: '#445' }}>Tetap</span>;
@@ -190,6 +201,7 @@ export default function Employees() {
               <option value="">Semua Status</option>
               <option value="active">Aktif</option>
               <option value="inactive">Nonaktif</option>
+              <option value="resigned">Resign</option>
             </select>
           </div>
           <div className="form-group" style={{ margin: 0, flex: '1 1 140px' }}>
@@ -243,11 +255,7 @@ export default function Employees() {
                 <td>{e.branch_name}</td>
                 <td><EmploymentBadge type={e.employment_type} contractEnd={e.contract_end_date} /></td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmtDate(e.join_date)}</td>
-                <td>
-                  <span className="badge" style={{ background: e.status === 'active' ? '#e6f4ea' : '#fce8e6', color: e.status === 'active' ? '#1e7e34' : '#c5221f' }}>
-                    {e.status === 'active' ? 'Aktif' : 'Nonaktif'}
-                  </span>
-                </td>
+                <td><StatusBadge status={e.status} /></td>
               </tr>
             ))}
           </tbody>

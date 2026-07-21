@@ -29,7 +29,7 @@ func NewPerformanceHandler(pool *pgxpool.Pool, queries *db.Queries) *Performance
 
 func validRuleType(t string) bool {
 	switch t {
-	case "late", "early_leave", "missing_checkout", "missing_checkin", "no_punch", "absent_no_leave", "half_day_late", "half_day_early", "manual":
+	case "late", "early_leave", "missing_checkout", "missing_checkin", "no_punch", "absent_no_leave", "consecutive_absent", "half_day_late", "half_day_early", "manual":
 		return true
 	}
 	return false
@@ -90,8 +90,9 @@ func (b *policyBody) validate() (string, bool) {
 	if b.Points <= 0 {
 		return "poin pengurangan harus lebih dari 0", false
 	}
-	// Threshold only meaningful for late / early_leave.
-	if b.RuleType != "late" && b.RuleType != "early_leave" {
+	// Threshold only meaningful for late / early_leave (minutes) and
+	// consecutive_absent (days). Cleared for every other rule.
+	if b.RuleType != "late" && b.RuleType != "early_leave" && b.RuleType != "consecutive_absent" {
 		b.ThresholdMinutes = nil
 	}
 	return "", true

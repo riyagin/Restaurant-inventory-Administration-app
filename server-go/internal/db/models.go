@@ -137,6 +137,7 @@ type Employee struct {
 	EmploymentType    string             `json:"employment_type"`
 	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
 	PermanentSince    pgtype.Date        `json:"permanent_since"`
+	ResignDate        pgtype.Date        `json:"resign_date"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }

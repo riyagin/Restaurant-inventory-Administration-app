@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  getEmployee, deleteEmployee, transitionEmployeeToPermanent,
+  getEmployee, deleteEmployee, transitionEmployeeToPermanent, resignEmployee,
   getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents,
   getAttendance, getEmployeePerformance,
   getLeaveBalance, getEmployeeLeaveRequests,
@@ -49,6 +49,9 @@ const TABS = [
 ];
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '-';
+
+const STATUS_LABELS = { active: 'Aktif', inactive: 'Nonaktif', resigned: 'Resign' };
+const statusLabel = (s) => STATUS_LABELS[s] || 'Nonaktif';
 
 // Whole-day difference between a contract end date and today (negative = overdue).
 const DAY_MS = 86400000;
@@ -721,6 +724,7 @@ export default function EmployeeDetail() {
   const [tab, setTab]   = useState('profil');
   const [error, setError] = useState('');
   const [showTransition, setShowTransition] = useState(false);
+  const [showResign, setShowResign] = useState(false);
 
   const editable = canEdit();
 
@@ -756,6 +760,11 @@ export default function EmployeeDetail() {
               Jadikan Karyawan Tetap
             </button>
           )}
+          {editable && emp.status !== 'resigned' && (
+            <button onClick={() => setShowResign(true)} className="btn btn-primary" style={{ background: '#7b2cbf', borderColor: '#7b2cbf' }}>
+              Tandai Resign
+            </button>
+          )}
           {editable && <Link to={`/hr/employees/${id}/edit`} className="btn btn-primary">Edit</Link>}
           {editable && <button onClick={handleDelete} className="btn btn-danger">Hapus</button>}
         </div>
@@ -773,6 +782,17 @@ export default function EmployeeDetail() {
           </button>
         ))}
       </div>
+
+      {emp.status === 'resigned' && (
+        <div className="card" style={{ marginBottom: '1rem', borderLeft: '4px solid #7b2cbf', background: '#faf5ff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.1rem' }}>🚪</span>
+            <strong style={{ color: '#7b2cbf' }}>
+              Karyawan telah resign{emp.resign_date ? ` per ${fmtDate(emp.resign_date)}` : ''}.
+            </strong>
+          </div>
+        </div>
+      )}
 
       {(() => {
         if (emp.employment_type !== 'contract' || !emp.contract_end_date) return null;
@@ -811,7 +831,10 @@ export default function EmployeeDetail() {
                 <Field label="Tanggal Lahir" value={fmtDate(emp.dob)} />
                 <Field label="Tanggal Bergabung" value={fmtDate(emp.join_date)} />
                 <Field label="NIK / KTP" value={emp.national_id} />
-                <Field label="Status" value={emp.status === 'active' ? 'Aktif' : 'Nonaktif'} />
+                <Field label="Status" value={statusLabel(emp.status)} />
+                {emp.status === 'resigned' && emp.resign_date && (
+                  <Field label="Tanggal Resign" value={fmtDate(emp.resign_date)} />
+                )}
                 <Field label="Tipe Kepegawaian" value={emp.employment_type === 'contract' ? 'Kontrak' : 'Tetap'} />
                 {emp.employment_type === 'contract' && (
                   <Field label="Berakhir Kontrak" value={fmtDate(emp.contract_end_date)} />
@@ -865,7 +888,63 @@ export default function EmployeeDetail() {
           onDone={() => { setShowTransition(false); loadEmployee(); }}
         />
       )}
+
+      {showResign && (
+        <ResignModal
+          employee={emp}
+          onClose={() => setShowResign(false)}
+          onDone={() => { setShowResign(false); loadEmployee(); }}
+        />
+      )}
     </>
+  );
+}
+
+function ResignModal({ employee, onClose, onDone }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!date) { setError('Tanggal wajib diisi'); return; }
+    setBusy(true); setError('');
+    try {
+      await resignEmployee(employee.id, { resign_date: date });
+      onDone();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Gagal menandai resign');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1000, overflowY: 'auto', padding: '3rem 1rem' }}>
+      <div className="card" style={{ width: '100%', maxWidth: 460, padding: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+          <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Tandai Resign</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#aaa' }}>✕</button>
+        </div>
+        <p style={{ color: '#667', fontSize: '0.85rem', marginTop: 0 }}>
+          Menandai <strong>{employee.full_name}</strong> sebagai karyawan yang mengundurkan diri (resign).
+          Data karyawan dan riwayat HR tetap tersimpan; karyawan tidak lagi berstatus aktif.
+        </p>
+        {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
+        <form onSubmit={submit}>
+          <div className="form-group">
+            <label>Tanggal Resign</label>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} required />
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+            <button type="button" onClick={onClose} className="btn btn-secondary" disabled={busy}>Batal</button>
+            <button type="submit" className="btn btn-primary" disabled={busy} style={{ background: '#7b2cbf', borderColor: '#7b2cbf' }}>
+              {busy ? 'Menyimpan…' : 'Tandai Resign'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 

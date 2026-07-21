@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -842,6 +843,22 @@ func (h *ReportsHandler) ExpenseReport(w http.ResponseWriter, r *http.Request) {
 		GROUP BY inv.branch_id, inv.division_id, ii.item_id, COALESCE(it.name, ii.description)
 		ORDER BY inv.branch_id, inv.division_id, total_value DESC`
 
+	// Item usage broken down by the invoice's vendor, within each branch/division.
+	vendorItemSQL := `
+		SELECT inv.branch_id, inv.division_id,
+		       inv.vendor_id::TEXT AS vendor_id,
+		       COALESCE(vn.name, 'Tanpa Vendor') AS vendor_name,
+		       COALESCE(it.name, ii.description) AS description,
+		       SUM(ii.quantity)::BIGINT AS total_qty,
+		       COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total_value
+		FROM invoices inv
+		JOIN invoice_items ii ON ii.invoice_id = inv.id
+		LEFT JOIN items it   ON it.id = ii.item_id
+		LEFT JOIN vendors vn ON vn.id = inv.vendor_id
+		` + where + `
+		GROUP BY inv.branch_id, inv.division_id, inv.vendor_id, vn.name, COALESCE(it.name, ii.description)
+		ORDER BY inv.branch_id, inv.division_id, total_value DESC`
+
 	summaryRows, err := h.pool.Query(ctx, summarySQL, params...)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan laporan pengeluaran")
@@ -875,6 +892,17 @@ func (h *ReportsHandler) ExpenseReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	vendorRows, err := h.pool.Query(ctx, vendorItemSQL, params...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengeluaran per vendor")
+		return
+	}
+	vendorItems, err := pgx.CollectRows(vendorRows, pgx.RowToMap)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memproses pengeluaran vendor")
+		return
+	}
+
 	// Group invoices and items by branch_id::division_id key
 	invoicesByGroup := map[string][]map[string]any{}
 	for _, inv := range invoices {
@@ -885,6 +913,52 @@ func (h *ReportsHandler) ExpenseReport(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		key := mapGroupKey(it, "branch_id", "division_id")
 		itemsByGroup[key] = append(itemsByGroup[key], it)
+	}
+
+	// Build per-group vendor breakdown: each vendor holds its item list + running total.
+	type vendorAgg struct {
+		vendorID   string
+		vendorName string
+		total      int64
+		items      []map[string]any
+	}
+	// group key -> ordered vendor list, plus an index for O(1) lookup
+	vendorOrder := map[string][]*vendorAgg{}
+	vendorIndex := map[string]map[string]*vendorAgg{}
+	for _, vi := range vendorItems {
+		gkey := mapGroupKey(vi, "branch_id", "division_id")
+		vname := fmt.Sprintf("%v", vi["vendor_name"])
+		vid := fmt.Sprintf("%v", vi["vendor_id"])
+		if vendorIndex[gkey] == nil {
+			vendorIndex[gkey] = map[string]*vendorAgg{}
+		}
+		va := vendorIndex[gkey][vid]
+		if va == nil {
+			va = &vendorAgg{vendorID: vid, vendorName: vname}
+			vendorIndex[gkey][vid] = va
+			vendorOrder[gkey] = append(vendorOrder[gkey], va)
+		}
+		va.total += toInt64(vi["total_value"])
+		va.items = append(va.items, map[string]any{
+			"description": vi["description"],
+			"total_qty":   vi["total_qty"],
+			"total_value": vi["total_value"],
+		})
+	}
+	// Materialize into JSON-ready maps, vendors sorted by spend desc.
+	vendorsByGroup := map[string][]map[string]any{}
+	for gkey, vs := range vendorOrder {
+		sort.SliceStable(vs, func(i, j int) bool { return vs[i].total > vs[j].total })
+		list := make([]map[string]any, 0, len(vs))
+		for _, va := range vs {
+			list = append(list, map[string]any{
+				"vendor_id":   va.vendorID,
+				"vendor_name": va.vendorName,
+				"total_value": va.total,
+				"items":       va.items,
+			})
+		}
+		vendorsByGroup[gkey] = list
 	}
 
 	result := make([]map[string]any, 0, len(summaries))
@@ -902,8 +976,13 @@ func (h *ReportsHandler) ExpenseReport(w http.ResponseWriter, r *http.Request) {
 		for k, v := range g {
 			merged[k] = v
 		}
+		vendorList := vendorsByGroup[key]
+		if vendorList == nil {
+			vendorList = []map[string]any{}
+		}
 		merged["invoices"] = invList
 		merged["item_usage"] = itList
+		merged["vendor_usage"] = vendorList
 		result = append(result, merged)
 	}
 

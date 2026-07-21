@@ -53,6 +53,23 @@ body {
 
 @keyframes dropIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
 
+/* ── Loading spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 20px; height: 20px;
+  border: 2.5px solid rgba(79,142,247,0.25);
+  border-top-color: #4f8ef7;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.spinner-lg { width: 38px; height: 38px; border-width: 4px; }
+.loading-block {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.9rem; padding: 3.5rem 1rem; color: #999;
+}
+.loading-block .loading-text { font-size: 0.9rem; }
+
 .main-content { padding: 2rem; max-width: 98vw; margin: 0 auto; }
 
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }

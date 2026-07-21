@@ -89,6 +89,20 @@ WHERE employee_id = $1
   AND date >= $2
   AND date < $3;
 
+-- name: CountConsecutiveAbsentDays :one
+-- Length of the run of consecutive 'absent' attendance records ending on $2
+-- (inclusive). Attendance records are the unit of "consecutive", so weekends and
+-- holidays (which have no record) do not break a streak. Returns 0 when the record
+-- on $2 is not 'absent'.
+SELECT COUNT(*)
+FROM (
+  SELECT SUM(CASE WHEN status <> 'absent' THEN 1 ELSE 0 END)
+           OVER (ORDER BY date DESC ROWS UNBOUNDED PRECEDING) AS non_absent_seen
+  FROM attendance_records
+  WHERE employee_id = $1 AND date <= $2
+) t
+WHERE non_absent_seen = 0;
+
 -- name: SumViolationPointsInMonth :one
 SELECT COALESCE(SUM(points), 0)::int AS total
 FROM performance_violations

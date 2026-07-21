@@ -282,6 +282,36 @@ func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceReco
 				}
 			}
 		}
+
+		// consecutive_absent — extra penalty for being absent several scheduled work
+		// days in a row. Each active policy fires ONCE, on the day the streak first
+		// reaches its threshold day-count (threshold_minutes reused as days, default
+		// 2). Multiple policies allow escalating thresholds (e.g. a 2-day and a 5-day
+		// rule). The insert is idempotent per (policy, record).
+		consecPolicies, err := qtx.ListActivePerformancePoliciesByRule(ctx, "consecutive_absent")
+		if err != nil {
+			return err
+		}
+		if len(consecPolicies) > 0 {
+			streak, err := qtx.CountConsecutiveAbsentDays(ctx, &db.CountConsecutiveAbsentDaysParams{
+				EmployeeID: rec.EmployeeID,
+				Date:       rec.Date,
+			})
+			if err != nil {
+				return err
+			}
+			for _, p := range consecPolicies {
+				days := 2
+				if p.ThresholdMinutes.Valid && p.ThresholdMinutes.Int32 > 0 {
+					days = int(p.ThresholdMinutes.Int32)
+				}
+				if int(streak) == days {
+					if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 
 	return nil
