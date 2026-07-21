@@ -265,6 +265,10 @@ export const reconcileAttendance  = (date) => api.post('/hr/attendance/reconcile
 export const setAttendanceHalfDay   = (id, data) => api.post(`/hr/attendance/${id}/half-day`, data);
 export const clearAttendanceHalfDay = (id) => api.delete(`/hr/attendance/${id}/half-day`);
 
+// Present-without-scan correction (came to work but forgot to check in and out)
+export const markAttendanceNoPunch  = (id, data) => api.post(`/hr/attendance/${id}/present-no-punch`, data);
+export const clearAttendanceNoPunch = (id) => api.delete(`/hr/attendance/${id}/present-no-punch`);
+
 export const parseFingerprintImport   = (formData) => api.post('/hr/attendance/fingerprint-import/parse', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const confirmFingerprintImport = (formData) => api.post('/hr/attendance/fingerprint-import/confirm', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 
@@ -289,6 +293,8 @@ export const getPerformancePolicies   = () => api.get('/hr/performance/policies'
 export const createPerformancePolicy  = (data) => api.post('/hr/performance/policies', data);
 export const updatePerformancePolicy  = (id, data) => api.put(`/hr/performance/policies/${id}`, data);
 export const deletePerformancePolicy  = (id) => api.delete(`/hr/performance/policies/${id}`);
+export const exportPerformancePolicies = () => api.get('/hr/performance/policies-export', { responseType: 'blob' });
+export const importPerformancePolicies = (formData) => api.post('/hr/performance/policies-import', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 
 // Scores & breakdown
 export const getPerformanceScores     = (params) => api.get('/hr/performance/scores', { params });

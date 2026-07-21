@@ -162,13 +162,18 @@ func AbsenceGraceDays(ctx context.Context, q *db.Queries) int {
 // absent_no_leave violation once the employee already has `graceDays` earlier
 // absent days that month.
 func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceRecord, graceDays int) error {
-	// half_day — a manual correction reclassifies a very-late arrival as a partial
-	// day. It is evaluated by its own 'half_day' policy INSTEAD of the late /
-	// early_leave rules (those are skipped below), so the day is not penalized
-	// twice for the same lateness. First active half_day policy applies (no
-	// threshold), like missing_checkout.
+	// half_day — a manual correction reclassifies a partial day. Its own policy
+	// applies INSTEAD of the late / early_leave rules (those are skipped below), so
+	// the day is not penalized twice. The policy is chosen by the half-day type:
+	// 'late' (late arrival) → 'half_day_late', 'early' (early departure) →
+	// 'half_day_early'. First active matching policy applies (no threshold), like
+	// missing_checkout.
 	if rec.IsHalfDay {
-		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "half_day")
+		halfDayType := "late"
+		if rec.HalfDayType.Valid && rec.HalfDayType.String != "" {
+			halfDayType = rec.HalfDayType.String
+		}
+		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "half_day_"+halfDayType)
 		if err != nil {
 			return err
 		}
@@ -211,6 +216,36 @@ func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceReco
 	// missing_checkout — first active policy applies (no threshold).
 	if rec.IsMissingCheckout {
 		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "missing_checkout")
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			p := rows[0]
+			if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+				return err
+			}
+		}
+	}
+
+	// missing_checkin — only an evening punch (check-out without a check-in). First
+	// active policy applies (no threshold), mirroring missing_checkout.
+	if rec.IsMissingCheckin {
+		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "missing_checkin")
+		if err != nil {
+			return err
+		}
+		if len(rows) > 0 {
+			p := rows[0]
+			if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+				return err
+			}
+		}
+	}
+
+	// no_punch — present but no punches at all (forgot to check in and out). First
+	// active policy applies (no threshold).
+	if rec.IsNoPunch {
+		rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, "no_punch")
 		if err != nil {
 			return err
 		}

@@ -20,8 +20,11 @@ func StateFromRecord(rec *db.AttendanceRecord) *AttendanceState {
 		IsEarlyLeave:       rec.IsEarlyLeave,
 		EarlyLeaveMinutes:  int(rec.EarlyLeaveMinutes),
 		IsMissingCheckout:  rec.IsMissingCheckout,
+		IsMissingCheckin:   rec.IsMissingCheckin,
+		IsNoPunch:          rec.IsNoPunch,
 		IsHalfDay:          rec.IsHalfDay,
 		HalfDayLostMinutes: int(rec.HalfDayLostMinutes),
+		HalfDayType:        textVal(rec.HalfDayType),
 	}
 	if rec.CheckIn.Valid {
 		t := rec.CheckIn.Time
@@ -73,6 +76,8 @@ func FillInsertParams(p *db.InsertAttendanceRecordParams, s *AttendanceState) {
 	p.IsEarlyLeave = s.IsEarlyLeave
 	p.EarlyLeaveMinutes = int32(s.EarlyLeaveMinutes)
 	p.IsMissingCheckout = s.IsMissingCheckout
+	p.IsMissingCheckin = s.IsMissingCheckin
+	p.IsNoPunch = s.IsNoPunch
 }
 
 // FillUpdateParams populates the timestamp/source/anomaly/status fields of an
@@ -88,8 +93,11 @@ func FillUpdateParams(p *db.UpdateAttendanceRecordParams, s *AttendanceState) {
 	p.IsEarlyLeave = s.IsEarlyLeave
 	p.EarlyLeaveMinutes = int32(s.EarlyLeaveMinutes)
 	p.IsMissingCheckout = s.IsMissingCheckout
+	p.IsMissingCheckin = s.IsMissingCheckin
+	p.IsNoPunch = s.IsNoPunch
 	p.IsHalfDay = s.IsHalfDay
 	p.HalfDayLostMinutes = int32(s.HalfDayLostMinutes)
+	p.HalfDayType = srcOrNull(s.HalfDayType)
 }
 
 // DayIsOver reports whether the work day for `date` has ended relative to `now`.

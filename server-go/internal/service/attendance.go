@@ -33,13 +33,25 @@ type AttendanceState struct {
 	IsEarlyLeave      bool
 	EarlyLeaveMinutes int
 	IsMissingCheckout bool
+	// IsMissingCheckin: a present day that has a check-out but no check-in — the
+	// only punch is in the evening (e.g. the morning scan was missed and even after
+	// fingerprint consolidation the sole event is a late one). Mirror of
+	// IsMissingCheckout in the opposite direction.
+	IsMissingCheckin bool
+	// IsNoPunch: a present day with NO punches at all (the employee came to work but
+	// forgot to check in and check out). Set by a manual correction that reclassifies
+	// an otherwise-absent day as present without scans.
+	IsNoPunch bool
 
-	// Half-day correction: a manager reclassified this day as a partial day
-	// (arrival past the max late threshold). HalfDayLostMinutes is the wall-clock
-	// gap between the scheduled work start and the actual entry — the lost working
-	// time that drives the payroll wage deduction.
+	// Half-day correction: a manager reclassified this day as a partial day.
+	// HalfDayType is "late" (arrived past the max late threshold — lost time at the
+	// start of the day) or "early" (came in on time but left in the afternoon —
+	// lost time at the end of the day). HalfDayLostMinutes is that lost working
+	// time in minutes, which drives the payroll wage deduction (same for both
+	// types). Empty HalfDayType means the day is not a half day.
 	IsHalfDay          bool
 	HalfDayLostMinutes int
+	HalfDayType        string
 }
 
 // minutesSinceMidnight returns the wall-clock minute offset of t within its day.
@@ -64,6 +76,8 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 	s.IsEarlyLeave = false
 	s.EarlyLeaveMinutes = 0
 	s.IsMissingCheckout = false
+	s.IsMissingCheckin = false
+	s.IsNoPunch = false
 
 	if s.Status != "present" {
 		return s
@@ -88,6 +102,21 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 
 	if s.CheckIn != nil && s.CheckOut == nil && dayIsOver {
 		s.IsMissingCheckout = true
+	}
+
+	// Missing check-in: has a check-out but never checked in. A check-out without a
+	// matching morning punch is anomalous regardless of the time of day, so this is
+	// flagged as soon as the state holds (no dayIsOver gate needed).
+	if s.CheckIn == nil && s.CheckOut != nil {
+		s.IsMissingCheckin = true
+	}
+
+	// No punch: a present day with neither a check-in nor a check-out (the employee
+	// came but forgot to scan both times). Only arises from a manual correction that
+	// marks an absent day present without scans — a live punch always fills at least
+	// one slot — so it is flagged whenever a present day holds no punches.
+	if s.CheckIn == nil && s.CheckOut == nil {
+		s.IsNoPunch = true
 	}
 
 	return s
@@ -123,6 +152,21 @@ func ComputeLostMinutes(checkIn *time.Time, sched Schedule) int {
 		return 0
 	}
 	return inMin - sched.WorkStartMinutes
+}
+
+// ComputeEarlyLeaveLostMinutes returns the wall-clock minutes between an actual
+// check-out and the branch's scheduled work end — the "lost working time" of an
+// early-departure half day (0 when there's no check-out or the person left at/
+// after work end). Mirrors ComputeLostMinutes but at the end of the day.
+func ComputeEarlyLeaveLostMinutes(checkOut *time.Time, sched Schedule) int {
+	if checkOut == nil {
+		return 0
+	}
+	outMin := minutesSinceMidnight(*checkOut)
+	if outMin >= sched.WorkEndMinutes {
+		return 0
+	}
+	return sched.WorkEndMinutes - outMin
 }
 
 const dedupWindow = 5 * time.Minute

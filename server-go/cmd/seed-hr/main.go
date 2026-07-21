@@ -210,17 +210,52 @@ func main() {
 		fmt.Printf("Performance policy Keterlambatan: %s\n", policyID)
 	}
 
-	// Half-day policy: applied (instead of the late rule) when a manager marks a
-	// very-late arrival as a half day on the attendance corrections page.
-	_, err = pool.Exec(ctx,
-		`INSERT INTO performance_policies (name, rule_type, threshold_minutes, points, is_active)
-		 SELECT 'Setengah Hari', 'half_day', NULL, 5, true
-		 WHERE NOT EXISTS (SELECT 1 FROM performance_policies WHERE rule_type = 'half_day')`,
-	)
-	if err != nil {
-		fmt.Printf("Half-day policy seed skipped: %v\n", err)
-	} else {
-		fmt.Printf("Performance policy Setengah Hari (half_day) ensured\n")
+	// Half-day policies: applied (instead of the late/early_leave rules) when a
+	// manager marks a day as a half day on the attendance corrections page. One
+	// policy per type: 'half_day_late' (late arrival) and 'half_day_early' (early
+	// departure), so the point deduction can differ.
+	for _, hp := range []struct{ name, rule string }{
+		{"Setengah Hari (Datang Siang)", "half_day_late"},
+		{"Setengah Hari (Pulang Awal)", "half_day_early"},
+		{"Tidak Absen Masuk", "missing_checkin"},
+		{"Tidak Absen Masuk & Pulang", "no_punch"},
+	} {
+		_, err = pool.Exec(ctx,
+			`INSERT INTO performance_policies (name, rule_type, threshold_minutes, points, is_active)
+			 SELECT $1, $2, NULL, 5, true
+			 WHERE NOT EXISTS (SELECT 1 FROM performance_policies WHERE rule_type = $2)`,
+			hp.name, hp.rule,
+		)
+		if err != nil {
+			fmt.Printf("Half-day policy %s seed skipped: %v\n", hp.rule, err)
+		} else {
+			fmt.Printf("Performance policy %s (%s) ensured\n", hp.name, hp.rule)
+		}
+	}
+
+	// Manual-judgment policies: applied by hand when adding a manual violation
+	// (they cannot be auto-detected from attendance). Deduped by name.
+	for _, mp := range []struct {
+		name   string
+		points int
+	}{
+		{"Tidak mengajukan izin keterlambatan sesuai prosedur", 10},
+		{"Tidak mengajukan cuti sebelum tidak masuk kerja", 15},
+		{"Keluar kantor saat jam kerja tanpa izin", 10},
+		{"Terlambat menyerahkan dokumen pendukung sakit (>2 hari kerja)", 5},
+		{"Izin sakit tanpa surat dokter", 10},
+	} {
+		_, err = pool.Exec(ctx,
+			`INSERT INTO performance_policies (name, rule_type, threshold_minutes, points, is_active)
+			 SELECT $1, 'manual', NULL, $2, true
+			 WHERE NOT EXISTS (SELECT 1 FROM performance_policies WHERE name = $1 AND rule_type = 'manual')`,
+			mp.name, mp.points,
+		)
+		if err != nil {
+			fmt.Printf("Manual policy %q seed skipped: %v\n", mp.name, err)
+		} else {
+			fmt.Printf("Performance policy %q (manual, -%d) ensured\n", mp.name, mp.points)
+		}
 	}
 
 	// ── Summary ───────────────────────────────────────────────────────────────

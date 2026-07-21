@@ -68,6 +68,9 @@ type AttendanceRecord struct {
 	Note              pgtype.Text        `json:"note"`
 	IsHalfDay         bool               `json:"is_half_day"`
 	HalfDayLostMinutes int32             `json:"half_day_lost_minutes"`
+	HalfDayType        pgtype.Text        `json:"half_day_type"`
+	IsMissingCheckin   bool               `json:"is_missing_checkin"`
+	IsNoPunch          bool               `json:"is_no_punch"`
 }
 
 type Branch struct {

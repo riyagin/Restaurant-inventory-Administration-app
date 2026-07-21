@@ -480,7 +480,16 @@ export default function StockOpname() {
           {groups.length === 0 ? (
             <p style={{ color: '#999', fontSize: '0.9rem', padding: '0.5rem 0' }}>Tidak ada catatan inventaris di gudang ini.</p>
           ) : (
-            <form onSubmit={handleSubmit}>
+            <form
+              onSubmit={handleSubmit}
+              onKeyDown={e => {
+                // Prevent Enter (e.g. after typing an actual qty) from
+                // accidentally submitting / confirming the opname.
+                if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+                  e.preventDefault();
+                }
+              }}
+            >
               {/* ── Top fields ── */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
                 <div className="form-group" style={{ margin: 0 }}>

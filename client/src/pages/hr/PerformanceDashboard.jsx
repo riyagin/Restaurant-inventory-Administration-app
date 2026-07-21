@@ -3,12 +3,17 @@ import { Link } from 'react-router-dom';
 import {
   getPerformanceScores, getBranches, getEmployeePerformance,
   createPerformanceViolation, getEmployees, evaluatePerformance, resetAutoViolations,
+  getPerformancePolicies,
 } from '../../api';
 
 const RULE_LABELS = {
   late: 'Terlambat',
   early_leave: 'Pulang Awal',
   missing_checkout: 'Tidak Absen Pulang',
+  missing_checkin: 'Tidak Absen Masuk',
+  no_punch: 'Tidak Absen Masuk & Pulang',
+  half_day_late: 'Setengah Hari (Datang Siang)',
+  half_day_early: 'Setengah Hari (Pulang Awal)',
   absent_no_leave: 'Absen Tanpa Cuti',
   manual: 'Manual',
 };
@@ -72,13 +77,29 @@ function ViolationBreakdown({ employeeId, month }) {
 
 function ManualViolationModal({ onClose, onSaved }) {
   const [employees, setEmployees] = useState([]);
-  const [form, setForm] = useState({ employee_id: '', date: new Date().toISOString().slice(0, 10), points: 5, note: '' });
+  const [policies, setPolicies] = useState([]);
+  const [form, setForm] = useState({ employee_id: '', policy_id: '', date: new Date().toISOString().slice(0, 10), points: 5, note: '' });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
+    // Only 'manual' policies are hand-applied here; auto policies fire from attendance.
+    getPerformancePolicies()
+      .then(r => setPolicies((r.data?.data || r.data || []).filter(p => p.rule_type === 'manual' && p.is_active)))
+      .catch(() => setPolicies([]));
   }, []);
+
+  // Selecting a named policy prefills the points (and the note if still blank).
+  const onPolicyChange = (id) => {
+    const p = policies.find(x => String(x.id) === String(id));
+    setForm(f => ({
+      ...f,
+      policy_id: id,
+      points: p ? p.points : f.points,
+      note: (!f.note.trim() && p) ? p.name : f.note,
+    }));
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -89,6 +110,7 @@ function ManualViolationModal({ onClose, onSaved }) {
     try {
       await createPerformanceViolation({
         employee_id: form.employee_id,
+        policy_id: form.policy_id || undefined,
         date: form.date,
         points: Number(form.points),
         note: form.note.trim(),
@@ -121,6 +143,13 @@ function ManualViolationModal({ onClose, onSaved }) {
           <div className="form-group">
             <label>Tanggal</label>
             <input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} required />
+          </div>
+          <div className="form-group">
+            <label>Jenis Pelanggaran (opsional)</label>
+            <select value={form.policy_id} onChange={e => onPolicyChange(e.target.value)}>
+              <option value="">— Bebas / lainnya —</option>
+              {policies.map(p => <option key={p.id} value={p.id}>{p.name} (−{p.points})</option>)}
+            </select>
           </div>
           <div className="form-group">
             <label>Poin Pengurangan</label>

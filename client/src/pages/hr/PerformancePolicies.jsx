@@ -1,16 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getPerformancePolicies, createPerformancePolicy,
   updatePerformancePolicy, deletePerformancePolicy,
+  exportPerformancePolicies, importPerformancePolicies,
 } from '../../api';
 
 const RULE_LABELS = {
   late: 'Terlambat',
   early_leave: 'Pulang Awal',
   missing_checkout: 'Tidak Absen Pulang',
+  missing_checkin: 'Tidak Absen Masuk',
+  no_punch: 'Tidak Absen Masuk & Pulang',
   absent_no_leave: 'Absen Tanpa Cuti',
-  half_day: 'Setengah Hari',
+  half_day_late: 'Setengah Hari (Datang Siang)',
+  half_day_early: 'Setengah Hari (Pulang Awal)',
   manual: 'Manual',
 };
 
@@ -21,8 +25,11 @@ const SEED_EXAMPLES = [
   { name: 'Terlambat > 60 menit', rule_type: 'late', threshold_minutes: 60, points: 5, max_occurrences_per_month: null },
   { name: 'Pulang lebih awal', rule_type: 'early_leave', threshold_minutes: 30, points: 2, max_occurrences_per_month: null },
   { name: 'Tidak absen pulang', rule_type: 'missing_checkout', threshold_minutes: null, points: 1, max_occurrences_per_month: null },
+  { name: 'Tidak absen masuk', rule_type: 'missing_checkin', threshold_minutes: null, points: 1, max_occurrences_per_month: null },
+  { name: 'Tidak absen masuk & pulang', rule_type: 'no_punch', threshold_minutes: null, points: 2, max_occurrences_per_month: null },
   { name: 'Absen tanpa cuti', rule_type: 'absent_no_leave', threshold_minutes: null, points: 10, max_occurrences_per_month: null },
-  { name: 'Setengah hari', rule_type: 'half_day', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
+  { name: 'Setengah hari (datang siang)', rule_type: 'half_day_late', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
+  { name: 'Setengah hari (pulang awal)', rule_type: 'half_day_early', threshold_minutes: null, points: 5, max_occurrences_per_month: null },
 ];
 
 const emptyForm = { name: '', rule_type: 'late', threshold_minutes: '', points: 2, max_occurrences_per_month: '', is_active: true };
@@ -80,9 +87,47 @@ export default function PerformancePolicies() {
   const [editForm, setEditForm] = useState(emptyForm);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [ioMsg, setIoMsg] = useState('');
+  const [ioBusy, setIoBusy] = useState(false);
+  const fileRef = useRef();
 
   const load = () => getPerformancePolicies().then(r => setRows(r.data || [])).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
+
+  const handleExport = async () => {
+    setError(''); setIoMsg(''); setIoBusy(true);
+    try {
+      const r = await exportPerformancePolicies();
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url; a.download = 'kebijakan-kinerja.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setError('Gagal mengekspor kebijakan');
+    } finally {
+      setIoBusy(false);
+    }
+  };
+
+  const handleImport = async (file) => {
+    if (!file) return;
+    setError(''); setIoMsg(''); setIoBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await importPerformancePolicies(fd);
+      setIoMsg(`Impor berhasil: ${r.data.created} dibuat, ${r.data.updated} diperbarui.`);
+      load();
+    } catch (err) {
+      const d = err.response?.data;
+      if (d?.errors?.length) setError(`${d.error}\n• ` + d.errors.join('\n• '));
+      else setError(d?.error || 'Gagal mengimpor kebijakan');
+    } finally {
+      setIoBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -155,8 +200,22 @@ export default function PerformancePolicies() {
     <>
       <div className="page-header">
         <h1>Kebijakan Evaluasi</h1>
-        <Link to="/hr/performance" className="btn btn-secondary">Dasbor Evaluasi</Link>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button onClick={handleExport} disabled={ioBusy} className="btn btn-secondary">Ekspor Excel</button>
+          <button onClick={() => fileRef.current?.click()} disabled={ioBusy} className="btn btn-secondary">
+            {ioBusy ? 'Memproses…' : 'Impor Excel'}
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx" style={{ display: 'none' }}
+            onChange={e => handleImport(e.target.files?.[0])} />
+          <Link to="/hr/performance" className="btn btn-secondary">Dasbor Evaluasi</Link>
+        </div>
       </div>
+
+      {ioMsg && (
+        <div style={{ marginBottom: '1rem', background: '#e8f5e9', color: '#1b5e20', padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem' }}>
+          {ioMsg}
+        </div>
+      )}
 
       <p style={{ color: '#667', fontSize: '0.9rem', marginBottom: '1rem' }}>
         Setiap karyawan memulai bulan dengan skor <strong>100</strong>. Pelanggaran mengurangi poin secara otomatis dari
@@ -164,7 +223,7 @@ export default function PerformancePolicies() {
         cocok yang diterapkan (mis. 70 menit terlambat hanya kena kebijakan ≥60 menit).
       </p>
 
-      {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
+      {error && <div className="error-msg" style={{ marginBottom: '1rem', whiteSpace: 'pre-line' }}>{error}</div>}
 
       <div className="card" style={{ marginBottom: '1rem' }}>
         <PolicyForm form={form} setForm={setForm} onSubmit={handleCreate} submitting={submitting} submitLabel="+ Tambah" />

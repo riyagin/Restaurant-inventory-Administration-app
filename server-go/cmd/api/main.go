@@ -373,6 +373,9 @@ func main() {
 			// Half-day correction (manual reclassification, no approval).
 			r.Post("/api/hr/attendance/{id}/half-day", attendanceHandler.SetHalfDay)
 			r.Delete("/api/hr/attendance/{id}/half-day", attendanceHandler.ClearHalfDay)
+			// Present-without-scan correction (forgot to check in and out).
+			r.Post("/api/hr/attendance/{id}/present-no-punch", attendanceHandler.MarkPresentNoPunch)
+			r.Delete("/api/hr/attendance/{id}/present-no-punch", attendanceHandler.ClearPresentNoPunch)
 		})
 		// Attendance configuration & batch operations require admin/manager.
 		r.Group(func(r chi.Router) {
@@ -403,6 +406,10 @@ func main() {
 			r.Post("/api/hr/performance/policies", performanceHandler.CreatePolicy)
 			r.Put("/api/hr/performance/policies/{id}", performanceHandler.UpdatePolicy)
 			r.Delete("/api/hr/performance/policies/{id}", performanceHandler.DeletePolicy)
+			// Policies Excel import/export (distinct paths so they don't collide with
+			// the /policies/{id} param route in chi's radix tree).
+			r.Get("/api/hr/performance/policies-export", performanceHandler.ExportPolicies)
+			r.Post("/api/hr/performance/policies-import", performanceHandler.ImportPolicies)
 			// Scores & breakdown
 			r.Get("/api/hr/performance/scores", performanceHandler.ListScores)
 			r.Get("/api/hr/employees/{id}/performance", performanceHandler.EmployeePerformance)

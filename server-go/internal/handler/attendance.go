@@ -76,7 +76,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		conds[len(conds)-1] = fmt.Sprintf("(lower(e.full_name) LIKE $%d OR lower(e.employee_code) LIKE $%d)", len(args), len(args))
 	}
 	if strings.EqualFold(q.Get("anomaly_only"), "true") {
-		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout)")
+		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout OR ar.is_missing_checkin)")
 	}
 	if strings.EqualFold(q.Get("half_day_only"), "true") {
 		conds = append(conds, "ar.is_half_day")
@@ -93,7 +93,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		    ar.check_in_source, ar.check_out_source, ar.check_in_photo_path,
 		    ar.device_id, ar.status, ar.is_late, ar.late_minutes,
 		    ar.is_early_leave, ar.early_leave_minutes, ar.is_missing_checkout, ar.note,
-		    ar.is_half_day, ar.half_day_lost_minutes,
+		    ar.is_half_day, ar.half_day_lost_minutes, ar.half_day_type, ar.is_missing_checkin, ar.is_no_punch,
 		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name,
 		    COALESCE(d.branch_id <> e.branch_id, false) AS is_remote,
 		    db.name AS clock_in_branch_name
@@ -132,6 +132,9 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		Note               pgtype.Text        `json:"note"`
 		IsHalfDay          bool               `json:"is_half_day"`
 		HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
+		HalfDayType        pgtype.Text        `json:"half_day_type"`
+		IsMissingCheckin   bool               `json:"is_missing_checkin"`
+		IsNoPunch          bool               `json:"is_no_punch"`
 		FullName           string             `json:"full_name"`
 		EmployeeCode      string             `json:"employee_code"`
 		BranchID          pgtype.UUID        `json:"branch_id"`
@@ -151,7 +154,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			&x.CheckInSource, &x.CheckOutSource, &x.CheckInPhotoPath,
 			&x.DeviceID, &x.Status, &x.IsLate, &x.LateMinutes,
 			&x.IsEarlyLeave, &x.EarlyLeaveMinutes, &x.IsMissingCheckout, &x.Note,
-			&x.IsHalfDay, &x.HalfDayLostMinutes,
+			&x.IsHalfDay, &x.HalfDayLostMinutes, &x.HalfDayType, &x.IsMissingCheckin, &x.IsNoPunch,
 			&x.FullName, &x.EmployeeCode, &x.BranchID, &x.BranchName,
 			&x.IsRemote, &x.ClockInBranchName,
 		); err != nil {
@@ -301,12 +304,16 @@ func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 // ── Half-day correction — POST /api/hr/attendance/:id/half-day ───────────────
 //
-// Reclassifies a day where the employee arrived past the maximum late threshold
-// as a "half day": the person started work from a certain hour. The wage is later
-// reduced by the lost working hours (scheduled start → entry) and the performance
-// score is deducted by the 'half_day' policy instead of the normal late rule.
-// Manual manager action, no approval. Body: { start_time (RFC3339, optional —
-// defaults to the current check-in), note (REQUIRED) }.
+// Reclassifies a day as a "half day". Two types:
+//   - "late":  arrived past the max late threshold. `start_time` becomes the
+//     check-in; lost minutes = scheduled start → entry.
+//   - "early": came in on time but left in the afternoon. `end_time` becomes the
+//     check-out; lost minutes = departure → scheduled work end.
+//
+// The wage is later reduced by the lost working hours and the performance score is
+// deducted by the matching 'half_day_late' / 'half_day_early' policy instead of the
+// normal late/early_leave rules. Manual manager action, no approval.
+// Body: { type ("late"|"early", default "late"), start_time?, end_time?, note (REQUIRED) }.
 func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -316,7 +323,9 @@ func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
 	var body struct {
-		StartTime *string `json:"start_time"` // RFC3339; the corrected entry time
+		Type      string  `json:"type"`       // "late" | "early"
+		StartTime *string `json:"start_time"` // RFC3339; corrected entry time (late)
+		EndTime   *string `json:"end_time"`   // RFC3339; corrected exit time (early)
 		Note      string  `json:"note"`
 	}
 	if err := parseBody(r, &body); err != nil {
@@ -326,6 +335,14 @@ func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	body.Note = strings.TrimSpace(body.Note)
 	if body.Note == "" {
 		respondError(w, http.StatusBadRequest, "catatan koreksi wajib diisi")
+		return
+	}
+	hdType := strings.TrimSpace(body.Type)
+	if hdType == "" {
+		hdType = "late"
+	}
+	if hdType != "late" && hdType != "early" {
+		respondError(w, http.StatusBadRequest, "tipe setengah hari tidak valid (late/early)")
 		return
 	}
 
@@ -341,43 +358,74 @@ func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state := service.StateFromRecord(existing)
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
 
-	// Resolve the corrected entry time: an explicit start_time overrides the
-	// current check-in; otherwise the existing check-in is used as-is.
-	if body.StartTime != nil {
-		v := strings.TrimSpace(*body.StartTime)
-		if v == "" {
-			respondError(w, http.StatusBadRequest, "waktu mulai tidak boleh kosong")
+	if hdType == "late" {
+		// Resolve the corrected entry time: an explicit start_time overrides the
+		// current check-in; otherwise the existing check-in is used as-is.
+		if body.StartTime != nil {
+			t, ok := parseHalfDayTime(w, *body.StartTime, "waktu mulai")
+			if !ok {
+				return
+			}
+			state.CheckIn = &t
+			state.CheckInSource = "manual"
+		}
+		if state.CheckIn == nil {
+			respondError(w, http.StatusBadRequest, "waktu mulai wajib diisi karena kehadiran belum memiliki jam masuk")
 			return
 		}
-		t, perr := time.Parse(time.RFC3339, v)
-		if perr != nil {
-			respondError(w, http.StatusBadRequest, "format waktu mulai tidak valid (RFC3339)")
+		state.HalfDayLostMinutes = service.ComputeLostMinutes(state.CheckIn, sched)
+	} else { // early
+		if body.EndTime != nil {
+			t, ok := parseHalfDayTime(w, *body.EndTime, "waktu pulang")
+			if !ok {
+				return
+			}
+			state.CheckOut = &t
+			state.CheckOutSource = "manual"
+		}
+		if state.CheckOut == nil {
+			respondError(w, http.StatusBadRequest, "waktu pulang wajib diisi karena kehadiran belum memiliki jam pulang")
 			return
 		}
-		state.CheckIn = &t
-		state.CheckInSource = "manual"
-	}
-	if state.CheckIn == nil {
-		respondError(w, http.StatusBadRequest, "waktu mulai wajib diisi karena kehadiran belum memiliki jam masuk")
-		return
+		state.HalfDayLostMinutes = service.ComputeEarlyLeaveLostMinutes(state.CheckOut, sched)
 	}
 
-	// A half day is a present day with a partial start.
+	// A half day is a present day with a partial start or end.
 	state.Status = "present"
 	state.IsHalfDay = true
+	state.HalfDayType = hdType
 
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
-	state.HalfDayLostMinutes = service.ComputeLostMinutes(state.CheckIn, sched)
 	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
 
+	label := "datang siang"
+	if hdType == "early" {
+		label = "pulang awal"
+	}
 	updated, err := h.persistCorrection(ctx, existing, state, body.Note,
-		fmt.Sprintf("Koreksi setengah hari (%d menit hilang): %s", state.HalfDayLostMinutes, body.Note))
+		fmt.Sprintf("Koreksi setengah hari (%s, %d menit hilang): %s", label, state.HalfDayLostMinutes, body.Note))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan koreksi setengah hari")
 		return
 	}
 	respondJSON(w, http.StatusOK, updated)
+}
+
+// parseHalfDayTime parses an RFC3339 time from a half-day request, writing the
+// appropriate 400 on failure. `field` names the field for the error message.
+func parseHalfDayTime(w http.ResponseWriter, raw, field string) (time.Time, bool) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		respondError(w, http.StatusBadRequest, field+" tidak boleh kosong")
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format "+field+" tidak valid (RFC3339)")
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // ── Clear half-day — DELETE /api/hr/attendance/:id/half-day ───────────────────
@@ -405,6 +453,7 @@ func (h *AttendanceHandler) ClearHalfDay(w http.ResponseWriter, r *http.Request)
 	state := service.StateFromRecord(existing)
 	state.IsHalfDay = false
 	state.HalfDayLostMinutes = 0
+	state.HalfDayType = ""
 
 	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
 	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
@@ -413,6 +462,108 @@ func (h *AttendanceHandler) ClearHalfDay(w http.ResponseWriter, r *http.Request)
 	updated, err := h.persistCorrection(ctx, existing, state, note, "Membatalkan koreksi setengah hari")
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal membatalkan koreksi setengah hari")
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// ── Present-without-scan — POST /api/hr/attendance/:id/present-no-punch ───────
+//
+// Marks a day the employee actually worked but forgot to check in AND check out.
+// Sets status=present with no punches (is_no_punch), which the performance engine
+// penalizes via the 'no_punch' policy. Typically applied to a record reconciliation
+// marked 'absent'. Manual manager action, no approval. Body: { note (REQUIRED) }.
+func (h *AttendanceHandler) MarkPresentNoPunch(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	var body struct {
+		Note string `json:"note"`
+	}
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	body.Note = strings.TrimSpace(body.Note)
+	if body.Note == "" {
+		respondError(w, http.StatusBadRequest, "catatan koreksi wajib diisi")
+		return
+	}
+
+	ctx := r.Context()
+	existing, err := h.queries.GetAttendanceRecordByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "data kehadiran tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
+		return
+	}
+
+	// Present but with no punches. Clear any punches and any half-day classification
+	// (a no-punch day is neither a late nor an early half day).
+	state := service.StateFromRecord(existing)
+	state.Status = "present"
+	state.CheckIn = nil
+	state.CheckInSource = ""
+	state.CheckOut = nil
+	state.CheckOutSource = ""
+	state.IsHalfDay = false
+	state.HalfDayType = ""
+	state.HalfDayLostMinutes = 0
+
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
+	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+
+	updated, err := h.persistCorrection(ctx, existing, state, body.Note,
+		fmt.Sprintf("Koreksi hadir tanpa absen: %s", body.Note))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan koreksi hadir tanpa absen")
+		return
+	}
+	respondJSON(w, http.StatusOK, updated)
+}
+
+// ── Clear present-no-punch — DELETE /api/hr/attendance/:id/present-no-punch ────
+// Reverts a "present without scan" correction back to 'absent' and re-evaluates.
+func (h *AttendanceHandler) ClearPresentNoPunch(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	ctx := r.Context()
+	existing, err := h.queries.GetAttendanceRecordByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "data kehadiran tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
+		return
+	}
+
+	state := service.StateFromRecord(existing)
+	state.Status = "absent"
+	state.CheckIn = nil
+	state.CheckInSource = ""
+	state.CheckOut = nil
+	state.CheckOutSource = ""
+
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
+	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+
+	note := textOrEmpty(existing.Note)
+	updated, err := h.persistCorrection(ctx, existing, state, note, "Membatalkan koreksi hadir tanpa absen (ditandai absen)")
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membatalkan koreksi")
 		return
 	}
 	respondJSON(w, http.StatusOK, updated)

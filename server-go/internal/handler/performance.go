@@ -29,7 +29,7 @@ func NewPerformanceHandler(pool *pgxpool.Pool, queries *db.Queries) *Performance
 
 func validRuleType(t string) bool {
 	switch t {
-	case "late", "early_leave", "missing_checkout", "absent_no_leave", "half_day", "manual":
+	case "late", "early_leave", "missing_checkout", "missing_checkin", "no_punch", "absent_no_leave", "half_day_late", "half_day_early", "manual":
 		return true
 	}
 	return false
@@ -405,6 +405,7 @@ func (h *PerformanceHandler) EmployeePerformance(w http.ResponseWriter, r *http.
 
 type manualViolationBody struct {
 	EmployeeID string `json:"employee_id"`
+	PolicyID   string `json:"policy_id"` // optional — links the violation to a named 'manual' policy
 	Date       string `json:"date"`
 	Points     int32  `json:"points"`
 	Note       string `json:"note"`
@@ -434,6 +435,17 @@ func (h *PerformanceHandler) CreateManualViolation(w http.ResponseWriter, r *htt
 	}
 	body.Note = strings.TrimSpace(body.Note)
 
+	// Optional link to a named 'manual' policy (from the policy catalog).
+	var policyID pgtype.UUID
+	if s := strings.TrimSpace(body.PolicyID); s != "" {
+		pu, perr := parseUUID(s)
+		if perr != nil {
+			respondError(w, http.StatusBadRequest, "kebijakan tidak valid")
+			return
+		}
+		policyID = pgtype.UUID{Bytes: pu, Valid: true}
+	}
+
 	ctx := r.Context()
 	empID := pgtype.UUID{Bytes: empUUID, Valid: true}
 	createdBy := middleware.UserIDFromCtx(ctx)
@@ -448,6 +460,7 @@ func (h *PerformanceHandler) CreateManualViolation(w http.ResponseWriter, r *htt
 
 	v, err := qtx.InsertManualViolation(ctx, &db.InsertManualViolationParams{
 		EmployeeID: empID,
+		PolicyID:   policyID,
 		Date:       pgtype.Date{Time: d, Valid: true},
 		Points:     body.Points,
 		Note:       pgtype.Text{String: body.Note, Valid: body.Note != ""},

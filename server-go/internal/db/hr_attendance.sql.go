@@ -179,7 +179,7 @@ const getAttendanceRecordByID = `-- name: GetAttendanceRecordByID :one
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
        is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
 FROM attendance_records
 WHERE id = $1
 `
@@ -206,6 +206,9 @@ func (q *Queries) GetAttendanceRecordByID(ctx context.Context, id pgtype.UUID) (
 		&i.Note,
 		&i.IsHalfDay,
 		&i.HalfDayLostMinutes,
+		&i.HalfDayType,
+		&i.IsMissingCheckin,
+		&i.IsNoPunch,
 	)
 	return &i, err
 }
@@ -282,16 +285,16 @@ const insertAttendanceRecord = `-- name: InsertAttendanceRecord :one
 INSERT INTO attendance_records (
     id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
     check_in_photo_path, device_id, status, is_late, late_minutes,
-    is_early_leave, early_leave_minutes, is_missing_checkout, note
+    is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
-    $12, $13, $14, $15
+    $12, $13, $14, $15, $16, $17
 )
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
-          is_early_leave, early_leave_minutes, is_missing_checkout, note
+          is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch
 `
 
 type InsertAttendanceRecordParams struct {
@@ -310,6 +313,8 @@ type InsertAttendanceRecordParams struct {
 	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
 	IsMissingCheckout bool               `json:"is_missing_checkout"`
 	Note              pgtype.Text        `json:"note"`
+	IsMissingCheckin  bool               `json:"is_missing_checkin"`
+	IsNoPunch         bool               `json:"is_no_punch"`
 }
 
 func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttendanceRecordParams) (*AttendanceRecord, error) {
@@ -329,6 +334,8 @@ func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttenda
 		arg.EarlyLeaveMinutes,
 		arg.IsMissingCheckout,
 		arg.Note,
+		arg.IsMissingCheckin,
+		arg.IsNoPunch,
 	)
 	var i AttendanceRecord
 	err := row.Scan(
@@ -348,6 +355,8 @@ func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttenda
 		&i.EarlyLeaveMinutes,
 		&i.IsMissingCheckout,
 		&i.Note,
+		&i.IsMissingCheckin,
+		&i.IsNoPunch,
 	)
 	return &i, err
 }
@@ -635,12 +644,15 @@ UPDATE attendance_records SET
     is_missing_checkout = $12,
     note = $13,
     is_half_day = $14,
-    half_day_lost_minutes = $15
-WHERE id = $16
+    half_day_lost_minutes = $15,
+    half_day_type = $16,
+    is_missing_checkin = $17,
+    is_no_punch = $18
+WHERE id = $19
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
           is_early_leave, early_leave_minutes, is_missing_checkout, note,
-          is_half_day, half_day_lost_minutes
+          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
 `
 
 type UpdateAttendanceRecordParams struct {
@@ -659,6 +671,9 @@ type UpdateAttendanceRecordParams struct {
 	Note               pgtype.Text        `json:"note"`
 	IsHalfDay          bool               `json:"is_half_day"`
 	HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
+	HalfDayType        pgtype.Text        `json:"half_day_type"`
+	IsMissingCheckin   bool               `json:"is_missing_checkin"`
+	IsNoPunch          bool               `json:"is_no_punch"`
 	ID                 pgtype.UUID        `json:"id"`
 }
 
@@ -679,6 +694,9 @@ func (q *Queries) UpdateAttendanceRecord(ctx context.Context, arg *UpdateAttenda
 		arg.Note,
 		arg.IsHalfDay,
 		arg.HalfDayLostMinutes,
+		arg.HalfDayType,
+		arg.IsMissingCheckin,
+		arg.IsNoPunch,
 		arg.ID,
 	)
 	var i AttendanceRecord
@@ -701,6 +719,9 @@ func (q *Queries) UpdateAttendanceRecord(ctx context.Context, arg *UpdateAttenda
 		&i.Note,
 		&i.IsHalfDay,
 		&i.HalfDayLostMinutes,
+		&i.HalfDayType,
+		&i.IsMissingCheckin,
+		&i.IsNoPunch,
 	)
 	return &i, err
 }

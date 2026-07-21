@@ -250,12 +250,13 @@ func (q *Queries) InsertAutoViolation(ctx context.Context, arg *InsertAutoViolat
 
 const insertManualViolation = `-- name: InsertManualViolation :one
 INSERT INTO performance_violations (id, employee_id, policy_id, attendance_record_id, date, points, source, note, created_by)
-VALUES (gen_random_uuid(), $1, NULL, NULL, $2, $3, 'manual', $4, $5)
+VALUES (gen_random_uuid(), $1, $2, NULL, $3, $4, 'manual', $5, $6)
 RETURNING id, employee_id, policy_id, attendance_record_id, date, points, source, note, created_by, created_at
 `
 
 type InsertManualViolationParams struct {
 	EmployeeID pgtype.UUID `json:"employee_id"`
+	PolicyID   pgtype.UUID `json:"policy_id"`
 	Date       pgtype.Date `json:"date"`
 	Points     int32       `json:"points"`
 	Note       pgtype.Text `json:"note"`
@@ -265,6 +266,7 @@ type InsertManualViolationParams struct {
 func (q *Queries) InsertManualViolation(ctx context.Context, arg *InsertManualViolationParams) (*PerformanceViolation, error) {
 	row := q.db.QueryRow(ctx, insertManualViolation,
 		arg.EmployeeID,
+		arg.PolicyID,
 		arg.Date,
 		arg.Points,
 		arg.Note,
@@ -326,7 +328,7 @@ const listAttendanceRecordsForDate = `-- name: ListAttendanceRecordsForDate :man
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
        is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
 FROM attendance_records
 WHERE date = $1
 `
@@ -359,6 +361,9 @@ func (q *Queries) ListAttendanceRecordsForDate(ctx context.Context, date pgtype.
 			&i.Note,
 			&i.IsHalfDay,
 			&i.HalfDayLostMinutes,
+			&i.HalfDayType,
+			&i.IsMissingCheckin,
+			&i.IsNoPunch,
 		); err != nil {
 			return nil, err
 		}

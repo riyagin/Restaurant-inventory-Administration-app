@@ -315,6 +315,12 @@ func (h *PayslipHandler) DownloadPeriodPayslips(w http.ResponseWriter, r *http.R
 // GetSettings — GET /api/hr/settings
 func (h *PayslipHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.queries.GetHRSettings(r.Context())
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Singleton row missing (e.g. deleted). Return defaults instead of 500 so
+		// the settings page loads; UpdateSettings will re-create the row on save.
+		respondJSON(w, http.StatusOK, &db.HrSetting{ID: 1, AbsenceGraceDays: 4})
+		return
+	}
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil pengaturan HR")
 		return
@@ -338,8 +344,9 @@ func (h *PayslipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// absence_grace_days is optional in the request; when omitted keep the stored
-	// value. When present it must be >= 0.
-	grace := int32(0)
+	// value (or the schema default of 4 when no row exists yet). When present it
+	// must be >= 0.
+	grace := int32(4)
 	if current, err := h.queries.GetHRSettings(r.Context()); err == nil && current != nil {
 		grace = current.AbsenceGraceDays
 	}

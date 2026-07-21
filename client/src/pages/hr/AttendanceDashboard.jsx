@@ -66,6 +66,8 @@ export function AnomalyChips({ record }) {
   if (record.is_late)            chips.push(`Terlambat ${record.late_minutes} mnt`);
   if (record.is_early_leave)     chips.push('Pulang Awal');
   if (record.is_missing_checkout) chips.push('Tidak Absen Pulang');
+  if (record.is_missing_checkin)  chips.push('Tidak Absen Masuk');
+  if (record.is_no_punch)         chips.push('Tidak Absen Masuk & Pulang');
   if (chips.length === 0) return null;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.4rem' }}>
