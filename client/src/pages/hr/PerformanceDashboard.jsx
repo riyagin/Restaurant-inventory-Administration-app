@@ -75,20 +75,33 @@ function ViolationBreakdown({ employeeId, month }) {
   );
 }
 
-function ManualViolationModal({ onClose, onSaved }) {
+// ManualViolationModal adds a hand-applied performance penalty. Pass `presetEmployee`
+// ({ id, label }) to lock the penalty to a specific employee (opened from a row on the
+// evaluation dashboard or attendance correction) — the employee picker is then hidden.
+// `presetDate` (YYYY-MM-DD) prefills the date.
+export function ManualViolationModal({ onClose, onSaved, presetEmployee = null, presetDate = null }) {
   const [employees, setEmployees] = useState([]);
   const [policies, setPolicies] = useState([]);
-  const [form, setForm] = useState({ employee_id: '', policy_id: '', date: new Date().toISOString().slice(0, 10), points: 5, note: '' });
+  const [form, setForm] = useState({
+    employee_id: presetEmployee?.id || '',
+    policy_id: '',
+    date: presetDate || new Date().toISOString().slice(0, 10),
+    points: 5,
+    note: '',
+  });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
+    // The employee list is only needed for the free picker; skip it when preset.
+    if (!presetEmployee) {
+      getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
+    }
     // Only 'manual' policies are hand-applied here; auto policies fire from attendance.
     getPerformancePolicies()
       .then(r => setPolicies((r.data?.data || r.data || []).filter(p => p.rule_type === 'manual' && p.is_active)))
       .catch(() => setPolicies([]));
-  }, []);
+  }, [presetEmployee]);
 
   // Selecting a named policy prefills the points (and the note if still blank).
   const onPolicyChange = (id) => {
@@ -135,10 +148,14 @@ function ManualViolationModal({ onClose, onSaved }) {
         <form onSubmit={submit}>
           <div className="form-group">
             <label>Karyawan</label>
-            <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))} required>
-              <option value="">Pilih karyawan…</option>
-              {employees.map(e => <option key={e.id} value={e.id}>{e.full_name} ({e.employee_code})</option>)}
-            </select>
+            {presetEmployee ? (
+              <div style={{ fontWeight: 600, padding: '0.4rem 0' }}>{presetEmployee.label}</div>
+            ) : (
+              <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))} required>
+                <option value="">Pilih karyawan…</option>
+                {employees.map(e => <option key={e.id} value={e.id}>{e.full_name} ({e.employee_code})</option>)}
+              </select>
+            )}
           </div>
           <div className="form-group">
             <label>Tanggal</label>
@@ -180,6 +197,7 @@ export default function PerformanceDashboard() {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [penaltyFor, setPenaltyFor] = useState(null); // { id, label } for a per-row penalty
   const [evaluating, setEvaluating] = useState(false);
 
   useEffect(() => {
@@ -259,7 +277,7 @@ export default function PerformanceDashboard() {
         ) : (
           <table>
             <thead>
-              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th></tr>
+              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th><th></th></tr>
             </thead>
             <tbody>
               {rows.map(r => (
@@ -273,10 +291,18 @@ export default function PerformanceDashboard() {
                     <td style={{ fontSize: '0.85rem' }}>{r.branch_name}</td>
                     <td><ScoreBadge score={r.score} /></td>
                     <td>{r.violation_count}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={e => { e.stopPropagation(); setPenaltyFor({ id: r.id, label: `${r.full_name} (${r.employee_code})` }); }}
+                      >
+                        + Pelanggaran
+                      </button>
+                    </td>
                   </tr>
                   {expanded === r.id && (
                     <tr>
-                      <td colSpan={5} style={{ padding: 0 }}>
+                      <td colSpan={6} style={{ padding: 0 }}>
                         <ViolationBreakdown employeeId={r.id} month={month} />
                       </td>
                     </tr>
@@ -289,6 +315,13 @@ export default function PerformanceDashboard() {
       </div>
 
       {showModal && <ManualViolationModal onClose={() => setShowModal(false)} onSaved={load} />}
+      {penaltyFor && (
+        <ManualViolationModal
+          presetEmployee={penaltyFor}
+          onClose={() => setPenaltyFor(null)}
+          onSaved={load}
+        />
+      )}
     </>
   );
 }

@@ -6,6 +6,7 @@ import {
   markAttendanceNoPunch, clearAttendanceNoPunch,
 } from '../../api';
 import { StatusChip, SourceBadge, fmtTime } from './AttendanceDashboard';
+import { ManualViolationModal } from './PerformanceDashboard';
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
@@ -197,25 +198,34 @@ export default function AttendanceCorrections() {
   const [msg, setMsg]             = useState('');
   const [dialogRec, setDialogRec] = useState(null);   // half-day dialog
   const [noPunchRec, setNoPunchRec] = useState(null); // present-no-punch dialog
+  const [penaltyRec, setPenaltyRec] = useState(null); // manual-penalty modal
   const [busyId, setBusyId]       = useState('');
+  const [page, setPage]           = useState(1);
+  const [total, setTotal]         = useState(0);
+  const PAGE_SIZE = 50;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => {}); }, []);
 
-  const load = () => {
+  const load = (toPage = page) => {
     setLoading(true); setMsg('');
-    const params = { date_from: dateFrom, date_to: dateTo };
+    const params = { date_from: dateFrom, date_to: dateTo, page: toPage, page_size: PAGE_SIZE };
     if (statusFilter)   params.status = statusFilter;
     if (branchId)       params.branch_id = branchId;
     if (search.trim())  params.search = search.trim();
     if (halfDayOnly)    params.half_day_only = 'true';
     getAttendance(params)
-      .then(r => setRows(r.data?.data || []))
+      .then(r => { setRows(r.data?.data || []); setTotal(r.data?.total || 0); })
       .catch(() => setMsg('Gagal memuat data kehadiran'))
       .finally(() => setLoading(false));
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [dateFrom, dateTo, branchId, statusFilter, halfDayOnly]);
+  // Filters (other than free-text search, which applies on Enter/button) reset to
+  // the first page and reload.
+  // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  useEffect(() => { setPage(1); load(1); }, [dateFrom, dateTo, branchId, statusFilter, halfDayOnly]);
+
+  const goToPage = (p) => { setPage(p); load(p); };
 
   const onSaved = () => { setDialogRec(null); setMsg('Koreksi setengah hari disimpan.'); load(); };
   const onNoPunchSaved = () => { setNoPunchRec(null); setMsg('Koreksi hadir tanpa absen disimpan.'); load(); };
@@ -274,7 +284,7 @@ export default function AttendanceCorrections() {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') load(); }}
+            onKeyDown={e => { if (e.key === 'Enter') goToPage(1); }}
             placeholder="Cari nama / kode…"
             style={{ fontSize: '0.85rem', minWidth: '160px' }}
           />
@@ -282,7 +292,7 @@ export default function AttendanceCorrections() {
             <input type="checkbox" checked={halfDayOnly} onChange={e => setHalfDayOnly(e.target.checked)} />
             Hanya setengah hari
           </label>
-          <button onClick={load} className="btn btn-primary btn-sm">Terapkan</button>
+          <button onClick={() => goToPage(1)} className="btn btn-primary btn-sm">Terapkan</button>
         </div>
         {msg && (
           <div style={{ marginTop: '0.75rem', background: '#e8f5e9', color: '#1b5e20', padding: '0.5rem 0.75rem', borderRadius: '6px', fontSize: '0.85rem' }}>
@@ -349,21 +359,24 @@ export default function AttendanceCorrections() {
                   )}
                 </td>
                 <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {(r.is_half_day || r.is_no_punch) ? (
-                    <button className="btn btn-secondary btn-sm" disabled={busyId === r.id} onClick={() => handleClear(r)}>
-                      {busyId === r.id ? '…' : 'Batalkan'}
+                  <div style={{ display: 'inline-flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                    {(r.is_half_day || r.is_no_punch) ? (
+                      <button className="btn btn-secondary btn-sm" disabled={busyId === r.id} onClick={() => handleClear(r)}>
+                        {busyId === r.id ? '…' : 'Batalkan'}
+                      </button>
+                    ) : r.status === 'absent' ? (
+                      <button className="btn btn-primary btn-sm" onClick={() => setNoPunchRec(r)}>
+                        Tandai Hadir (Lupa Absen)
+                      </button>
+                    ) : r.status === 'present' ? (
+                      <button className="btn btn-primary btn-sm" onClick={() => setDialogRec(r)}>
+                        Tandai Setengah Hari
+                      </button>
+                    ) : null}
+                    <button className="btn btn-secondary btn-sm" onClick={() => setPenaltyRec(r)}>
+                      + Pelanggaran
                     </button>
-                  ) : r.status === 'absent' ? (
-                    <button className="btn btn-primary btn-sm" onClick={() => setNoPunchRec(r)}>
-                      Tandai Hadir (Lupa Absen)
-                    </button>
-                  ) : r.status === 'present' ? (
-                    <button className="btn btn-primary btn-sm" onClick={() => setDialogRec(r)}>
-                      Tandai Setengah Hari
-                    </button>
-                  ) : (
-                    <span style={{ color: '#ccc' }}>—</span>
-                  )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -371,11 +384,40 @@ export default function AttendanceCorrections() {
         </table>
       </div>
 
+      {total > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: '0.82rem', color: '#888' }}>
+            {(() => {
+              const start = (page - 1) * PAGE_SIZE + 1;
+              const end = Math.min(page * PAGE_SIZE, total);
+              return `Menampilkan ${start}–${end} dari ${total} data`;
+            })()}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <button className="btn btn-secondary btn-sm" disabled={loading || page <= 1} onClick={() => goToPage(page - 1)}>
+              ← Sebelumnya
+            </button>
+            <span style={{ fontSize: '0.82rem', color: '#666' }}>Hal. {page} / {pageCount}</span>
+            <button className="btn btn-secondary btn-sm" disabled={loading || page >= pageCount} onClick={() => goToPage(page + 1)}>
+              Berikutnya →
+            </button>
+          </div>
+        </div>
+      )}
+
       {dialogRec && (
         <HalfDayDialog record={dialogRec} onClose={() => setDialogRec(null)} onSaved={onSaved} />
       )}
       {noPunchRec && (
         <NoPunchDialog record={noPunchRec} onClose={() => setNoPunchRec(null)} onSaved={onNoPunchSaved} />
+      )}
+      {penaltyRec && (
+        <ManualViolationModal
+          presetEmployee={{ id: penaltyRec.employee_id, label: `${penaltyRec.full_name} (${penaltyRec.employee_code})` }}
+          presetDate={penaltyRec.date}
+          onClose={() => setPenaltyRec(null)}
+          onSaved={() => { setPenaltyRec(null); setMsg('Pelanggaran manual disimpan.'); }}
+        />
       )}
     </>
   );

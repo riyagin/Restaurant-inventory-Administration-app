@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +88,38 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
+	// Opt-in pagination: when `page` is present we return a bounded slice plus a
+	// total count so the client can render page controls. Callers that omit `page`
+	// (dashboard, grid, employee detail) keep the legacy LIMIT 1000 behaviour.
+	paginate := strings.TrimSpace(q.Get("page")) != ""
+	var total int64
+	limit, offset := 1000, 0
+	if paginate {
+		page := 1
+		if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page"))); err == nil && v > 0 {
+			page = v
+		}
+		pageSize := 50
+		if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page_size"))); err == nil && v > 0 {
+			pageSize = v
+		}
+		if pageSize > 500 {
+			pageSize = 500
+		}
+		limit, offset = pageSize, (page-1)*pageSize
+
+		countSQL := fmt.Sprintf(`
+			SELECT count(*)
+			FROM attendance_records ar
+			JOIN employees e ON e.id = ar.employee_id
+			JOIN branches  b ON b.id = e.branch_id
+			%s`, where)
+		if err := h.pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
+			return
+		}
+	}
+
 	sql := fmt.Sprintf(`
 		SELECT
 		    ar.id, ar.employee_id, ar.date, ar.check_in, ar.check_out,
@@ -104,9 +137,9 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN branches          db ON db.id = d.branch_id
 		%s
 		ORDER BY ar.date DESC, e.full_name
-		LIMIT 1000`, where)
+		LIMIT $%d OFFSET $%d`, where, len(args)+1, len(args)+2)
 
-	rows, err := h.pool.Query(ctx, sql, args...)
+	rows, err := h.pool.Query(ctx, sql, append(args, limit, offset)...)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
@@ -168,7 +201,11 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"data": items})
+	resp := map[string]any{"data": items}
+	if paginate {
+		resp["total"] = total
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // ── Manual correction — PUT /api/hr/attendance/:id ───────────────────────────
