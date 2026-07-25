@@ -133,7 +133,8 @@ SELECT
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
     e.employment_type, e.contract_end_date, e.permanent_since, e.resign_date,
-    e.created_at, e.updated_at
+    e.created_at, e.updated_at,
+    (e.face_embedding IS NOT NULL) AS has_face, e.face_enrolled_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
@@ -166,6 +167,8 @@ type GetEmployeeByIDRow struct {
 	ResignDate        pgtype.Date        `json:"resign_date"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	HasFace           bool               `json:"has_face"`
+	FaceEnrolledAt    pgtype.Timestamptz `json:"face_enrolled_at"`
 }
 
 func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmployeeByIDRow, error) {
@@ -197,6 +200,8 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmpl
 		&i.ResignDate,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasFace,
+		&i.FaceEnrolledAt,
 	)
 	return &i, err
 }

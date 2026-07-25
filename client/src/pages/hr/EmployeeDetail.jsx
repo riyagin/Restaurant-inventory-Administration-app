@@ -832,6 +832,19 @@ export default function EmployeeDetail() {
                 <Field label="Tanggal Bergabung" value={fmtDate(emp.join_date)} />
                 <Field label="NIK / KTP" value={emp.national_id} />
                 <Field label="Status" value={statusLabel(emp.status)} />
+                <Field label="Data Wajah" value={
+                  <span
+                    className="badge"
+                    style={{
+                      background: emp.has_face ? '#e6f4ea' : '#eef1f6',
+                      color: emp.has_face ? '#1e7e34' : '#8a93a6',
+                    }}
+                  >
+                    {emp.has_face
+                      ? `Terdaftar${emp.face_enrolled_at ? ' · ' + fmtDate(emp.face_enrolled_at) : ''}`
+                      : 'Belum terdaftar'}
+                  </span>
+                } />
                 {emp.status === 'resigned' && emp.resign_date && (
                   <Field label="Tanggal Resign" value={fmtDate(emp.resign_date)} />
                 )}

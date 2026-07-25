@@ -78,10 +78,21 @@ FROM employees
 WHERE employee_code = $1;
 
 -- name: ListDeviceRosterByBranch :many
-SELECT employee_code, full_name, photo_path
+SELECT employee_code, full_name, photo_path,
+       face_embedding, face_embedding_version, face_enrolled_at
 FROM employees
 WHERE branch_id = $1 AND status = 'active'
 ORDER BY full_name;
+
+-- name: UpsertEmployeeFaceEmbedding :exec
+-- Stores the face enrollment produced on a device. Keyed by employee id (resolved
+-- from employee_code in the handler, which also checks the device's branch).
+UPDATE employees
+SET face_embedding = $2,
+    face_embedding_version = $3,
+    face_enrolled_at = $4,
+    updated_at = now()
+WHERE id = $1;
 
 -- name: ListActiveEmployeesForReconcile :many
 SELECT id, employee_code, full_name, branch_id

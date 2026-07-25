@@ -40,7 +40,8 @@ SELECT
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
     e.employment_type, e.contract_end_date, e.permanent_since, e.resign_date,
-    e.created_at, e.updated_at
+    e.created_at, e.updated_at,
+    (e.face_embedding IS NOT NULL) AS has_face, e.face_enrolled_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id

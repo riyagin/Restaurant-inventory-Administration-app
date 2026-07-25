@@ -41,6 +41,12 @@ function StatusBadge({ status }) {
   return <span className="badge" style={{ background: s.bg, color: s.color }}>{s.label}</span>;
 }
 
+function FaceBadge({ hasFace }) {
+  return hasFace
+    ? <span className="badge" style={{ background: '#e6f4ea', color: '#1e7e34' }} title="Data wajah sudah terekam">✓ Terdaftar</span>
+    : <span className="badge" style={{ background: '#eef1f6', color: '#8a93a6' }} title="Belum ada data wajah">Belum</span>;
+}
+
 function EmploymentBadge({ type, contractEnd }) {
   if (type !== 'contract') {
     return <span className="badge" style={{ background: '#eef1f6', color: '#445' }}>Tetap</span>;
@@ -74,6 +80,7 @@ export default function Employees() {
   const [positionId, setPositionId] = useState('');
   const [status, setStatus]       = useState('');
   const [employmentType, setEmploymentType] = useState('');
+  const [face, setFace]           = useState(''); // '' | enrolled | not
   const [page, setPage]           = useState(1);
   const [sort, setSort]           = useState('name'); // name | join_date | code
   const [dir, setDir]             = useState('asc');   // asc | desc
@@ -87,7 +94,7 @@ export default function Employees() {
 
   const load = () => {
     setLoading(true);
-    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, sort, dir, page, limit })
+    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, face, sort, dir, page, limit })
       .then(r => {
         setRows(r.data?.data || []);
         setTotal(r.data?.total || 0);
@@ -102,7 +109,7 @@ export default function Employees() {
     getContractAlerts().then(r => setAlerts(r.data?.data || [])).catch(() => setAlerts([]));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, sort, dir, page]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, face, sort, dir, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -212,6 +219,14 @@ export default function Employees() {
               <option value="contract">Kontrak</option>
             </select>
           </div>
+          <div className="form-group" style={{ margin: 0, flex: '1 1 160px' }}>
+            <label>Data Wajah</label>
+            <select value={face} onChange={e => { setPage(1); setFace(e.target.value); }}>
+              <option value="">Semua</option>
+              <option value="enrolled">Sudah terdaftar</option>
+              <option value="not">Belum terdaftar</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -227,13 +242,14 @@ export default function Employees() {
               <th>Tipe</th>
               <SortHeader col="join_date">Tgl Bergabung</SortHeader>
               <th>Status</th>
+              <th>Wajah</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
             ) : rows.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/hr/employees/${e.id}`)}>
                 <td>
@@ -256,6 +272,7 @@ export default function Employees() {
                 <td><EmploymentBadge type={e.employment_type} contractEnd={e.contract_end_date} /></td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmtDate(e.join_date)}</td>
                 <td><StatusBadge status={e.status} /></td>
+                <td><FaceBadge hasFace={e.has_face} /></td>
               </tr>
             ))}
           </tbody>

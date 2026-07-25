@@ -459,16 +459,20 @@ func (q *Queries) ListAttendanceDevices(ctx context.Context) ([]*ListAttendanceD
 }
 
 const listDeviceRosterByBranch = `-- name: ListDeviceRosterByBranch :many
-SELECT employee_code, full_name, photo_path
+SELECT employee_code, full_name, photo_path,
+       face_embedding, face_embedding_version, face_enrolled_at
 FROM employees
 WHERE branch_id = $1 AND status = 'active'
 ORDER BY full_name
 `
 
 type ListDeviceRosterByBranchRow struct {
-	EmployeeCode string      `json:"employee_code"`
-	FullName     string      `json:"full_name"`
-	PhotoPath    pgtype.Text `json:"photo_path"`
+	EmployeeCode         string             `json:"employee_code"`
+	FullName             string             `json:"full_name"`
+	PhotoPath            pgtype.Text        `json:"photo_path"`
+	FaceEmbedding        []byte             `json:"face_embedding"`
+	FaceEmbeddingVersion pgtype.Text        `json:"face_embedding_version"`
+	FaceEnrolledAt       pgtype.Timestamptz `json:"face_enrolled_at"`
 }
 
 func (q *Queries) ListDeviceRosterByBranch(ctx context.Context, branchID pgtype.UUID) ([]*ListDeviceRosterByBranchRow, error) {
@@ -480,7 +484,14 @@ func (q *Queries) ListDeviceRosterByBranch(ctx context.Context, branchID pgtype.
 	var items []*ListDeviceRosterByBranchRow
 	for rows.Next() {
 		var i ListDeviceRosterByBranchRow
-		if err := rows.Scan(&i.EmployeeCode, &i.FullName, &i.PhotoPath); err != nil {
+		if err := rows.Scan(
+			&i.EmployeeCode,
+			&i.FullName,
+			&i.PhotoPath,
+			&i.FaceEmbedding,
+			&i.FaceEmbeddingVersion,
+			&i.FaceEnrolledAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -489,6 +500,32 @@ func (q *Queries) ListDeviceRosterByBranch(ctx context.Context, branchID pgtype.
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertEmployeeFaceEmbedding = `-- name: UpsertEmployeeFaceEmbedding :exec
+UPDATE employees
+SET face_embedding = $2,
+    face_embedding_version = $3,
+    face_enrolled_at = $4,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpsertEmployeeFaceEmbeddingParams struct {
+	ID                   pgtype.UUID        `json:"id"`
+	FaceEmbedding        []byte             `json:"face_embedding"`
+	FaceEmbeddingVersion pgtype.Text        `json:"face_embedding_version"`
+	FaceEnrolledAt       pgtype.Timestamptz `json:"face_enrolled_at"`
+}
+
+func (q *Queries) UpsertEmployeeFaceEmbedding(ctx context.Context, arg *UpsertEmployeeFaceEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, upsertEmployeeFaceEmbedding,
+		arg.ID,
+		arg.FaceEmbedding,
+		arg.FaceEmbeddingVersion,
+		arg.FaceEnrolledAt,
+	)
+	return err
 }
 
 const listPresentAttendanceForEmployeeRange = `-- name: ListPresentAttendanceForEmployeeRange :many

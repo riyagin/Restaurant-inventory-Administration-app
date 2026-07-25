@@ -175,6 +175,7 @@ func main() {
 		r.Use(appmiddleware.DeviceAuth(queries))
 		r.Post("/api/hr/attendance/device/event", attendanceDeviceHandler.Event)
 		r.Get("/api/hr/attendance/device/employees", attendanceDeviceHandler.Employees)
+		r.Post("/api/hr/attendance/device/face", attendanceDeviceHandler.EnrollFace)
 	})
 
 	// Protected routes

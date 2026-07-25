@@ -137,6 +137,7 @@ type employeeListRow struct {
 	BranchName      string      `json:"branch_name"`
 	EmploymentType  string      `json:"employment_type"`
 	ContractEndDate pgtype.Date `json:"contract_end_date"`
+	HasFace         bool        `json:"has_face"`
 }
 
 // ── Employees ────────────────────────────────────────────────────────────────
@@ -151,6 +152,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 	positionID := strings.TrimSpace(q.Get("position_id"))
 	status := strings.TrimSpace(q.Get("status"))
 	employmentType := strings.TrimSpace(q.Get("employment_type"))
+	// Face enrollment filter: "enrolled" = has stored face data, "not" = missing it.
+	face := strings.TrimSpace(q.Get("face"))
 
 	// Sorting — whitelist column + direction to keep the ORDER BY injection-safe.
 	sortColumns := map[string]string{
@@ -208,6 +211,12 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, employmentType)
 		conds = append(conds, fmt.Sprintf("e.employment_type = $%d", len(args)))
 	}
+	// No bind parameter needed: these are constant, injection-safe predicates.
+	if face == "enrolled" {
+		conds = append(conds, "e.face_embedding IS NOT NULL")
+	} else if face == "not" {
+		conds = append(conds, "e.face_embedding IS NULL")
+	}
 
 	whereClause := ""
 	if len(conds) > 0 {
@@ -224,7 +233,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		    e.id, e.employee_code, e.full_name, e.join_date, e.status, e.photo_path,
 		    e.position_id, p.name AS position_name,
 		    e.branch_id, b.name AS branch_name,
-		    e.employment_type, e.contract_end_date
+		    e.employment_type, e.contract_end_date,
+		    (e.face_embedding IS NOT NULL) AS has_face
 		FROM employees e
 		JOIN positions p ON p.id = e.position_id
 		JOIN branches  b ON b.id = e.branch_id
@@ -247,6 +257,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 			&row.PositionID, &row.PositionName,
 			&row.BranchID, &row.BranchName,
 			&row.EmploymentType, &row.ContractEndDate,
+			&row.HasFace,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
 			return

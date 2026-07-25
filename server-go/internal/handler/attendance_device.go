@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -290,10 +292,24 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// deviceEmployeeDTO is the wire shape the Android app parses (EmployeeDto). The
+// embedding is base64-encoded so it travels as a plain JSON string, and
+// face_enrolled_at is epoch milliseconds. Face fields are omitted when the
+// employee has no server-side enrollment yet.
+type deviceEmployeeDTO struct {
+	EmployeeCode         string  `json:"employee_code"`
+	FullName             string  `json:"full_name"`
+	PhotoPath            *string `json:"photo_path"`
+	FaceEmbedding        *string `json:"face_embedding,omitempty"`
+	FaceEmbeddingVersion *string `json:"face_embedding_version,omitempty"`
+	FaceEnrolledAt       *int64  `json:"face_enrolled_at,omitempty"`
+}
+
 // Employees — GET /api/hr/attendance/device/employees
 //
-// Returns the active roster for the device's branch so the app can sync faces.
-// Response: [{ "employee_code": "...", "full_name": "...", "photo_path": "..." }]
+// Returns the active roster for the device's branch so the app can sync faces,
+// including any server-stored face embedding so recognition can run locally on
+// every device without re-enrolling per device.
 func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dev, ok := middleware.DeviceFromCtx(ctx)
@@ -311,10 +327,114 @@ func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusInternalServerError, "gagal mengambil daftar karyawan")
 		return
 	}
-	if roster == nil {
-		roster = []*db.ListDeviceRosterByBranchRow{}
+
+	out := make([]deviceEmployeeDTO, 0, len(roster))
+	for _, row := range roster {
+		dto := deviceEmployeeDTO{
+			EmployeeCode: row.EmployeeCode,
+			FullName:     row.FullName,
+		}
+		if row.PhotoPath.Valid {
+			p := row.PhotoPath.String
+			dto.PhotoPath = &p
+		}
+		if len(row.FaceEmbedding) > 0 {
+			enc := base64.StdEncoding.EncodeToString(row.FaceEmbedding)
+			dto.FaceEmbedding = &enc
+		}
+		if row.FaceEmbeddingVersion.Valid {
+			v := row.FaceEmbeddingVersion.String
+			dto.FaceEmbeddingVersion = &v
+		}
+		if row.FaceEnrolledAt.Valid {
+			ms := row.FaceEnrolledAt.Time.UnixMilli()
+			dto.FaceEnrolledAt = &ms
+		}
+		out = append(out, dto)
 	}
-	respondJSON(w, http.StatusOK, roster)
+	respondJSON(w, http.StatusOK, out)
+}
+
+// FaceEnrollRequest is the JSON body a device posts to store a face enrollment.
+type FaceEnrollRequest struct {
+	EmployeeCode     string `json:"employee_code"`
+	Embedding        string `json:"embedding"`         // base64-encoded packed float32 vector
+	EmbeddingVersion string `json:"embedding_version"` // model + preprocessing space id
+}
+
+// EnrollFace — POST /api/hr/attendance/device/face
+//
+// Stores (or replaces) the server-side face enrollment for an employee. The
+// device computes the embedding locally and uploads it here so every other
+// device can sync it down. Device-key authenticated; a device may only enroll
+// employees that belong to its own branch.
+func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dev, ok := middleware.DeviceFromCtx(ctx)
+	if !ok || dev == nil {
+		respondError(w, http.StatusUnauthorized, "perangkat tidak dikenal")
+		return
+	}
+	if !dev.BranchID.Valid {
+		respondError(w, http.StatusBadRequest, "perangkat belum terhubung ke cabang")
+		return
+	}
+
+	var req FaceEnrollRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "gagal membaca permintaan (JSON tidak valid)")
+		return
+	}
+	req.EmployeeCode = strings.TrimSpace(req.EmployeeCode)
+	req.EmbeddingVersion = strings.TrimSpace(req.EmbeddingVersion)
+	if req.EmployeeCode == "" {
+		respondError(w, http.StatusBadRequest, "employee_code wajib diisi")
+		return
+	}
+	if req.EmbeddingVersion == "" {
+		respondError(w, http.StatusBadRequest, "embedding_version wajib diisi")
+		return
+	}
+	embedding, err := base64.StdEncoding.DecodeString(req.Embedding)
+	if err != nil || len(embedding) == 0 {
+		respondError(w, http.StatusBadRequest, "embedding tidak valid (harus base64 dan tidak kosong)")
+		return
+	}
+
+	emp, err := h.queries.GetEmployeeByCode(ctx, req.EmployeeCode)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan dengan kode tersebut tidak ditemukan")
+			return
+		}
+		log.Printf("attendance device enroll: GetEmployeeByCode(%q) failed: %v", req.EmployeeCode, err)
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+
+	// A device may only enroll faces for its own branch.
+	if !emp.BranchID.Valid || emp.BranchID.Bytes != dev.BranchID.Bytes {
+		respondError(w, http.StatusForbidden, "karyawan bukan bagian dari cabang perangkat ini")
+		return
+	}
+
+	err = h.queries.UpsertEmployeeFaceEmbedding(ctx, &db.UpsertEmployeeFaceEmbeddingParams{
+		ID:                   emp.ID,
+		FaceEmbedding:        embedding,
+		FaceEmbeddingVersion: pgtype.Text{String: req.EmbeddingVersion, Valid: true},
+		FaceEnrolledAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		log.Printf("attendance device enroll: UpsertEmployeeFaceEmbedding(emp=%s) failed: %v", req.EmployeeCode, err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan data wajah")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"success":       true,
+		"message":       "wajah tersimpan",
+		"employee_code": req.EmployeeCode,
+	})
 }
 
 func tsString(t *time.Time) any {
