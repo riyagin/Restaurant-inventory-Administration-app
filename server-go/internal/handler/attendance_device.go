@@ -504,6 +504,209 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// ── Face sync diff ───────────────────────────────────────────────────────────
+
+// FaceSyncEntry is one locally-held enrollment as reported by a device.
+type FaceSyncEntry struct {
+	EmployeeCode     string `json:"employee_code"`
+	EmbeddingVersion string `json:"embedding_version"`
+	EnrolledAt       int64  `json:"enrolled_at"` // epoch ms; 0 when unknown
+}
+
+// FaceSyncRequest is what a device posts to reconcile its local face store
+// against the server. ModelVersion is the embedding space the device can
+// actually match in; server enrollments in any other space are unusable to it
+// and are reported under to_reenroll rather than to_download.
+type FaceSyncRequest struct {
+	ModelVersion string          `json:"model_version"`
+	Entries      []FaceSyncEntry `json:"entries"`
+}
+
+// faceSyncDownload carries an enrollment the device is missing or has stale.
+type faceSyncDownload struct {
+	EmployeeCode         string  `json:"employee_code"`
+	FullName             string  `json:"full_name"`
+	FaceEmbedding        string  `json:"face_embedding"`
+	FaceEmbeddingVersion string  `json:"face_embedding_version"`
+	FaceEnrolledAt       *int64  `json:"face_enrolled_at,omitempty"`
+	PhotoPath            *string `json:"photo_path,omitempty"`
+}
+
+// faceSyncMismatch names an employee the device holds differently from the server.
+type faceSyncMismatch struct {
+	EmployeeCode  string `json:"employee_code"`
+	FullName      string `json:"full_name,omitempty"`
+	DeviceVersion string `json:"device_version,omitempty"`
+	ServerVersion string `json:"server_version,omitempty"`
+	Reason        string `json:"reason"`
+}
+
+// FaceSync — POST /api/hr/attendance/device/face/sync
+//
+// Diffs a device's local face store against the server's stored enrollments for
+// the device's branch and tells it exactly what to change. The server cannot
+// know a device's local state, so the device sends its manifest (employee_code +
+// embedding_version + enrolled_at, no embeddings) and gets back four buckets:
+//
+//	to_download  — server has an enrollment the device lacks or holds an older
+//	               copy of; embeddings are included so this is the only call needed.
+//	to_upload    — device holds an enrollment the server has none of; the device
+//	               should POST each to /api/hr/attendance/device/face so the rest
+//	               of the fleet can pick it up.
+//	to_delete    — device holds an entry that is no longer in its branch roster
+//	               (transferred, resigned, or enrollment cleared server-side).
+//	to_reenroll  — both sides have an enrollment but in different embedding
+//	               spaces, so neither can match the other; a human must re-capture.
+//	in_sync      — same employee, same version, device copy not older.
+//
+// Device-key authenticated; scoped to the device's own branch.
+func (h *AttendanceDeviceHandler) FaceSync(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dev, ok := middleware.DeviceFromCtx(ctx)
+	if !ok || dev == nil {
+		respondError(w, http.StatusUnauthorized, "perangkat tidak dikenal")
+		return
+	}
+	if !dev.BranchID.Valid {
+		respondError(w, http.StatusBadRequest, "perangkat belum terhubung ke cabang")
+		return
+	}
+
+	var req FaceSyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "gagal membaca permintaan (JSON tidak valid)")
+		return
+	}
+	req.ModelVersion = strings.TrimSpace(req.ModelVersion)
+
+	// Index the device's manifest by employee code.
+	local := make(map[string]FaceSyncEntry, len(req.Entries))
+	for _, e := range req.Entries {
+		code := strings.TrimSpace(e.EmployeeCode)
+		if code == "" {
+			continue
+		}
+		e.EmployeeCode = code
+		e.EmbeddingVersion = strings.TrimSpace(e.EmbeddingVersion)
+		local[code] = e
+	}
+
+	roster, err := h.queries.ListDeviceRosterByBranch(ctx, dev.BranchID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil daftar karyawan")
+		return
+	}
+
+	toDownload := []faceSyncDownload{}
+	toUpload := []faceSyncMismatch{}
+	toDelete := []faceSyncMismatch{}
+	toReenroll := []faceSyncMismatch{}
+	inSync := []string{}
+	serverEnrolled := 0
+
+	for _, row := range roster {
+		entry, onDevice := local[row.EmployeeCode]
+		hasServer := len(row.FaceEmbedding) > 0
+		if hasServer {
+			serverEnrolled++
+		}
+
+		serverVersion := ""
+		if row.FaceEmbeddingVersion.Valid {
+			serverVersion = row.FaceEmbeddingVersion.String
+		}
+		var serverEnrolledAt int64
+		if row.FaceEnrolledAt.Valid {
+			serverEnrolledAt = row.FaceEnrolledAt.Time.UnixMilli()
+		}
+
+		switch {
+		case !hasServer && !onDevice:
+			// Neither side has it — surfaces on the web dashboard as "belum terdaftar".
+
+		case !hasServer && onDevice:
+			toUpload = append(toUpload, faceSyncMismatch{
+				EmployeeCode:  row.EmployeeCode,
+				FullName:      row.FullName,
+				DeviceVersion: entry.EmbeddingVersion,
+				Reason:        "server belum memiliki data wajah ini",
+			})
+
+		case hasServer && !onDevice:
+			// The device can only use an embedding from the space its model runs in.
+			if req.ModelVersion != "" && serverVersion != req.ModelVersion {
+				toReenroll = append(toReenroll, faceSyncMismatch{
+					EmployeeCode:  row.EmployeeCode,
+					FullName:      row.FullName,
+					ServerVersion: serverVersion,
+					Reason:        "versi model server berbeda dengan perangkat",
+				})
+				break
+			}
+			toDownload = append(toDownload, buildFaceDownload(row, serverVersion, serverEnrolledAt))
+
+		default: // both sides have an enrollment
+			switch {
+			case entry.EmbeddingVersion != "" && serverVersion != "" && entry.EmbeddingVersion != serverVersion:
+				toReenroll = append(toReenroll, faceSyncMismatch{
+					EmployeeCode:  row.EmployeeCode,
+					FullName:      row.FullName,
+					DeviceVersion: entry.EmbeddingVersion,
+					ServerVersion: serverVersion,
+					Reason:        "versi embedding berbeda antara perangkat dan server",
+				})
+			case serverEnrolledAt > entry.EnrolledAt:
+				// Server copy is newer — someone re-enrolled on another kiosk.
+				toDownload = append(toDownload, buildFaceDownload(row, serverVersion, serverEnrolledAt))
+			default:
+				inSync = append(inSync, row.EmployeeCode)
+			}
+		}
+
+		delete(local, row.EmployeeCode)
+	}
+
+	// Anything left in the device manifest is not in this branch's active roster.
+	for code, entry := range local {
+		toDelete = append(toDelete, faceSyncMismatch{
+			EmployeeCode:  code,
+			DeviceVersion: entry.EmbeddingVersion,
+			Reason:        "karyawan tidak ada di daftar aktif cabang ini",
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"branch_device":  dev.Name,
+		"model_version":  req.ModelVersion,
+		"server_total":   len(roster),
+		"server_enrolled": serverEnrolled,
+		"device_total":   len(req.Entries),
+		"to_download":    toDownload,
+		"to_upload":      toUpload,
+		"to_delete":      toDelete,
+		"to_reenroll":    toReenroll,
+		"in_sync":        inSync,
+		"synced_at":      time.Now().UnixMilli(),
+	})
+}
+
+func buildFaceDownload(row *db.ListDeviceRosterByBranchRow, version string, enrolledAt int64) faceSyncDownload {
+	d := faceSyncDownload{
+		EmployeeCode:         row.EmployeeCode,
+		FullName:             row.FullName,
+		FaceEmbedding:        base64.StdEncoding.EncodeToString(row.FaceEmbedding),
+		FaceEmbeddingVersion: version,
+	}
+	if enrolledAt > 0 {
+		d.FaceEnrolledAt = &enrolledAt
+	}
+	if row.PhotoPath.Valid {
+		p := row.PhotoPath.String
+		d.PhotoPath = &p
+	}
+	return d
+}
+
 func tsString(t *time.Time) any {
 	if t == nil {
 		return nil

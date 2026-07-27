@@ -47,6 +47,8 @@ import AttendanceDashboard from './pages/hr/AttendanceDashboard';
 import FingerprintImport from './pages/hr/FingerprintImport';
 import AttendanceSettings from './pages/hr/AttendanceSettings';
 import AttendanceCorrections from './pages/hr/AttendanceCorrections';
+import FaceDashboard from './pages/hr/FaceDashboard';
+import FaceUnregistered from './pages/hr/FaceUnregistered';
 import PerformanceDashboard from './pages/hr/PerformanceDashboard';
 import PerformancePolicies from './pages/hr/PerformancePolicies';
 import Requests from './pages/hr/Requests';
@@ -196,6 +198,7 @@ function Nav() {
           <NavDropdown label="HR" paths={['/hr']}>
             {menuLink('/hr/attendance', 'Absensi')}
             {isAdminOrManager && menuLink('/hr/attendance/corrections', 'Koreksi Kehadiran')}
+            {isAdminOrManager && menuLink('/hr/face', 'Wajah & Perangkat')}
             {isAdminOrManager && menuLink('/hr/performance', 'Evaluasi')}
             {isAdminOrManager && menuLink('/hr/requests', 'Pengajuan')}
             {isAdminOrManager && menuLink('/hr/approvals', 'Persetujuan')}
@@ -271,6 +274,7 @@ function Nav() {
           {(isAdminOrManager || isStaff) && (
             <MobileSection label="HR" paths={['/hr']}>
               <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
+              {isAdminOrManager && <Link to="/hr/face" className={isActive('/hr/face') ? 'active' : ''}>Wajah &amp; Perangkat</Link>}
               {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Evaluasi</Link>}
               {isAdminOrManager && <Link to="/hr/requests" className={isActive('/hr/requests') ? 'active' : ''}>Pengajuan</Link>}
               {isAdminOrManager && <Link to="/hr/approvals" className={isActive('/hr/approvals') ? 'active' : ''}>Persetujuan</Link>}
@@ -382,6 +386,8 @@ export default function App() {
                 <Route path="/hr/attendance/corrections" element={<RequireManagerOrAdmin><AttendanceCorrections /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance/import" element={<RequireManagerOrAdmin><FingerprintImport /></RequireManagerOrAdmin>} />
                 <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
+                <Route path="/hr/face" element={<RequireManagerOrAdmin><FaceDashboard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/face/unregistered" element={<RequireManagerOrAdmin><FaceUnregistered /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />
                 <Route path="/hr/performance/policies" element={<RequireManagerOrAdmin><PerformancePolicies /></RequireManagerOrAdmin>} />
                 <Route path="/hr/requests" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />

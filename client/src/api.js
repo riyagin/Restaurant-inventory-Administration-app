@@ -288,6 +288,13 @@ export const createAttendanceDevice = (data) => api.post('/hr/attendance/devices
 export const setAttendanceDeviceActive = (id, data) => api.put(`/hr/attendance/devices/${id}`, data);
 export const deleteAttendanceDevice = (id) => api.delete(`/hr/attendance/devices/${id}`);
 
+// Face enrollment coverage + device fleet health.
+// `days` (optional) sets the trailing window for the check-in source mix.
+export const getFaceOverview = (params) => api.get('/hr/attendance/face/overview', { params });
+// Employees still missing a stored face embedding. Backed by the `face` filter
+// on the employee list endpoint ('not' = no embedding, 'enrolled' = has one).
+export const getUnregisteredFaces = (params) => api.get('/hr/employees', { params: { ...params, face: 'not' } });
+
 // ── HR: Evaluasi (Kinerja) ──────────────────────────────────────────────────
 // Performance policies
 export const getPerformancePolicies   = () => api.get('/hr/performance/policies');

@@ -230,6 +230,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | AttendanceDashboard | `/hr/attendance` | Manager+ |
 | FingerprintImport | `/hr/attendance/import` | Manager+ |
 | AttendanceSettings | `/hr/attendance/settings` | Manager+ |
+| FaceDashboard | `/hr/face` | Manager+ |
+| FaceUnregistered | `/hr/face/unregistered` | Manager+ |
 | PerformanceDashboard | `/hr/performance` | Manager+ |
 | PerformancePolicies | `/hr/performance/policies` | Manager+ |
 | LeaveRequests | `/hr/leave` | Manager+ |
@@ -302,7 +304,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `employee_wage_structures` | Versioned wage structures per employee — base_salary, daily_rate, effective_date |
 | `employee_wage_components` | Components attached to a wage structure version — amount |
 | `attendance_records` | Daily attendance per employee — check_in/out times, source (manual/fingerprint/face), status, anomaly flags |
-| `attendance_devices` | Registered fingerprint/face devices — device_key, name, active |
+| `attendance_devices` | Registered fingerprint/face devices — device_key, name, active, last_seen_at |
 | `work_schedules` | Weekly work schedule — day_of_week, start_time, end_time, late_grace_minutes |
 | `public_holidays` | Public holiday dates — skipped during attendance reconciliation |
 | `performance_policies` | Rules that trigger violations — violation_type, threshold_minutes, deduction_points |
@@ -386,9 +388,9 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **HR Import** (3): GET template, POST parse, POST confirm — /api/hr/import
 
-**HR Attendance — JWT** (14): GET/PUT /api/hr/attendance; POST reconcile; fingerprint parse/confirm; work-schedules GET/POST; holidays GET/POST/DELETE; devices CRUD
+**HR Attendance — JWT** (15): GET/PUT /api/hr/attendance; POST reconcile; GET face/overview (enrollment coverage + device fleet health); fingerprint parse/confirm; work-schedules GET/POST; holidays GET/POST/DELETE; devices CRUD
 
-**HR Attendance — Device key** (2): POST /api/hr/attendance/device/event, GET /api/hr/attendance/device/employees
+**HR Attendance — Device key** (4): POST /api/hr/attendance/device/event, GET /api/hr/attendance/device/employees (roster + stored face embeddings), POST /api/hr/attendance/device/face (upload enrollment), POST /api/hr/attendance/device/face/sync (diff device's local face store vs server → to_download/to_upload/to_delete/to_reenroll)
 
 **HR Performance** (9): policies CRUD; GET scores; GET employee performance; POST/DELETE violations; POST evaluate
 

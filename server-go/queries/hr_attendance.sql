@@ -46,10 +46,15 @@ SELECT EXISTS (SELECT 1 FROM public_holidays WHERE date = $1) AS exists;
 
 -- name: ListAttendanceDevices :many
 SELECT d.id, d.name, d.branch_id, d.api_key_hash, d.is_active, d.created_at,
-       b.name AS branch_name
+       d.last_seen_at, b.name AS branch_name
 FROM attendance_devices d
 LEFT JOIN branches b ON b.id = d.branch_id
 ORDER BY d.created_at DESC;
+
+-- name: TouchAttendanceDevice :exec
+-- Stamps device liveness. Called fire-and-forget by the DeviceAuth middleware on
+-- every device-key request, so the dashboard can show which kiosks are still alive.
+UPDATE attendance_devices SET last_seen_at = now() WHERE id = $1;
 
 -- name: GetActiveDeviceByKeyHash :one
 SELECT id, name, branch_id, api_key_hash, is_active, created_at

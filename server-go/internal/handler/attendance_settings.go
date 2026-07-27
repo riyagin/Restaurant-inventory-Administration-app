@@ -210,8 +210,9 @@ func (h *AttendanceHandler) ListDevices(w http.ResponseWriter, r *http.Request) 
 			"name":        d.Name,
 			"branch_id":   d.BranchID,
 			"branch_name": d.BranchName,
-			"is_active":   d.IsActive,
-			"created_at":  d.CreatedAt,
+			"is_active":    d.IsActive,
+			"created_at":   d.CreatedAt,
+			"last_seen_at": d.LastSeenAt,
 		})
 	}
 	respondJSON(w, http.StatusOK, out)

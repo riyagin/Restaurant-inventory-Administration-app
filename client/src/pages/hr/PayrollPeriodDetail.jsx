@@ -1,12 +1,22 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import * as XLSX from 'xlsx-js-style';
 import {
   getPayrollPeriod, getPayrollLines, getPayrollLineReview,
   reviewPayrollLine, unreviewPayrollLine, reviewAllPayrollLines,
   closePayrollPeriod, markPayrollPeriodPaid, getPositions, getBranches,
-  downloadPayslip, downloadPeriodPayslips,
+  downloadPayslip, downloadPeriodPayslips, getEmployee,
   getWageComponents, getPayrollBonusEligible, applyPayrollBonus,
+  getAccounts, getAccountAdjustments, createAccountTransfer,
 } from '../../api';
+
+// Classify an employee's saved bank into an export bucket.
+function classifyBank(name) {
+  const s = (name || '').toLowerCase();
+  if (s.includes('bca') || s.includes('central asia')) return 'BCA';
+  if (s.includes('mandiri')) return 'Mandiri';
+  return 'Lainnya';
+}
 
 // Trigger a browser download from an Axios blob response.
 function saveBlob(data, filename) {
@@ -54,6 +64,7 @@ export default function PayrollPeriodDetail() {
 
   const [drawerLineId, setDrawerLineId] = useState(null);
   const [showBonusModal, setShowBonusModal] = useState(false);
+  const [showAccountingModal, setShowAccountingModal] = useState(false);
 
   const locked = period && period.status !== 'open';
 
@@ -152,6 +163,118 @@ export default function PayrollPeriodDetail() {
     }
   };
 
+  // Export a bank-upload Excel: net pay per employee, one sheet per bank format
+  // (BCA / Mandiri / Bank Lain). Pulls the full unfiltered line set so the file
+  // is complete regardless of on-screen filters.
+  const doExportBankFiles = async () => {
+    setBusy(true); setError('');
+    try {
+      const { data: allLines } = await getPayrollLines(id, { sort: 'name', order: 'asc' });
+      const rows = Array.isArray(allLines) ? allLines : [];
+      if (rows.length === 0) { setError('Tidak ada baris untuk diekspor.'); return; }
+
+      // Bank details live on the employee record, not the payroll line — fetch them
+      // (limited concurrency) and index by employee id.
+      const ids = [...new Set(rows.map((l) => l.employee_id))];
+      const bankMap = {};
+      const CHUNK = 8;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        const res = await Promise.all(slice.map((eid) => getEmployee(eid).then((r) => r.data).catch(() => null)));
+        slice.forEach((eid, idx) => { bankMap[eid] = res[idx] || {}; });
+      }
+
+      const groups = { BCA: [], Mandiri: [], Lainnya: [] };
+      for (const l of rows) {
+        const emp = bankMap[l.employee_id] || {};
+        const bankName = emp.bank_name || '';
+        const rec = {
+          name: l.employee_name,
+          bankName,
+          account: emp.bank_account_number || '',
+          holder: emp.bank_account_holder || l.employee_name,
+          amount: Math.round(numVal(l.net_pay)),
+          flag: emp.bank_account_number ? '' : 'PERIKSA: rekening kosong',
+        };
+        groups[classifyBank(bankName)].push(rec);
+      }
+
+      const d = new Date(period.period_month);
+      const monthLabel = fmtMonth(period.period_month);
+      const remark = `GAJI ${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+      const headStyle = { font: { bold: true }, fill: { fgColor: { rgb: 'F1F3F7' } } };
+
+      const applyNum = (ws, cols) => {
+        const r = XLSX.utils.decode_range(ws['!ref']);
+        for (let row = 0; row <= r.e.r; row++) for (const c of cols) {
+          const cell = ws[XLSX.utils.encode_cell({ r: row, c })];
+          if (cell && typeof cell.v === 'number') cell.z = '#,##0';
+        }
+      };
+      const boldRow = (ws, rowIdx) => {
+        const r = XLSX.utils.decode_range(ws['!ref']);
+        for (let c = 0; c <= r.e.c; c++) {
+          const cell = ws[XLSX.utils.encode_cell({ r: rowIdx, c })];
+          if (cell) cell.s = headStyle;
+        }
+      };
+
+      const wb = XLSX.utils.book_new();
+
+      if (groups.BCA.length) {
+        const aoa = [
+          [`Ekspor Payroll BCA — ${monthLabel}`],
+          ['Format KlikBCA Bisnis (Multi Payroll). Proses lewat aplikasi checksum BCA sebelum diunggah.'],
+          [],
+          ['No.', 'Nama Penerima', 'No. Rekening', 'Nama Pemilik Rekening', 'Kode Bank (BI)', 'Jumlah (Rp)', 'Berita'],
+        ];
+        groups.BCA.forEach((r, i) => aoa.push([i + 1, r.name, r.account, r.holder, '', r.amount, r.flag || remark]));
+        aoa.push(['', '', '', '', 'TOTAL', groups.BCA.reduce((a, r) => a + r.amount, 0), '']);
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 18 }, { wch: 26 }, { wch: 14 }, { wch: 16 }, { wch: 22 }];
+        applyNum(ws, [5]); boldRow(ws, 3);
+        XLSX.utils.book_append_sheet(wb, ws, 'BCA');
+      }
+
+      if (groups.Mandiri.length) {
+        const aoa = [
+          [`Ekspor Payroll Mandiri — ${monthLabel}`],
+          ['Format Kopra by Mandiri / MCM Payroll by File Upload. Validasi dengan "Download Template" sebelum diunggah.'],
+          [],
+          ['No.', 'Nama Penerima', 'No. Rekening', 'Nama Pemilik', 'Kode Bank', 'Jumlah (Rp)', 'Tipe Transfer', 'Keterangan'],
+        ];
+        groups.Mandiri.forEach((r, i) => aoa.push([i + 1, r.name, r.account, r.holder, '', r.amount, 'IN-HOUSE', r.flag || remark]));
+        aoa.push(['', '', '', '', 'TOTAL', groups.Mandiri.reduce((a, r) => a + r.amount, 0), '', '']);
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 22 }];
+        applyNum(ws, [5]); boldRow(ws, 3);
+        XLSX.utils.book_append_sheet(wb, ws, 'Mandiri');
+      }
+
+      if (groups.Lainnya.length) {
+        const aoa = [
+          [`Ekspor Payroll — Bank Lain — ${monthLabel}`],
+          ['Karyawan dengan bank selain BCA/Mandiri. Lengkapi Kode Bank (sandi BI) untuk transfer antar bank.'],
+          [],
+          ['No.', 'Nama Penerima', 'Bank', 'No. Rekening', 'Nama Pemilik', 'Kode Bank', 'Jumlah (Rp)', 'Keterangan'],
+        ];
+        groups.Lainnya.forEach((r, i) => aoa.push([i + 1, r.name, r.bankName, r.account, r.holder, '', r.amount, r.flag || remark]));
+        aoa.push(['', '', '', '', '', 'TOTAL', groups.Lainnya.reduce((a, r) => a + r.amount, 0), '']);
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 5 }, { wch: 26 }, { wch: 20 }, { wch: 18 }, { wch: 26 }, { wch: 12 }, { wch: 16 }, { wch: 22 }];
+        applyNum(ws, [6]); boldRow(ws, 3);
+        XLSX.utils.book_append_sheet(wb, ws, 'Bank Lain');
+      }
+
+      if (wb.SheetNames.length === 0) { setError('Tidak ada data untuk diekspor.'); return; }
+      XLSX.writeFile(wb, `payroll-bank-${monthSlug(period.period_month)}.xlsx`);
+    } catch {
+      setError('Gagal mengekspor file payroll');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) return <div style={{ padding: 24 }}>Memuat…</div>;
   if (!period) return <div style={{ padding: 24 }}>Periode tidak ditemukan. <Link to="/hr/payroll">Kembali</Link></div>;
 
@@ -166,6 +289,20 @@ export default function PayrollPeriodDetail() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {(allReviewed || locked) && (
+            <button onClick={doExportBankFiles} disabled={busy}
+              title="Ekspor data gaji ke Excel untuk unggah payroll bank (BCA / Mandiri)"
+              style={{ background: '#fff', color: '#0b8043', border: '1px solid #0b8043', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
+              {busy ? 'Memproses…' : 'Ekspor Bank (Excel)'}
+            </button>
+          )}
+          {locked && (
+            <button onClick={() => setShowAccountingModal(true)} disabled={busy}
+              title="Catat gaji ke buku besar: kurangi Kas, bebankan ke akun Beban Gaji tiap cabang"
+              style={{ background: '#fff', color: '#6a1b9a', border: '1px solid #6a1b9a', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
+              Proses ke Akuntansi
+            </button>
+          )}
           {downloadablePayslips && (
             <button onClick={doDownloadAll} disabled={busy}
               style={{ background: '#fff', color: '#1967d2', border: '1px solid #1967d2', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
@@ -304,6 +441,213 @@ export default function PayrollPeriodDetail() {
           onApplied={async () => { setShowBonusModal(false); await refreshAll(); }}
         />
       )}
+
+      {showAccountingModal && (
+        <AccountingPostModal
+          periodId={id}
+          period={period}
+          onClose={() => setShowAccountingModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Posts the finished payroll to the ledger: for each branch, credit (reduce) the
+// cash account and debit (increase) that branch's "Beban Gaji - <Branch>" expense
+// account, using the existing atomic transfer endpoint. Amounts are net pay — the
+// cash actually disbursed. Guards against double-posting per branch via a marker
+// embedded in the adjustment description.
+function AccountingPostModal({ periodId, period, onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [rows, setRows] = useState([]);          // per-branch preview rows
+  const [cashAccount, setCashAccount] = useState(null);
+  const [result, setResult] = useState(null);    // { posted, skipped }
+
+  const monthLabel = fmtMonth(period.period_month);
+  const marker = (branchId) => `[gaji:${periodId}:${branchId}]`;
+
+  const findCash = (accounts) =>
+    accounts.find((a) => Number(a.account_number) === 11000) ||
+    accounts.find((a) => a.account_type === 'asset' && /kas/i.test(a.name || ''));
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const [accRes, lineRes] = await Promise.all([
+        getAccounts(),
+        getPayrollLines(periodId, { sort: 'name', order: 'asc' }),
+      ]);
+      const accounts = Array.isArray(accRes.data) ? accRes.data : [];
+      const lines = Array.isArray(lineRes.data) ? lineRes.data : [];
+
+      const cash = findCash(accounts);
+      setCashAccount(cash || null);
+
+      // Existing postings to the cash account, to detect what's already been posted.
+      let existing = [];
+      if (cash) {
+        try {
+          const adjRes = await getAccountAdjustments({ account_id: cash.id });
+          existing = Array.isArray(adjRes.data) ? adjRes.data : [];
+        } catch { /* non-fatal — treat as none posted */ }
+      }
+      const postedText = existing.map((a) => a.description || '').join('\n');
+
+      // Group net pay by branch.
+      const byBranch = new Map();
+      for (const l of lines) {
+        const bid = l.branch_id || 'none';
+        const bname = l.branch_name || '(Tanpa Cabang)';
+        const cur = byBranch.get(bid) || { branchId: bid, branchName: bname, count: 0, total: 0 };
+        cur.count += 1;
+        cur.total += Math.round(numVal(l.net_pay));
+        byBranch.set(bid, cur);
+      }
+
+      const preview = [...byBranch.values()].map((b) => {
+        const wage = accounts.find((a) => a.name === `Beban Gaji - ${b.branchName}`);
+        return {
+          ...b,
+          wageAccount: wage || null,
+          alreadyPosted: postedText.includes(marker(b.branchId)),
+        };
+      }).sort((a, b) => a.branchName.localeCompare(b.branchName));
+
+      setRows(preview);
+    } catch {
+      setError('Gagal memuat data akuntansi');
+    } finally {
+      setLoading(false);
+    }
+  }, [periodId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const missingWage = rows.filter((r) => r.total > 0 && !r.wageAccount);
+  const toPost = rows.filter((r) => r.total > 0 && r.wageAccount && !r.alreadyPosted);
+  const grandTotal = rows.reduce((s, r) => s + r.total, 0);
+  const canPost = !!cashAccount && missingWage.length === 0 && toPost.length > 0 && !busy;
+
+  const post = async () => {
+    if (!canPost) return;
+    setBusy(true); setError('');
+    let posted = 0;
+    try {
+      for (const r of toPost) {
+        await createAccountTransfer({
+          from_account_id: cashAccount.id,
+          to_account_id: r.wageAccount.id,
+          amount: r.total,
+          description: `Gaji ${monthLabel} — ${r.branchName} ${marker(r.branchId)}`,
+        });
+        posted += 1;
+      }
+      setResult({ posted });
+      await load();
+    } catch {
+      setError(`Sebagian gagal diproses. ${posted} dari ${toPost.length} cabang berhasil dicatat. Silakan tutup dan buka kembali untuk melanjutkan sisanya.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: 680, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,.18)' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e6e8ee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Proses ke Akuntansi — {monthLabel}</h2>
+          <button onClick={onClose} style={{ background: 'none', border: 0, fontSize: 22, cursor: 'pointer', color: '#889' }}>×</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          {loading ? <p>Memuat…</p> : (
+            <>
+              {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 10, borderRadius: 6, marginBottom: 12 }}>{error}</div>}
+
+              {result && (
+                <div style={{ background: '#e6f4ea', color: '#1e7e34', padding: 10, borderRadius: 6, marginBottom: 12 }}>
+                  Berhasil mencatat {result.posted} cabang ke buku besar.
+                </div>
+              )}
+
+              <div style={{ fontSize: 13, color: '#556', marginBottom: 12, lineHeight: 1.5 }}>
+                Setiap cabang akan mengurangi <strong>{cashAccount ? cashAccount.name : 'Kas'}</strong> dan
+                membebankan gaji (nilai bersih) ke akun <strong>Beban Gaji</strong> cabang tersebut.
+              </div>
+
+              {!cashAccount && (
+                <div style={{ background: '#fff3cd', color: '#7a5200', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+                  Akun Kas (no. 11000) tidak ditemukan. Tidak dapat memproses.
+                </div>
+              )}
+
+              {missingWage.length > 0 && (
+                <div style={{ background: '#fff3cd', color: '#7a5200', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
+                  Akun <strong>Beban Gaji</strong> belum ada untuk: {missingWage.map((r) => r.branchName).join(', ')}.
+                  Jalankan migrasi <code>037_payroll_wage_accounts</code> (restart server atau <code>migrate.sh up</code>) untuk membuatnya, lalu buka kembali dialog ini.
+                </div>
+              )}
+
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#f1f3f7', textAlign: 'left' }}>
+                    <th style={{ padding: 8 }}>Cabang</th>
+                    <th style={{ padding: 8, textAlign: 'right' }}>Karyawan</th>
+                    <th style={{ padding: 8, textAlign: 'right' }}>Total (Bersih)</th>
+                    <th style={{ padding: 8 }}>Akun Beban</th>
+                    <th style={{ padding: 8, textAlign: 'center' }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 ? (
+                    <tr><td colSpan={5} style={{ padding: 12, color: '#889' }}>Tidak ada data.</td></tr>
+                  ) : rows.map((r) => (
+                    <tr key={r.branchId} style={{ borderTop: '1px solid #eef0f4' }}>
+                      <td style={{ padding: 8 }}>{r.branchName}</td>
+                      <td style={{ padding: 8, textAlign: 'right' }}>{r.count}</td>
+                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>{fmtIDR(r.total)}</td>
+                      <td style={{ padding: 8, color: r.wageAccount ? '#334' : '#c5221f' }}>
+                        {r.wageAccount ? r.wageAccount.name : 'Belum ada'}
+                      </td>
+                      <td style={{ padding: 8, textAlign: 'center' }}>
+                        {r.total <= 0 ? <span style={{ color: '#aab' }}>—</span>
+                          : r.alreadyPosted ? <span style={{ color: '#1e7e34', fontWeight: 600 }}>✓ Tercatat</span>
+                          : <span style={{ color: '#a06800' }}>Belum</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                {rows.length > 0 && (
+                  <tfoot>
+                    <tr style={{ background: '#f8f9fb', fontWeight: 700, borderTop: '2px solid #e6e8ee' }}>
+                      <td style={{ padding: 8 }} colSpan={2}>Total</td>
+                      <td style={{ padding: 8, textAlign: 'right' }}>{fmtIDR(grandTotal)}</td>
+                      <td colSpan={2}></td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: '12px 20px', borderTop: '1px solid #e6e8ee', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+          {!loading && toPost.length === 0 && missingWage.length === 0 && rows.length > 0 && !result && (
+            <span style={{ color: '#1e7e34', fontSize: 13, marginRight: 'auto' }}>Semua cabang sudah tercatat.</span>
+          )}
+          <button onClick={onClose} disabled={busy}
+            style={{ background: '#fff', border: '1px solid #ccd', borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
+            Tutup
+          </button>
+          <button onClick={post} disabled={!canPost}
+            style={{ background: canPost ? '#6a1b9a' : '#ccc', color: '#fff', border: 0, borderRadius: 8, padding: '10px 20px', fontWeight: 600, cursor: canPost ? 'pointer' : 'not-allowed' }}>
+            {busy ? 'Memproses…' : `Catat ${toPost.length} Cabang`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

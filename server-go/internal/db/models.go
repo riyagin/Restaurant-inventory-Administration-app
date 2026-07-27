@@ -47,6 +47,7 @@ type AttendanceDevice struct {
 	ApiKeyHash string             `json:"api_key_hash"`
 	IsActive   bool               `json:"is_active"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
 type AttendanceRecord struct {

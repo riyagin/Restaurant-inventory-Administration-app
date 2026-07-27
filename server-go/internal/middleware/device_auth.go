@@ -75,6 +75,16 @@ func DeviceAuth(queries *db.Queries) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Stamp liveness fire-and-forget: the dashboard wants to know when a
+			// kiosk last made contact, but a failed/slow UPDATE must never block or
+			// fail the device's actual request. Detached context so it survives the
+			// request returning.
+			go func(id pgtype.UUID) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = queries.TouchAttendanceDevice(ctx, id)
+			}(device.ID)
+
 			dc := &DeviceContext{
 				DeviceID: device.ID,
 				BranchID: device.BranchID,

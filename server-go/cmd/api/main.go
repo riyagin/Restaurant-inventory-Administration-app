@@ -176,6 +176,7 @@ func main() {
 		r.Post("/api/hr/attendance/device/event", attendanceDeviceHandler.Event)
 		r.Get("/api/hr/attendance/device/employees", attendanceDeviceHandler.Employees)
 		r.Post("/api/hr/attendance/device/face", attendanceDeviceHandler.EnrollFace)
+		r.Post("/api/hr/attendance/device/face/sync", attendanceDeviceHandler.FaceSync)
 	})
 
 	// Protected routes
@@ -383,6 +384,8 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireAdminOrManager)
 			r.Post("/api/hr/attendance/reconcile", attendanceHandler.Reconcile)
+			// Face enrollment coverage + device fleet health (web dashboard).
+			r.Get("/api/hr/attendance/face/overview", attendanceHandler.FaceOverview)
 			// Fingerprint import (two-phase)
 			r.Post("/api/hr/attendance/fingerprint-import/parse", attendanceHandler.FingerprintParse)
 			r.Post("/api/hr/attendance/fingerprint-import/confirm", attendanceHandler.FingerprintConfirm)

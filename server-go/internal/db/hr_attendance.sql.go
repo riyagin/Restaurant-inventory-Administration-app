@@ -413,7 +413,7 @@ func (q *Queries) ListActiveEmployeesForReconcile(ctx context.Context) ([]*ListA
 const listAttendanceDevices = `-- name: ListAttendanceDevices :many
 
 SELECT d.id, d.name, d.branch_id, d.api_key_hash, d.is_active, d.created_at,
-       b.name AS branch_name
+       d.last_seen_at, b.name AS branch_name
 FROM attendance_devices d
 LEFT JOIN branches b ON b.id = d.branch_id
 ORDER BY d.created_at DESC
@@ -426,6 +426,7 @@ type ListAttendanceDevicesRow struct {
 	ApiKeyHash string             `json:"api_key_hash"`
 	IsActive   bool               `json:"is_active"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 	BranchName pgtype.Text        `json:"branch_name"`
 }
 
@@ -446,6 +447,7 @@ func (q *Queries) ListAttendanceDevices(ctx context.Context) ([]*ListAttendanceD
 			&i.ApiKeyHash,
 			&i.IsActive,
 			&i.CreatedAt,
+			&i.LastSeenAt,
 			&i.BranchName,
 		); err != nil {
 			return nil, err
@@ -456,6 +458,17 @@ func (q *Queries) ListAttendanceDevices(ctx context.Context) ([]*ListAttendanceD
 		return nil, err
 	}
 	return items, nil
+}
+
+const touchAttendanceDevice = `-- name: TouchAttendanceDevice :exec
+UPDATE attendance_devices SET last_seen_at = now() WHERE id = $1
+`
+
+// Stamps device liveness. Called fire-and-forget by the DeviceAuth middleware on
+// every device-key request, so the dashboard can show which kiosks are still alive.
+func (q *Queries) TouchAttendanceDevice(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchAttendanceDevice, id)
+	return err
 }
 
 const listDeviceRosterByBranch = `-- name: ListDeviceRosterByBranch :many
