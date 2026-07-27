@@ -394,6 +394,9 @@ func main() {
 			r.Post("/api/hr/attendance/holidays", attendanceHandler.CreatePublicHoliday)
 			r.Delete("/api/hr/attendance/holidays/{id}", attendanceHandler.DeletePublicHoliday)
 			// Attendance devices
+			// Self-service enrollment: Android app posts its JWT + device_name,
+			// server mints and returns a device_key. Replaces paste-from-web.
+			r.Post("/api/hr/attendance/device/enroll", attendanceDeviceHandler.Enroll)
 			r.Get("/api/hr/attendance/devices", attendanceHandler.ListDevices)
 			r.Post("/api/hr/attendance/devices", attendanceHandler.CreateDevice)
 			r.Put("/api/hr/attendance/devices/{id}", attendanceHandler.SetDeviceActive)

@@ -355,6 +355,73 @@ func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Reque
 	respondJSON(w, http.StatusOK, out)
 }
 
+// EnrollDeviceRequest is the JSON body the Android app posts to self-register a
+// device using the logged-in user's JWT.
+type EnrollDeviceRequest struct {
+	DeviceName string `json:"device_name"`
+	BranchID   string `json:"branch_id"` // optional; admin may assign later
+}
+
+// Enroll — POST /api/hr/attendance/device/enroll
+//
+// JWT-authenticated self-service device registration. The app sends the user's
+// bearer token plus a device_name; the server mints a device key, stores only
+// its hash, and returns the raw key once. This replaces the old "paste the key
+// from the web dashboard" flow. Lives in the JWT group, NOT the device-key
+// group, because the device has no key yet.
+func (h *AttendanceDeviceHandler) Enroll(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req EnrollDeviceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "gagal membaca permintaan (JSON tidak valid)")
+		return
+	}
+	req.DeviceName = strings.TrimSpace(req.DeviceName)
+	if req.DeviceName == "" {
+		respondError(w, http.StatusBadRequest, "nama perangkat wajib diisi")
+		return
+	}
+	branchID, err := uuidOrNull(strings.TrimSpace(req.BranchID))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "cabang tidak valid")
+		return
+	}
+
+	rawKey, err := generateDeviceKey()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat kunci perangkat")
+		return
+	}
+	hash := middleware.HashDeviceKey(rawKey)
+
+	dev, err := h.queries.CreateAttendanceDevice(ctx, &db.CreateAttendanceDeviceParams{
+		Name:       req.DeviceName,
+		BranchID:   branchID,
+		ApiKeyHash: hash,
+	})
+	if err != nil {
+		log.Printf("attendance device enroll: CreateAttendanceDevice(%q) failed: %v", req.DeviceName, err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan perangkat")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "attendance_device",
+		EntityID:    dev.ID.Bytes,
+		Description: fmt.Sprintf("Mendaftarkan perangkat absensi %s (self-enroll)", dev.Name),
+	})
+
+	// device_key is returned ONCE and never persisted in plaintext.
+	respondJSON(w, http.StatusCreated, map[string]any{
+		"device_key":  rawKey,
+		"device_name": dev.Name,
+	})
+}
+
 // FaceEnrollRequest is the JSON body a device posts to store a face enrollment.
 type FaceEnrollRequest struct {
 	EmployeeCode     string `json:"employee_code"`
