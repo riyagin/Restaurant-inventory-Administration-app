@@ -68,6 +68,7 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	dateTo   := q.Get("date_to")
 	branchID := q.Get("branch_id")
 	divName  := q.Get("division_name")
+	vendorID := q.Get("vendor_id")
 
 	pageNum, pageSize := 1, 25
 	if p := q.Get("page");  p != "" { if v, err := strconv.Atoi(p); err == nil && v > 0 { pageNum = v } }
@@ -104,6 +105,12 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if divName != "" {
 		args = append(args, divName)
 		conds = append(conds, fmt.Sprintf("dv.name = $%d", len(args)))
+	}
+	if vendorID == "none" {
+		conds = append(conds, "inv.vendor_id IS NULL")
+	} else if vendorID != "" {
+		args = append(args, vendorID)
+		conds = append(conds, fmt.Sprintf("inv.vendor_id = $%d::uuid", len(args)))
 	}
 
 	whereClause := ""

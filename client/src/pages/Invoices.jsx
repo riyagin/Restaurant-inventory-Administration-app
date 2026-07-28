@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions } from '../api';
+import { Link, useSearchParams } from 'react-router-dom';
+import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions, getVendors } from '../api';
 
 function getUser() {
   try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
@@ -28,9 +28,15 @@ const PAGE_SIZE = 25;
 const todayStr = new Date().toISOString().split('T')[0];
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 
+const VALID_STATUS = ['all', 'unpaid', 'partial', 'paid', 'dispatched'];
+
 export default function Invoices() {
   const currentUser = getUser();
   const isAdmin = currentUser?.role === 'admin';
+
+  // The dashboard links here with ?status=unpaid — honour it as the initial filter.
+  const [searchParams] = useSearchParams();
+  const initialStatus = VALID_STATUS.includes(searchParams.get('status')) ? searchParams.get('status') : 'all';
 
   const [invoices, setInvoices]           = useState([]);
   const [total, setTotal]                 = useState(0);
@@ -47,14 +53,16 @@ export default function Invoices() {
 
   const [branches,   setBranches]   = useState([]);
   const [divisions,  setDivisions]  = useState([]);
+  const [vendors,    setVendors]    = useState([]);
 
   const [search,     setSearch]     = useState('');
-  const [status,     setStatus]     = useState('all');
+  const [status,     setStatus]     = useState(initialStatus);
   const [type,       setType]       = useState('all');
   const [dateFrom,   setDateFrom]   = useState('');
   const [dateTo,     setDateTo]     = useState('');
   const [branchFilter,        setBranchFilter]        = useState('');
   const [divisionNameFilter,  setDivisionNameFilter]  = useState('');
+  const [vendorFilter,        setVendorFilter]        = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -66,6 +74,7 @@ export default function Invoices() {
     if (dateTo)                params.date_to     = dateTo;
     if (branchFilter)       params.branch_id      = branchFilter;
     if (divisionNameFilter) params.division_name  = divisionNameFilter;
+    if (vendorFilter)       params.vendor_id      = vendorFilter;
     getInvoices(params)
       .then(r => {
         setInvoices(r.data.invoices);
@@ -74,13 +83,14 @@ export default function Invoices() {
         setOutCount(r.data.outstanding_count ?? 0);
       })
       .finally(() => setLoading(false));
-  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionNameFilter, page]);
+  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionNameFilter, vendorFilter, page]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     getAccounts().then(r => setAccounts(r.data));
     getBranches().then(r => setBranches(r.data)).catch(() => {});
     getDivisions().then(r => setDivisions(r.data)).catch(() => {});
+    getVendors().then(r => setVendors(r.data)).catch(() => {});
   }, []);
 
   // Esc closes the payment dialog
@@ -129,12 +139,12 @@ export default function Invoices() {
   const clearFilters = () => {
     setSearch(''); setStatus('all'); setType('all');
     setDateFrom(''); setDateTo('');
-    setBranchFilter(''); setDivisionNameFilter('');
+    setBranchFilter(''); setDivisionNameFilter(''); setVendorFilter('');
     setPage(1);
   };
 
   const totalPages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionNameFilter;
+  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionNameFilter || vendorFilter;
   const pageStart   = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd     = Math.min(page * PAGE_SIZE, total);
 
@@ -180,6 +190,13 @@ export default function Invoices() {
               <option value="partial">Sebagian</option>
               <option value="paid">Lunas</option>
             </select>
+            {vendors.length > 0 && (
+              <select value={vendorFilter} onChange={e => setFilter(setVendorFilter)(e.target.value)} title="Filter vendor">
+                <option value="">Semua Vendor</option>
+                <option value="none">Tanpa Vendor</option>
+                {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            )}
             <input type="date" value={dateFrom} onChange={e => setFilter(setDateFrom)(e.target.value)} title="Dari tanggal" />
             <input type="date" value={dateTo}   onChange={e => setFilter(setDateTo)(e.target.value)}   title="Sampai tanggal" />
             {branches.length > 0 && (
@@ -215,7 +232,8 @@ export default function Invoices() {
               <th>Vendor</th>
               <th>Akun</th>
               <th className="num">Total</th>
-              <th>Status</th>
+              {/* fits "Belum Dibayar" on one line so the chip keeps its pill shape */}
+              <th style={{width: '8.5rem'}}>Status</th>
               <th><span className="sr-only">Aksi</span></th>
             </tr>
           </thead>
@@ -269,7 +287,7 @@ export default function Invoices() {
                     </span>
                   )}
                 </td>
-                <td><StatusBadge status={inv.payment_status} /></td>
+                <td style={{whiteSpace:'nowrap'}}><StatusBadge status={inv.payment_status} /></td>
                 <td style={{whiteSpace:'nowrap'}}>
                   <div className="actions">
                     <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>

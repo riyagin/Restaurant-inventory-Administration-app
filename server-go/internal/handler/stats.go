@@ -88,7 +88,9 @@ func (h *StatsHandler) GeneralStats(w http.ResponseWriter, r *http.Request) {
 
 	// Outstanding invoices (unpaid + partial)
 	outstandingRows, err := h.pool.Query(ctx,
-		`SELECT inv.id, inv.invoice_number, inv.amount_paid,
+		// id is cast to text: RowToMap would otherwise emit the raw 16-byte
+		// UUID as a JSON array, and the dashboard builds /invoices/view/:id from it.
+		`SELECT inv.id::text AS id, inv.invoice_number, inv.amount_paid,
 		        inv.payment_status, inv.due_date, inv.date, inv.invoice_type,
 		        v.name AS vendor_name,
 		        COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total

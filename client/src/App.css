@@ -250,7 +250,8 @@ tr:hover td { background: var(--surface-2); }
 .num        { text-align: right; font-variant-numeric: tabular-nums; }
 .cell-sub   { display: block; margin-top: 0.15rem; font-size: 0.75rem; font-weight: 500; color: var(--st-partial-ink); }
 
-.badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-line); }
+/* Chips never wrap: a two-line "Belum Dibayar" breaks the pill shape. */
+.badge { display: inline-block; white-space: nowrap; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-line); }
 .badge.low { background: var(--alert-bg); color: var(--alert-ink); border-color: var(--alert-line); }
 /* Glyph carries the state independently of hue. */
 .badge .glyph { display: inline-block; margin-right: 0.3rem; font-size: 0.72rem; }
