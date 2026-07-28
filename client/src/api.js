@@ -1,8 +1,27 @@
 import axios from 'axios';
+import { reportConnectionDown, reportConnectionUp, classifyConnectionError } from './connection';
 
-const { apiBaseUrl } = await fetch('/config.json').then(r => r.json());
+// Runtime API base URL, fetched from a file served next to the SPA so a VPS can
+// be repointed without a rebuild. This is a top-level await: if it throws, the
+// module never finishes evaluating and the app renders a blank page. So failure
+// falls back to a same-origin /api and flags the connection as down — the
+// ConnectionError overlay can then explain it instead of showing nothing.
+let apiBaseUrl = '/api';
+try {
+  const config = await fetch('/config.json').then(r => r.json());
+  if (config?.apiBaseUrl) apiBaseUrl = config.apiBaseUrl;
+} catch (err) {
+  reportConnectionDown('config', `Gagal memuat /config.json — ${err?.message || 'tidak dapat dijangkau'}`);
+}
+
+export const API_BASE_URL = apiBaseUrl;
 
 const api = axios.create({ baseURL: apiBaseUrl });
+
+// Cheap liveness probe used by the ConnectionError page's retry button. Skips
+// the shared instance's interceptors deliberately: a failed retry should not
+// re-trigger the refresh/redirect machinery, only report up or down.
+export const checkHealth = () => axios.get(`${apiBaseUrl}/health`, { timeout: 8000 });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
@@ -14,9 +33,22 @@ let isRefreshing = false;
 let refreshQueue = [];
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // Any successful round-trip proves the backend is reachable again.
+    reportConnectionUp();
+    return res;
+  },
   async (err) => {
     const original = err.config;
+
+    // Connectivity failures are app-wide, not page-specific: surface them on the
+    // overlay. Ordinary HTTP errors (404/422/…) fall through to the caller.
+    const conn = classifyConnectionError(err);
+    if (conn) {
+      reportConnectionDown(conn.kind, conn.detail);
+      return Promise.reject(err);
+    }
+
     if (err.response?.status === 401 && !original._retry) {
       // Don't try to refresh if the failing request was itself a refresh/logout
       if (original.url?.includes('/auth/')) {

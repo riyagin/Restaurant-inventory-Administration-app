@@ -593,8 +593,9 @@ type User struct {
 }
 
 type Vendor struct {
-	ID   pgtype.UUID `json:"id"`
-	Name string      `json:"name"`
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	AccountID pgtype.UUID `json:"account_id"`
 }
 
 type WageComponent struct {

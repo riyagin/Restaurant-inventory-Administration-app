@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import * as XLSX from 'xlsx-js-style';
 import {
@@ -35,6 +35,67 @@ const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', curren
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const numVal = (n) => Number(n ?? 0);
+
+// Sortable columns of the payroll line table. `get` extracts the comparable value
+// (null = "no value", always sorted last); `numeric` picks the comparison and the
+// direction a first click applies — money/score columns open highest-first, text
+// columns A–Z. The whole line set is fetched in one request, so sorting happens
+// here rather than round-tripping to the server.
+const SORT_COLUMNS = {
+  name:                   { numeric: false, get: (l) => l.employee_name || '' },
+  position:               { numeric: false, get: (l) => l.position_name || '' },
+  branch:                 { numeric: false, get: (l) => l.branch_name || '' },
+  base_salary:            { numeric: true,  get: (l) => numVal(l.base_salary) },
+  allowance_total:        { numeric: true,  get: (l) => numVal(l.allowance_total) },
+  bonus_total:            { numeric: true,  get: (l) => numVal(l.bonus_total) },
+  overtime:               { numeric: true,  get: (l) => numVal(l.overtime_amount) + numVal(l.overtime_hourly_amount) + numVal(l.public_holiday_amount) },
+  kasbon_deduction:       { numeric: true,  get: (l) => numVal(l.kasbon_deduction) },
+  unpaid_leave_deduction: { numeric: true,  get: (l) => numVal(l.unpaid_leave_deduction) },
+  net_pay:                { numeric: true,  get: (l) => numVal(l.net_pay) },
+  performance_score:      { numeric: true,  get: (l) => (l.performance_score === null || l.performance_score === undefined ? null : Number(l.performance_score)) },
+  reviewed:               { numeric: true,  get: (l) => (l.reviewed ? 1 : 0) },
+};
+
+// sortLines returns a sorted copy. Rows with no value for the active column sink
+// to the bottom in both directions, and employee name breaks every tie so the
+// order stays stable across re-sorts.
+function sortLines(lines, sort, order) {
+  const col = SORT_COLUMNS[sort] || SORT_COLUMNS.name;
+  const dir = order === 'desc' ? -1 : 1;
+  return [...lines].sort((a, b) => {
+    const va = col.get(a);
+    const vb = col.get(b);
+    const emptyA = va === null || va === '';
+    const emptyB = vb === null || vb === '';
+    if (emptyA || emptyB) {
+      if (emptyA && emptyB) return 0;
+      return emptyA ? 1 : -1;
+    }
+    const cmp = col.numeric ? va - vb : String(va).localeCompare(String(vb), 'id');
+    if (cmp !== 0) return cmp * dir;
+    return String(a.employee_name || '').localeCompare(String(b.employee_name || ''), 'id');
+  });
+}
+
+// SortableTh is a table header that toggles the table's sort on click.
+function SortableTh({ label, sortKey, sort, order, onSort, align = 'left' }) {
+  const active = sort === sortKey;
+  return (
+    <th
+      onClick={() => onSort(sortKey)}
+      title={`Urutkan berdasarkan ${label}`}
+      aria-sort={active ? (order === 'asc' ? 'ascending' : 'descending') : 'none'}
+      style={{
+        padding: 10, textAlign: align, cursor: 'pointer', userSelect: 'none',
+        whiteSpace: 'nowrap', color: active ? '#1967d2' : undefined,
+      }}>
+      {label}
+      <span style={{ marginLeft: 4, fontSize: 11, opacity: active ? 1 : 0.35 }}>
+        {active ? (order === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </th>
+  );
+}
 
 function ScoreBadge({ score }) {
   if (score === null || score === undefined) return <span style={{ color: '#aab' }}>—</span>;
@@ -78,19 +139,20 @@ export default function PayrollPeriodDetail() {
     }
   }, [id]);
 
+  // Search / position / branch stay server-side; ordering is applied on the client
+  // (see sortedLines) so clicking a header re-sorts instantly without a refetch.
   const loadLines = useCallback(async () => {
     try {
       const { data } = await getPayrollLines(id, {
         q: q || undefined,
         position_id: positionId || undefined,
         branch_id: branchId || undefined,
-        sort, order,
       });
       setLines(Array.isArray(data) ? data : []);
     } catch {
       setError('Gagal memuat baris penggajian');
     }
-  }, [id, q, positionId, branchId, sort, order]);
+  }, [id, q, positionId, branchId]);
 
   useEffect(() => {
     (async () => {
@@ -106,6 +168,19 @@ export default function PayrollPeriodDetail() {
   useEffect(() => { loadLines(); }, [loadLines]);
 
   const refreshAll = async () => { await loadPeriod(); await loadLines(); };
+
+  const sortedLines = useMemo(() => sortLines(lines, sort, order), [lines, sort, order]);
+
+  // Clicking the active column flips direction; a new column starts in its natural
+  // direction — highest-first for money/score, A–Z for text.
+  const toggleSort = (key) => {
+    if (sort === key) {
+      setOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSort(key);
+    setOrder(SORT_COLUMNS[key]?.numeric ? 'desc' : 'asc');
+  };
 
   const totalGross = lines.reduce((a, l) => a + numVal(l.gross_pay), 0);
   const totalNet = lines.reduce((a, l) => a + numVal(l.net_pay), 0);
@@ -352,38 +427,36 @@ export default function PayrollPeriodDetail() {
           <option value="">Semua Cabang</option>
           {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
-        <select value={`${sort}:${order}`} onChange={(e) => { const [s, o] = e.target.value.split(':'); setSort(s); setOrder(o); }}
-          style={{ padding: 8, borderRadius: 6, border: '1px solid #ccd' }}>
-          <option value="name:asc">Nama A–Z</option>
-          <option value="name:desc">Nama Z–A</option>
-          <option value="net_pay:desc">Gaji Bersih (Tertinggi)</option>
-          <option value="net_pay:asc">Gaji Bersih (Terendah)</option>
-        </select>
       </div>
 
       <div style={{ overflowX: 'auto', background: '#fff', borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,.08)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr style={{ background: '#f1f3f7', textAlign: 'left' }}>
-              <th style={{ padding: 10 }}>Karyawan</th>
-              <th style={{ padding: 10 }}>Jabatan</th>
-              <th style={{ padding: 10 }}>Cabang</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Gaji Pokok</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Tunjangan</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Bonus</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Lembur</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Kasbon</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Pot. Cuti</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Gaji Bersih</th>
-              <th style={{ padding: 10, textAlign: 'center' }}>Skor</th>
-              <th style={{ padding: 10, textAlign: 'center' }}>✓</th>
+              {[
+                { key: 'name', label: 'Karyawan' },
+                { key: 'position', label: 'Jabatan' },
+                { key: 'branch', label: 'Cabang' },
+                { key: 'base_salary', label: 'Gaji Pokok', align: 'right' },
+                { key: 'allowance_total', label: 'Tunjangan', align: 'right' },
+                { key: 'bonus_total', label: 'Bonus', align: 'right' },
+                { key: 'overtime', label: 'Lembur', align: 'right' },
+                { key: 'kasbon_deduction', label: 'Kasbon', align: 'right' },
+                { key: 'unpaid_leave_deduction', label: 'Pot. Cuti', align: 'right' },
+                { key: 'net_pay', label: 'Gaji Bersih', align: 'right' },
+                { key: 'performance_score', label: 'Skor', align: 'center' },
+                { key: 'reviewed', label: '✓', align: 'center' },
+              ].map((c) => (
+                <SortableTh key={c.key} label={c.label} sortKey={c.key} align={c.align}
+                  sort={sort} order={order} onSort={toggleSort} />
+              ))}
               {downloadablePayslips && <th style={{ padding: 10, textAlign: 'center' }}>Slip</th>}
             </tr>
           </thead>
           <tbody>
             {lines.length === 0 ? (
               <tr><td colSpan={downloadablePayslips ? 13 : 12} style={{ padding: 16, color: '#889' }}>Tidak ada baris.</td></tr>
-            ) : lines.map((l) => (
+            ) : sortedLines.map((l) => (
               <tr key={l.id} onClick={() => setDrawerLineId(l.id)} style={{ borderTop: '1px solid #eef0f4', cursor: 'pointer' }}>
                 <td style={{ padding: 10 }}>
                   <div style={{ fontWeight: 600 }}>{l.employee_name}</div>

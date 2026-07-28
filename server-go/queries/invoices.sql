@@ -44,6 +44,7 @@ WHERE i.id = $1;
 SELECT
     i.id, i.invoice_number, i.invoice_type, i.payment_status,
     i.amount_paid, i.account_id, i.warehouse_id, i.branch_id, i.division_id, i.dispatch_id,
+    i.vendor_id,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount
 FROM invoices i
 LEFT JOIN invoice_items ii ON ii.invoice_id = i.id

@@ -427,9 +427,15 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	apAcct, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: 20100, Valid: true})
-	if err == nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, grandTotal); err != nil {
+	// Payable is tracked per vendor — each vendor has its own sub-account under
+	// "Utang Usaha" (20100); invoices with no vendor land in the shared bucket.
+	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, vendorID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyiapkan akun hutang vendor")
+		return
+	}
+	if apAcctID != uuid.Nil {
+		if err := service.UpdateBalance(ctx, qtx, apAcctID, grandTotal); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
 			return
 		}
@@ -456,8 +462,8 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Debit AP (liability decreases — already credited above)
-		if apAcct != nil {
-			if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -grandTotal); err != nil {
+		if apAcctID != uuid.Nil {
+			if err := service.UpdateBalance(ctx, qtx, apAcctID, -grandTotal); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
 				return
 			}
@@ -632,9 +638,15 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	apAcct, _ := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: 20100, Valid: true})
-	if apAcct != nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -old.TotalAmount); err != nil {
+	// Reverse against the payable account of the vendor the invoice had, which
+	// may differ from the vendor it is being moved to.
+	oldAPAcctID, err := service.VendorPayableAccountID(ctx, qtx, old.VendorID.Bytes)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor lama")
+		return
+	}
+	if oldAPAcctID != uuid.Nil {
+		if err := service.UpdateBalance(ctx, qtx, oldAPAcctID, -old.TotalAmount); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang usaha")
 			return
 		}
@@ -759,8 +771,13 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if apAcct != nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, grandTotal); err != nil {
+	newAPAcctID, err := service.VendorPayableAccountID(ctx, qtx, vendorID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyiapkan akun hutang vendor")
+		return
+	}
+	if newAPAcctID != uuid.Nil {
+		if err := service.UpdateBalance(ctx, qtx, newAPAcctID, grandTotal); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
 			return
 		}
@@ -867,7 +884,11 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reverse cash/AP based on payment_status
-	apAcct, _ := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: 20100, Valid: true})
+	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, inv.VendorID.Bytes)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor")
+		return
+	}
 	switch inv.PaymentStatus {
 	case "paid":
 		if inv.AccountID.Valid {
@@ -884,15 +905,15 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		unpaid := inv.TotalAmount - inv.AmountPaid
-		if apAcct != nil && unpaid > 0 {
-			if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -unpaid); err != nil {
+		if apAcctID != uuid.Nil && unpaid > 0 {
+			if err := service.UpdateBalance(ctx, qtx, apAcctID, -unpaid); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang")
 				return
 			}
 		}
 	case "unpaid":
-		if apAcct != nil {
-			if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -inv.TotalAmount); err != nil {
+		if apAcctID != uuid.Nil {
+			if err := service.UpdateBalance(ctx, qtx, apAcctID, -inv.TotalAmount); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang")
 				return
 			}
@@ -999,10 +1020,14 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	// Debit AP (liability decreases)
-	apAcct, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: 20100, Valid: true})
-	if err == nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcct.ID.Bytes, -payAmount); err != nil {
+	// Debit the vendor's AP sub-account (liability decreases)
+	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, inv.VendorID.Bytes)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor")
+		return
+	}
+	if apAcctID != uuid.Nil {
+		if err := service.UpdateBalance(ctx, qtx, apAcctID, -payAmount); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang")
 			return
 		}

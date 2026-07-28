@@ -104,6 +104,43 @@ func (q *Queries) GetSystemAccountByNumber(ctx context.Context, accountNumber pg
 	return &i, err
 }
 
+const accountNameExists = `-- name: AccountNameExists :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1)
+`
+
+func (q *Queries) AccountNameExists(ctx context.Context, name string) (bool, error) {
+	row := q.db.QueryRow(ctx, accountNameExists, name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const nextVendorPayableNumber = `-- name: NextVendorPayableNumber :one
+SELECT (COALESCE(MAX(account_number), 20100) + 1)::int
+FROM accounts WHERE account_number BETWEEN 20101 AND 20998
+`
+
+func (q *Queries) NextVendorPayableNumber(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, nextVendorPayableNumber)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const renameAccount = `-- name: RenameAccount :exec
+UPDATE accounts SET name = $1 WHERE id = $2
+`
+
+type RenameAccountParams struct {
+	Name string      `json:"name"`
+	ID   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RenameAccount(ctx context.Context, arg *RenameAccountParams) error {
+	_, err := q.db.Exec(ctx, renameAccount, arg.Name, arg.ID)
+	return err
+}
+
 const listAccounts = `-- name: ListAccounts :many
 SELECT id, name, balance, account_number, account_type, parent_id, is_system
 FROM accounts

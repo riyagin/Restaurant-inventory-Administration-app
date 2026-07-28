@@ -9,6 +9,7 @@ const todayStr = new Date().toISOString().split('T')[0];
 
 const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
 const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
+const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: '→' };
 
 const SERVER = 'http://localhost:5000';
 
@@ -105,7 +106,10 @@ export default function InvoiceDetail() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1.5rem', padding: '0.5rem 0 1rem' }}>
           <div>
             <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Status</div>
-            <span className={`badge ${STATUS_CLASS[invoice.payment_status] ?? ''}`}>{STATUS_LABEL[invoice.payment_status] ?? invoice.payment_status}</span>
+            <span className={`badge ${STATUS_CLASS[invoice.payment_status] ?? ''}`}>
+              <span className="glyph" aria-hidden="true">{STATUS_GLYPH[invoice.payment_status] ?? '·'}</span>
+              {STATUS_LABEL[invoice.payment_status] ?? invoice.payment_status}
+            </span>
           </div>
           {invoice.due_date && (() => {
             const isOverdue = invoice.payment_status !== 'paid' && invoice.due_date.split('T')[0] < todayStr;

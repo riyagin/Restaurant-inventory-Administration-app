@@ -1,17 +1,20 @@
 -- name: ListVendors :many
-SELECT id, name FROM vendors ORDER BY name;
+SELECT id, name, account_id FROM vendors ORDER BY name;
 
 -- name: GetVendorByID :one
-SELECT id, name FROM vendors WHERE id = $1;
+SELECT id, name, account_id FROM vendors WHERE id = $1;
 
 -- name: CreateVendor :one
 INSERT INTO vendors (id, name)
 VALUES (gen_random_uuid(), $1)
-RETURNING id, name;
+RETURNING id, name, account_id;
 
 -- name: UpdateVendor :one
 UPDATE vendors SET name = $1 WHERE id = $2
-RETURNING id, name;
+RETURNING id, name, account_id;
+
+-- name: SetVendorAccountID :exec
+UPDATE vendors SET account_id = $1 WHERE id = $2;
 
 -- name: DeleteVendor :exec
 DELETE FROM vendors WHERE id = $1;

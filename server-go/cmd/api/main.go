@@ -101,7 +101,7 @@ func main() {
 	authHandler := handler.NewAuthHandler(queries, cfg.JWTSecret)
 	usersHandler := handler.NewUsersHandler(queries)
 	warehousesHandler := handler.NewWarehousesHandler(pool, queries)
-	vendorsHandler := handler.NewVendorsHandler(queries)
+	vendorsHandler := handler.NewVendorsHandler(pool, queries)
 	itemsHandler := handler.NewItemsHandler(queries)
 	accountsHandler := handler.NewAccountsHandler(queries)
 	templatesHandler := handler.NewInvoiceTemplatesHandler(pool, queries)

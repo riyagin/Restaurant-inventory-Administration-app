@@ -56,7 +56,7 @@ function CoverageBar({ enrolled, total }) {
   const pct = total > 0 ? Math.round((enrolled / total) * 100) : 0;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-      <div style={{ flex: 1, height: 8, background: '#eef1f6', borderRadius: 4, overflow: 'hidden', minWidth: 80 }}>
+      <div style={{ flex: 1, height: 8, background: '#eef1f6', borderRadius: 4, overflow: 'hidden', minWidth: 50 }}>
         <div style={{ width: `${pct}%`, height: '100%', background: pct === 100 ? '#1e7e34' : '#4f80e1' }} />
       </div>
       <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#555', minWidth: 38, textAlign: 'right' }}>{pct}%</span>
@@ -108,7 +108,7 @@ export default function FaceDashboard() {
       </div>
 
       {/* ── stat tiles ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
         <StatTile label="Karyawan Aktif" value={total} accent="#607d8b" />
         <StatTile label="Wajah Terdaftar" value={enrolled} sub={`${pct}% dari karyawan aktif`} accent="#1e7e34" />
         <StatTile
@@ -154,43 +154,47 @@ export default function FaceDashboard() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1rem', alignItems: 'start' }}>
+      {/* min() keeps the track from exceeding the viewport on narrow screens —
+          a bare minmax(340px, …) floor overflows the page below 340px. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: '1rem', alignItems: 'start' }}>
 
         {/* ── coverage per branch ── */}
-        <div className="card">
+        <div className="card" style={{ minWidth: 0 }}>
           <div className="card-header"><h2>Cakupan per Cabang</h2></div>
           {(data.branches || []).length === 0 ? (
             <div style={{ color: '#aaa', padding: '1rem 0' }}>Belum ada cabang.</div>
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Cabang</th>
-                  <th style={{ width: '35%' }}>Cakupan</th>
-                  <th style={{ textAlign: 'right' }}>Terdaftar</th>
-                  <th style={{ textAlign: 'right' }}>Belum</th>
-                  <th style={{ textAlign: 'right' }}>Perangkat</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.branches.map(b => (
-                  <tr key={b.branch_id}>
-                    <td style={{ fontWeight: 500 }}>{b.branch_name}</td>
-                    <td><CoverageBar enrolled={b.enrolled} total={b.total} /></td>
-                    <td style={{ textAlign: 'right' }}>{b.enrolled} / {b.total}</td>
-                    <td style={{ textAlign: 'right', color: b.missing > 0 ? '#c5221f' : '#8a93a6', fontWeight: b.missing > 0 ? 600 : 400 }}>
-                      {b.missing}
-                    </td>
-                    <td style={{ textAlign: 'right', color: b.device_count === 0 ? '#c5221f' : '#555' }}>{b.device_count}</td>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 420 }}>
+                <thead>
+                  <tr>
+                    <th>Cabang</th>
+                    <th style={{ width: '30%', minWidth: 110 }}>Cakupan</th>
+                    <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Terdaftar</th>
+                    <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Belum</th>
+                    <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Perangkat</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.branches.map(b => (
+                    <tr key={b.branch_id}>
+                      <td style={{ fontWeight: 500 }}>{b.branch_name}</td>
+                      <td><CoverageBar enrolled={b.enrolled} total={b.total} /></td>
+                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{b.enrolled} / {b.total}</td>
+                      <td style={{ textAlign: 'right', color: b.missing > 0 ? '#c5221f' : '#8a93a6', fontWeight: b.missing > 0 ? 600 : 400 }}>
+                        {b.missing}
+                      </td>
+                      <td style={{ textAlign: 'right', color: b.device_count === 0 ? '#c5221f' : '#555' }}>{b.device_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
         {/* ── source mix ── */}
-        <div className="card">
+        <div className="card" style={{ minWidth: 0 }}>
           <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h2>Sumber Absen Masuk</h2>
             <select value={days} onChange={e => setDays(Number(e.target.value))} style={{ fontSize: '0.82rem' }}>
@@ -223,87 +227,91 @@ export default function FaceDashboard() {
         </div>
 
         {/* ── device fleet ── */}
-        <div className="card">
+        <div className="card" style={{ minWidth: 0 }}>
           <div className="card-header"><h2>Perangkat Absensi</h2></div>
           {devices.length === 0 ? (
             <div style={{ color: '#aaa', padding: '1rem 0' }}>
               Belum ada perangkat terdaftar. <Link to="/hr/attendance/settings">Daftarkan perangkat</Link>.
             </div>
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Nama</th>
-                  <th>Cabang</th>
-                  <th>Status</th>
-                  <th>Terakhir Aktif</th>
-                  <th style={{ textAlign: 'right' }}>Absen Hari Ini</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map(d => {
-                  const age = relativeAge(d.last_seen_at);
-                  return (
-                    <tr key={d.id}>
-                      <td style={{ fontWeight: 500 }}>{d.name}</td>
-                      <td>{d.branch_name || <span style={{ color: '#c5221f' }}>Belum diatur</span>}</td>
-                      <td>
-                        <span className="badge" style={d.is_active
-                          ? { background: '#e6f4ea', color: '#1e7e34' }
-                          : { background: '#fce8e6', color: '#c5221f' }}>
-                          {d.is_active ? 'Aktif' : 'Nonaktif'}
-                        </span>
-                      </td>
-                      <td
-                        title={fmtDateTime(d.last_seen_at) || 'Belum pernah terhubung'}
-                        style={{ color: age.stale ? '#c5221f' : '#555', fontSize: '0.85rem' }}
-                      >
-                        {age.label}
-                      </td>
-                      <td style={{ textAlign: 'right', fontWeight: d.check_ins_today > 0 ? 600 : 400, color: d.check_ins_today > 0 ? '#1a1a2e' : '#8a93a6' }}>
-                        {d.check_ins_today}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 460 }}>
+                <thead>
+                  <tr>
+                    <th>Nama</th>
+                    <th>Cabang</th>
+                    <th>Status</th>
+                    <th style={{ whiteSpace: 'nowrap' }}>Terakhir Aktif</th>
+                    <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Absen Hari Ini</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {devices.map(d => {
+                    const age = relativeAge(d.last_seen_at);
+                    return (
+                      <tr key={d.id}>
+                        <td style={{ fontWeight: 500 }}>{d.name}</td>
+                        <td>{d.branch_name || <span style={{ color: '#c5221f' }}>Belum diatur</span>}</td>
+                        <td>
+                          <span className="badge" style={d.is_active
+                            ? { background: '#e6f4ea', color: '#1e7e34' }
+                            : { background: '#fce8e6', color: '#c5221f' }}>
+                            {d.is_active ? 'Aktif' : 'Nonaktif'}
+                          </span>
+                        </td>
+                        <td
+                          title={fmtDateTime(d.last_seen_at) || 'Belum pernah terhubung'}
+                          style={{ color: age.stale ? '#c5221f' : '#555', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                        >
+                          {age.label}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: d.check_ins_today > 0 ? 600 : 400, color: d.check_ins_today > 0 ? '#1a1a2e' : '#8a93a6' }}>
+                          {d.check_ins_today}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
         {/* ── recent enrollments ── */}
-        <div className="card">
+        <div className="card" style={{ minWidth: 0 }}>
           <div className="card-header"><h2>Pendaftaran Wajah Terbaru</h2></div>
           {(data.recent_enrollments || []).length === 0 ? (
             <div style={{ color: '#aaa', padding: '1rem 0' }}>Belum ada data wajah yang terdaftar.</div>
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Nama</th>
-                  <th>Cabang</th>
-                  <th>Model</th>
-                  <th>Waktu</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recent_enrollments.map(e => (
-                  <tr key={e.id}>
-                    <td>
-                      <Link to={`/hr/employees/${e.id}`} style={{ fontWeight: 500, textDecoration: 'none', color: '#1a1a2e' }}>
-                        {e.full_name}
-                      </Link>
-                      <div style={{ fontSize: '0.72rem', color: '#999', fontFamily: 'monospace' }}>{e.employee_code}</div>
-                    </td>
-                    <td>{e.branch_name}</td>
-                    <td style={{ fontSize: '0.78rem', color: '#8a93a6', fontFamily: 'monospace' }}>
-                      {e.face_embedding_version || '—'}
-                    </td>
-                    <td style={{ fontSize: '0.82rem', color: '#555' }}>{fmtDateTime(e.face_enrolled_at) || '—'}</td>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ minWidth: 420 }}>
+                <thead>
+                  <tr>
+                    <th>Nama</th>
+                    <th>Cabang</th>
+                    <th>Model</th>
+                    <th>Waktu</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.recent_enrollments.map(e => (
+                    <tr key={e.id}>
+                      <td>
+                        <Link to={`/hr/employees/${e.id}`} style={{ fontWeight: 500, textDecoration: 'none', color: '#1a1a2e' }}>
+                          {e.full_name}
+                        </Link>
+                        <div style={{ fontSize: '0.72rem', color: '#999', fontFamily: 'monospace' }}>{e.employee_code}</div>
+                      </td>
+                      <td>{e.branch_name}</td>
+                      <td style={{ fontSize: '0.78rem', color: '#8a93a6', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                        {e.face_embedding_version || '—'}
+                      </td>
+                      <td style={{ fontSize: '0.82rem', color: '#555', whiteSpace: 'nowrap' }}>{fmtDateTime(e.face_enrolled_at) || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

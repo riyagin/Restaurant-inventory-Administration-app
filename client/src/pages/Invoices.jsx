@@ -11,6 +11,18 @@ const idr = (v) =>
 
 const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
 const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
+// Each status carries a shape as well as a hue, so the chips stay separable
+// without colour vision (and in grayscale print).
+const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: '→' };
+
+function StatusBadge({ status }) {
+  return (
+    <span className={`badge ${STATUS_CLASS[status] ?? ''}`}>
+      <span className="glyph" aria-hidden="true">{STATUS_GLYPH[status] ?? '·'}</span>
+      {STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
 
 const PAGE_SIZE = 25;
 const todayStr = new Date().toISOString().split('T')[0];
@@ -71,6 +83,14 @@ export default function Invoices() {
     getDivisions().then(r => setDivisions(r.data)).catch(() => {});
   }, []);
 
+  // Esc closes the payment dialog
+  useEffect(() => {
+    if (!payTarget) return;
+    const onKey = (e) => { if (e.key === 'Escape') setPayTarget(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [payTarget]);
+
   // Reset to page 1 whenever filters change
   const setFilter = (setter) => (val) => { setter(val); setPage(1); };
 
@@ -126,20 +146,12 @@ export default function Invoices() {
       </div>
 
       {outstandingCount > 0 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          background: '#fff8e1', border: '1px solid #ffe082', borderRadius: '8px',
-          padding: '0.9rem 1.25rem', marginBottom: '1.25rem',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <span style={{ fontSize: '1.1rem' }}>⚠</span>
-            <span style={{ fontWeight: 600, color: '#b45309' }}>
-              {outstandingCount} invoice belum lunas
-            </span>
-          </div>
-          <span style={{ fontWeight: 700, fontSize: '1.1rem', color: '#b45309' }}>
-            {idr(outstandingTotal)}
+        <div className="notice">
+          <span className="notice-label">
+            <span aria-hidden="true">◐</span>
+            {outstandingCount} invoice belum lunas
           </span>
+          <span className="notice-value">{idr(outstandingTotal)}</span>
         </div>
       )}
 
@@ -202,62 +214,62 @@ export default function Invoices() {
               <th>Gudang / Cabang</th>
               <th>Vendor</th>
               <th>Akun</th>
-              <th>Total</th>
+              <th className="num">Total</th>
               <th>Status</th>
-              <th></th>
+              <th><span className="sr-only">Aksi</span></th>
             </tr>
           </thead>
           <tbody>
             {invoices.length === 0 ? (
-              <tr><td colSpan={11} style={{textAlign:'center',color:'#999',padding:'2rem'}}>
-                {loading ? 'Memuat…' : 'Tidak ada invoice ditemukan'}
+              <tr><td colSpan={11}>
+                <div className="empty-state">
+                  {loading ? 'Memuat…' : hasFilters ? (
+                    <>
+                      <div className="empty-title">Tidak ada invoice yang cocok</div>
+                      <div className="empty-hint">Filter yang aktif menyaring semua data. Longgarkan rentang tanggal atau kata kunci pencarian.</div>
+                      <button type="button" onClick={clearFilters} className="btn btn-secondary btn-sm">Bersihkan filter</button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="empty-title">Belum ada invoice</div>
+                      <div className="empty-hint">Catat pembelian dari vendor atau pengeluaran cabang agar masuk ke buku besar.</div>
+                      <Link to="/invoices/new" className="btn btn-primary btn-sm">+ Invoice Baru</Link>
+                    </>
+                  )}
+                </div>
               </td></tr>
             ) : invoices.map(inv => {
               const isOverdue = inv.due_date && inv.payment_status !== 'paid' && inv.due_date < todayStr;
               return (
               <tr key={inv.id}>
-                <td style={{fontWeight:600}}>{inv.invoice_number}</td>
-                <td style={{color:'#888',fontSize:'0.85rem'}}>{inv.reference_number ?? '—'}</td>
+                <td className="cell-key">{inv.invoice_number}</td>
+                <td className="cell-meta">{inv.reference_number ?? <span className="cell-empty">—</span>}</td>
                 <td>
-                  <span style={{
-                    display:'inline-block',padding:'0.1rem 0.45rem',borderRadius:'4px',fontSize:'0.75rem',fontWeight:600,
-                    background: inv.invoice_type === 'expense' ? '#fff3e0' : '#e6f9f0',
-                    color: inv.invoice_type === 'expense' ? '#f57c00' : '#27ae60',
-                  }}>
+                  <span className={`type-tag ${inv.invoice_type === 'expense' ? 'type-expense' : 'type-purchase'}`}>
                     {inv.invoice_type === 'expense' ? 'Pengeluaran' : 'Pembelian'}
                   </span>
                 </td>
-                <td style={{color:'#888',fontSize:'0.85rem'}}>{fmtDate(inv.date)}</td>
-                <td style={{
-                  fontWeight: isOverdue ? 700 : 'normal',
-                  color: isOverdue ? '#e74c3c' : inv.due_date ? '#555' : '#ccc',
-                  fontSize: '0.85rem',
-                  whiteSpace: 'nowrap',
-                }}>
-                  {inv.due_date ? fmtDate(inv.due_date) : '—'}
-                  {isOverdue && <span style={{marginLeft:'0.35rem',fontSize:'0.7rem',background:'#fdecea',color:'#e74c3c',borderRadius:'3px',padding:'0.05rem 0.3rem',fontWeight:700}}>LEWAT</span>}
+                <td className="cell-meta" style={{whiteSpace:'nowrap'}}>{fmtDate(inv.date)}</td>
+                <td className={`cell-meta${isOverdue ? ' overdue-date' : ''}`} style={{whiteSpace:'nowrap'}}>
+                  {inv.due_date ? fmtDate(inv.due_date) : <span className="cell-empty">—</span>}
+                  {isOverdue && <span className="overdue-flag">LEWAT</span>}
                 </td>
-                <td>
-                  {inv.invoice_type === 'expense'
-                    ? <span style={{color:'#555'}}>{[inv.branch_name, inv.division_name].filter(Boolean).join(' / ') || '—'}</span>
-                    : <span style={{color:'#555'}}>{inv.warehouse_name ?? '—'}</span>
-                  }
+                <td className="cell-body">
+                  {(inv.invoice_type === 'expense'
+                    ? [inv.branch_name, inv.division_name].filter(Boolean).join(' / ')
+                    : inv.warehouse_name) || <span className="cell-empty">—</span>}
                 </td>
-                <td style={{color:'#888',fontSize:'0.85rem'}}>{inv.vendor_name ?? '—'}</td>
-                <td style={{color:'#888'}}>{inv.account_name ?? '—'}</td>
-                <td style={{fontWeight:600}}>
+                <td className="cell-meta">{inv.vendor_name ?? <span className="cell-empty">—</span>}</td>
+                <td className="cell-meta">{inv.account_name ?? <span className="cell-empty">—</span>}</td>
+                <td className="cell-key num">
                   {idr(inv.total_amount)}
                   {inv.payment_status === 'partial' && Number(inv.amount_paid) > 0 && (
-                    <div style={{fontSize:'0.75rem',color:'#e67e22',fontWeight:400}}>
+                    <span className="cell-sub">
                       Sisa {idr(Number(inv.total_amount) - Number(inv.amount_paid))}
-                    </div>
+                    </span>
                   )}
                 </td>
-                <td>
-                  <span className={`badge ${STATUS_CLASS[inv.payment_status]}`}>
-                    {STATUS_LABEL[inv.payment_status]}
-                  </span>
-                </td>
+                <td><StatusBadge status={inv.payment_status} /></td>
                 <td style={{whiteSpace:'nowrap'}}>
                   <div className="actions">
                     <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
@@ -276,21 +288,11 @@ export default function Invoices() {
         </div>
 
         {totalPages > 1 && (
-          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0.75rem 1.5rem',borderTop:'1px solid #f0f0f0'}}>
-            <span style={{fontSize:'0.85rem',color:'#888'}}>
-              Halaman {page} dari {totalPages}
-            </span>
-            <div style={{display:'flex',gap:'0.35rem'}}>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setPage(1)}
-                disabled={page === 1}
-              >«</button>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setPage(p => p - 1)}
-                disabled={page === 1}
-              >‹ Sebelumnya</button>
+          <nav className="pagination" aria-label="Navigasi halaman">
+            <span className="pagination-info">Halaman {page} dari {totalPages}</span>
+            <div className="pagination-pages">
+              <button className="page-btn" onClick={() => setPage(1)} disabled={page === 1} aria-label="Halaman pertama">«</button>
+              <button className="page-btn" onClick={() => setPage(p => p - 1)} disabled={page === 1}>‹ Sebelumnya</button>
 
               {Array.from({ length: totalPages }, (_, i) => i + 1)
                 .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
@@ -301,32 +303,21 @@ export default function Invoices() {
                 }, [])
                 .map((p, idx) =>
                   p === '…'
-                    ? <span key={`ellipsis-${idx}`} style={{padding:'0 0.3rem',color:'#aaa',lineHeight:'2'}}>…</span>
+                    ? <span key={`ellipsis-${idx}`} className="page-ellipsis">…</span>
                     : <button
                         key={p}
-                        className="btn btn-sm"
-                        style={{
-                          background: p === page ? '#4f8ef7' : undefined,
-                          color: p === page ? '#fff' : undefined,
-                          border: p === page ? 'none' : undefined,
-                        }}
+                        className="page-btn"
+                        aria-current={p === page ? 'page' : undefined}
+                        aria-label={`Halaman ${p}`}
                         onClick={() => setPage(p)}
                       >{p}</button>
                 )
               }
 
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setPage(p => p + 1)}
-                disabled={page === totalPages}
-              >Berikutnya ›</button>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setPage(totalPages)}
-                disabled={page === totalPages}
-              >»</button>
+              <button className="page-btn" onClick={() => setPage(p => p + 1)} disabled={page === totalPages}>Berikutnya ›</button>
+              <button className="page-btn" onClick={() => setPage(totalPages)} disabled={page === totalPages} aria-label="Halaman terakhir">»</button>
             </div>
-          </div>
+          </nav>
         )}
       </div>
 
@@ -336,13 +327,13 @@ export default function Invoices() {
         const amountPaid = Number(payTarget.amount_paid ?? 0);
         const remaining = invTotal - amountPaid;
         return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <div className="card" style={{ width: '100%', maxWidth: '420px', padding: '2rem', margin: '1rem' }}>
-              <h2 style={{ marginBottom: '0.5rem', fontSize: '1.1rem' }}>Bayar Invoice — {payTarget.invoice_number}</h2>
-              <div style={{ marginBottom: '1.25rem', display: 'flex', gap: '1.5rem', fontSize: '0.85rem', color: '#666' }}>
+          <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setPayTarget(null); }}>
+            <div className="card modal-card" role="dialog" aria-modal="true" aria-labelledby="pay-title">
+              <h2 id="pay-title">Bayar Invoice — {payTarget.invoice_number}</h2>
+              <div className="modal-summary">
                 <span>Total: <strong>{idr(invTotal)}</strong></span>
-                {amountPaid > 0 && <span>Sudah dibayar: <strong style={{ color: '#27ae60' }}>{idr(amountPaid)}</strong></span>}
-                <span>Sisa: <strong style={{ color: '#e67e22' }}>{idr(remaining)}</strong></span>
+                {amountPaid > 0 && <span>Sudah dibayar: <strong>{idr(amountPaid)}</strong></span>}
+                <span>Sisa: <strong>{idr(remaining)}</strong></span>
               </div>
               {payError && <div className="error-msg" style={{ marginBottom: '1rem' }}>{payError}</div>}
               <form onSubmit={handlePay}>
@@ -372,10 +363,10 @@ export default function Invoices() {
                     required
                   />
                   {payForm.amount && (
-                    <small style={{ color: '#888', marginTop: '0.25rem', display: 'block' }}>
+                    <small className="form-hint">
                       {idr(Number(payForm.amount))}
                       {Number(payForm.amount) < remaining && (
-                        <span style={{ marginLeft: '0.5rem', color: '#e67e22', fontWeight: 600 }}> · Pembayaran sebagian</span>
+                        <span className="hint-partial"> · Pembayaran sebagian</span>
                       )}
                     </small>
                   )}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
+import ConnectionError from './pages/ConnectionError';
+import { subscribeConnection, getConnectionState } from './connection';
 import Dashboard from './pages/Dashboard';
 import Items from './pages/Items';
 import ItemForm from './pages/ItemForm';
@@ -94,14 +96,24 @@ function NavDropdown({ label, paths, children }) {
 
   useEffect(() => {
     const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('keydown', onKey);
+    };
   }, []);
 
   return (
     <div className="nav-dropdown" ref={ref}>
-      <button className={`nav-dropdown-btn${isActive ? ' active' : ''}`} onClick={() => setOpen(o => !o)}>
-        {label} <span className="caret">▼</span>
+      <button
+        className={`nav-dropdown-btn${isActive ? ' active' : ''}`}
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        {label} <span className="caret" aria-hidden="true">▼</span>
       </button>
       {open && (
         <div className="nav-dropdown-menu" onClick={() => setOpen(false)}>
@@ -118,8 +130,8 @@ function MobileSection({ label, paths, children }) {
   const [open, setOpen] = useState(paths.some(p => pathname.startsWith(p)));
   return (
     <div className="mobile-section">
-      <button className="mobile-section-btn" onClick={() => setOpen(o => !o)}>
-        {label} <span className="caret">{open ? '▲' : '▼'}</span>
+      <button className="mobile-section-btn" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        {label} <span className="caret" aria-hidden="true">{open ? '▲' : '▼'}</span>
       </button>
       {open && <div className="mobile-section-links">{children}</div>}
     </div>
@@ -148,7 +160,7 @@ function Nav() {
   }, [drawerOpen]);
 
   const link = (to, label) => (
-    <Link to={to} className={isActive(to) ? 'active' : ''}>{label}</Link>
+    <Link to={to} className={isActive(to) ? 'active' : ''} aria-current={isActive(to) ? 'page' : undefined}>{label}</Link>
   );
   const menuLink = (to, label) => (
     <Link to={to} className={isActive(to) ? 'active' : ''}>{label}</Link>
@@ -170,8 +182,11 @@ function Nav() {
   };
 
   return (
-    <nav className="navbar" ref={drawerRef}>
-      <span className="brand">InventoryPro</span>
+    <nav className="navbar" ref={drawerRef} aria-label="Navigasi utama">
+      <Link to="/" className="brand">
+        <span className="brand-mark" aria-hidden="true">IP</span>
+        <span className="brand-word">Inventory<b>Pro</b></span>
+      </Link>
 
       {/* Desktop nav */}
       <div className="nav-links nav-links-desktop">
@@ -235,10 +250,11 @@ function Nav() {
 
       {user && (
         <div className="nav-user nav-user-desktop">
-          <Link to="/profile" style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.75)', textDecoration: 'none' }}>
+          <Link to="/profile" className="nav-user-name" title={`Profil: ${user.username}`}>
+            <span className="nav-avatar" aria-hidden="true">{user.username.slice(0, 1)}</span>
             {user.username}
           </Link>
-          <button onClick={logout} className="btn btn-secondary btn-sm">Keluar</button>
+          <button onClick={logout} className="btn-nav">Keluar</button>
         </div>
       )}
 
@@ -327,9 +343,19 @@ function Layout({ children }) {
   );
 }
 
+// Renders the connection overlay whenever the backend is unreachable. Sits
+// outside <Routes> so it covers every screen, including /login.
+function ConnectionWatcher() {
+  const [conn, setConn] = useState(getConnectionState());
+  useEffect(() => subscribeConnection(setConn), []);
+  if (!conn.down) return null;
+  return <ConnectionError kind={conn.kind} detail={conn.detail} since={conn.since} />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <ConnectionWatcher />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/*" element={

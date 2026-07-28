@@ -14,13 +14,13 @@ import (
 const createVendor = `-- name: CreateVendor :one
 INSERT INTO vendors (id, name)
 VALUES (gen_random_uuid(), $1)
-RETURNING id, name
+RETURNING id, name, account_id
 `
 
 func (q *Queries) CreateVendor(ctx context.Context, name string) (*Vendor, error) {
 	row := q.db.QueryRow(ctx, createVendor, name)
 	var i Vendor
-	err := row.Scan(&i.ID, &i.Name)
+	err := row.Scan(&i.ID, &i.Name, &i.AccountID)
 	return &i, err
 }
 
@@ -34,13 +34,13 @@ func (q *Queries) DeleteVendor(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getVendorByID = `-- name: GetVendorByID :one
-SELECT id, name FROM vendors WHERE id = $1
+SELECT id, name, account_id FROM vendors WHERE id = $1
 `
 
 func (q *Queries) GetVendorByID(ctx context.Context, id pgtype.UUID) (*Vendor, error) {
 	row := q.db.QueryRow(ctx, getVendorByID, id)
 	var i Vendor
-	err := row.Scan(&i.ID, &i.Name)
+	err := row.Scan(&i.ID, &i.Name, &i.AccountID)
 	return &i, err
 }
 
@@ -99,7 +99,7 @@ func (q *Queries) GetVendorHistory(ctx context.Context, vendorID pgtype.UUID) ([
 }
 
 const listVendors = `-- name: ListVendors :many
-SELECT id, name FROM vendors ORDER BY name
+SELECT id, name, account_id FROM vendors ORDER BY name
 `
 
 func (q *Queries) ListVendors(ctx context.Context) ([]*Vendor, error) {
@@ -111,7 +111,7 @@ func (q *Queries) ListVendors(ctx context.Context) ([]*Vendor, error) {
 	var items []*Vendor
 	for rows.Next() {
 		var i Vendor
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+		if err := rows.Scan(&i.ID, &i.Name, &i.AccountID); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -124,7 +124,7 @@ func (q *Queries) ListVendors(ctx context.Context) ([]*Vendor, error) {
 
 const updateVendor = `-- name: UpdateVendor :one
 UPDATE vendors SET name = $1 WHERE id = $2
-RETURNING id, name
+RETURNING id, name, account_id
 `
 
 type UpdateVendorParams struct {
@@ -135,6 +135,20 @@ type UpdateVendorParams struct {
 func (q *Queries) UpdateVendor(ctx context.Context, arg *UpdateVendorParams) (*Vendor, error) {
 	row := q.db.QueryRow(ctx, updateVendor, arg.Name, arg.ID)
 	var i Vendor
-	err := row.Scan(&i.ID, &i.Name)
+	err := row.Scan(&i.ID, &i.Name, &i.AccountID)
 	return &i, err
+}
+
+const setVendorAccountID = `-- name: SetVendorAccountID :exec
+UPDATE vendors SET account_id = $1 WHERE id = $2
+`
+
+type SetVendorAccountIDParams struct {
+	AccountID pgtype.UUID `json:"account_id"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetVendorAccountID(ctx context.Context, arg *SetVendorAccountIDParams) error {
+	_, err := q.db.Exec(ctx, setVendorAccountID, arg.AccountID, arg.ID)
+	return err
 }

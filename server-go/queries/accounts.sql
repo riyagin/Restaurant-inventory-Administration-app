@@ -26,3 +26,15 @@ UPDATE accounts SET balance = balance + $1::bigint WHERE id = $2;
 
 -- name: GetSystemAccountByNumber :one
 SELECT id, name, balance FROM accounts WHERE account_number = $1 AND is_system = true LIMIT 1;
+
+-- name: NextVendorPayableNumber :one
+-- Lowest free number in the per-vendor payable range (20101-20998); 20999 is
+-- reserved for the shared "Utang Usaha - Lainnya" bucket.
+SELECT (COALESCE(MAX(account_number), 20100) + 1)::int
+FROM accounts WHERE account_number BETWEEN 20101 AND 20998;
+
+-- name: AccountNameExists :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1);
+
+-- name: RenameAccount :exec
+UPDATE accounts SET name = $1 WHERE id = $2;

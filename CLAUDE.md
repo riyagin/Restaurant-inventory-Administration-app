@@ -70,6 +70,11 @@ go run ./server-go/cmd/reset-password <username> <new-password>
 
 # Seed HR dev data (positions, employees, wage structures, work schedule, holidays, policy)
 go run ./server-go/cmd/seed-hr
+
+# Seed a full month of attendance covering every anomaly + performance policy,
+# then create that month's payroll period and generate its lines
+go run ./server-go/cmd/seed-month-attendance -month=2026-07
+go run ./server-go/cmd/seed-month-attendance -components=false -payroll=false  # attendance only
 ```
 
 ---
@@ -322,6 +327,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 ### Key DB Rules
 - Hard deletes only (no soft delete)
 - `accounts.balance` updated in real time on every financial transaction
+- Accounts payable is split per vendor: each vendor owns a sub-account `Utang Usaha - <name>` (numbers 20101+) under the system parent `Utang Usaha` (20100), linked via `vendors.account_id`. Invoices with no vendor post to `Utang Usaha - Lainnya` (20999). The 20100 parent holds no balance of its own — the COA/report UIs roll a parent up from its children. Resolve the account with `service.VendorPayableAccountID()`, never by looking up 20100 directly
 - Inventory stored at lowest unit (unit_index = 0) — all conversions use `items.units` JSONB ratios
 - FIFO lot consumption: always deduct from oldest `inventory` rows first
 - Currency: BigInt cents throughout; never use NUMERIC/FLOAT for money
