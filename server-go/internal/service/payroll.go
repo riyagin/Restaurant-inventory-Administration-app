@@ -34,6 +34,18 @@ const (
 	CalcMethodPerPresentDay = "per_present_day"
 )
 
+// Wage-component types (mirrors the wage_components.type CHECK constraint).
+// allowance / bonus add to gross pay, deduction subtracts from net pay, and
+// daily_allowance is disbursed manually day by day OUTSIDE payroll (e.g. uang
+// makan handed out in cash), so it never touches gross/net — it is only
+// snapshotted and printed on the payslip as information.
+const (
+	ComponentTypeAllowance      = "allowance"
+	ComponentTypeBonus          = "bonus"
+	ComponentTypeDeduction      = "deduction"
+	ComponentTypeDailyAllowance = "daily_allowance"
+)
+
 // EffectiveComponentAmount resolves a wage-structure component's rupiah
 // contribution for a period given how many days the employee was present.
 func EffectiveComponentAmount(calcMethod string, amount int64, presentDays int32) int64 {
@@ -369,6 +381,9 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 
 		// Effective amount per component: per_present_day → rate × present days;
 		// score-gated components pay 0 when the score misses their min_score.
+		// daily_allowance components are resolved and snapshotted like the rest, but
+		// deliberately land in no total: they were already handed out in cash during
+		// the month, so including them would pay them a second time.
 		compAmounts := make(map[pgtype.UUID]int64, len(components))
 		var allowanceTotal, bonusTotal, deductionTotal int64
 		for _, c := range components {
@@ -378,12 +393,14 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			}
 			compAmounts[c.WageComponentID] = amt
 			switch c.ComponentType {
-			case "allowance":
+			case ComponentTypeAllowance:
 				allowanceTotal += amt
-			case "bonus":
+			case ComponentTypeBonus:
 				bonusTotal += amt
-			case "deduction":
+			case ComponentTypeDeduction:
 				deductionTotal += amt
+			case ComponentTypeDailyAllowance:
+				// paid outside payroll — informational only
 			}
 		}
 
@@ -597,28 +614,14 @@ func ClosePeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollPeriod)
 		}
 	}
 
-	// Post total payroll expense per branch to the branch's expense account. We use
-	// gross_pay as the "total payroll expense" (full cost of labour, before employee
-	// deductions which net out elsewhere). Expense accounts increase with a positive
-	// delta, following the dispatches/sales CoA posting direction.
-	branchTotals, err := qtx.ListPayrollLineBranchTotals(ctx, period.ID)
-	if err != nil {
+	// Queue the ledger posting instead of writing it here. This used to debit each
+	// branch's expense account with gross_pay and nothing else — a one-sided entry —
+	// while an operator separately pressed "Proses ke Akuntansi", which posted a
+	// second, different figure for the same payroll. Now exactly one balanced entry
+	// is written, by the background poster, from this queue row. The row commits with
+	// the close, so the entry cannot be lost if the process dies before posting.
+	if err := QueuePayrollPosting(ctx, qtx, period.ID); err != nil {
 		return nil, err
-	}
-	for _, bt := range branchTotals {
-		if !bt.BranchID.Valid || bt.TotalGross == 0 {
-			continue
-		}
-		expenseAcct, err := qtx.GetBranchExpenseAccountID(ctx, bt.BranchID)
-		if err != nil {
-			return nil, err
-		}
-		if !expenseAcct.Valid {
-			continue
-		}
-		if err := UpdateBalance(ctx, qtx, expenseAcct.Bytes, bt.TotalGross); err != nil {
-			return nil, err
-		}
 	}
 
 	return qtx.ClosePayrollPeriod(ctx, period.ID)

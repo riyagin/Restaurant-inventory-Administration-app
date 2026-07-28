@@ -196,7 +196,29 @@ func (h *ItemsHandler) GetLastPrice(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, row)
 }
 
+// GetHistory returns every invoice line that ever bought this item. Used by the
+// non-stock item detail page, where invoices are the only history that exists.
 func (h *ItemsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+
+	history, err := h.queries.GetItemPurchaseHistory(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
+		return
+	}
+	if history == nil {
+		history = []*db.GetItemPurchaseHistoryRow{}
+	}
+	respondJSON(w, http.StatusOK, history)
+}
+
+// GetStockHistory returns the raw stock_history rows for an item, optionally
+// bounded by ?from=/?to= dates.
+func (h *ItemsHandler) GetStockHistory(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "ID tidak valid")
@@ -229,4 +251,78 @@ func (h *ItemsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 		history = []*db.GetItemStockHistoryRow{}
 	}
 	respondJSON(w, http.StatusOK, history)
+}
+
+// GetStockDetail bundles everything the stock-item history page needs in one
+// round trip: the item itself, on-hand stock per warehouse, purchase invoice
+// lines, dispatch usage per destination, and monthly / per-type flow rollups.
+func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
+	rawID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	id := pgtype.UUID{Bytes: rawID, Valid: true}
+	ctx := r.Context()
+
+	item, err := h.queries.GetItemByID(ctx, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "item tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil item")
+		return
+	}
+
+	stock, err := h.queries.GetItemStockByWarehouse(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil stok per gudang")
+		return
+	}
+	purchases, err := h.queries.GetItemPurchaseHistory(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
+		return
+	}
+	usage, err := h.queries.GetItemUsageByDestination(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data pemakaian")
+		return
+	}
+	monthly, err := h.queries.GetItemMonthlyFlow(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan bulanan")
+		return
+	}
+	byType, err := h.queries.GetItemFlowByType(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan per tipe")
+		return
+	}
+
+	if stock == nil {
+		stock = []*db.GetItemStockByWarehouseRow{}
+	}
+	if purchases == nil {
+		purchases = []*db.GetItemPurchaseHistoryRow{}
+	}
+	if usage == nil {
+		usage = []*db.GetItemUsageByDestinationRow{}
+	}
+	if monthly == nil {
+		monthly = []*db.GetItemMonthlyFlowRow{}
+	}
+	if byType == nil {
+		byType = []*db.GetItemFlowByTypeRow{}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"item":                 itemToResponse(item),
+		"stock_by_warehouse":   stock,
+		"purchases":            purchases,
+		"usage_by_destination": usage,
+		"monthly_flow":         monthly,
+		"flow_by_type":         byType,
+	})
 }

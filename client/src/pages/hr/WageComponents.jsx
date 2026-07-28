@@ -5,6 +5,7 @@ const TYPE_LABELS = {
   allowance: 'Tunjangan',
   bonus: 'Bonus',
   deduction: 'Potongan',
+  daily_allowance: 'Harian (Tunai)',
 };
 
 const CALC_LABELS = {
@@ -108,10 +109,11 @@ export default function WageComponents() {
       </div>
 
       <p style={{ color: '#667', fontSize: '0.9rem', marginBottom: '1rem' }}>
-        Katalog komponen yang dapat dipakai pada struktur gaji karyawan: Tunjangan, Bonus, dan Potongan.
+        Katalog komponen yang dapat dipakai pada struktur gaji karyawan: Tunjangan, Bonus, Potongan, dan Harian (Tunai).
         Komponen <strong>tetap</strong> (fixed) dihitung pada proyeksi gaji bulanan; komponen <strong>variabel</strong> diisi per periode.
         Metode <strong>Per hari hadir</strong> memperlakukan nominal pada struktur gaji sebagai tarif harian dan mengalikannya dengan jumlah hari hadir karyawan pada periode penggajian.
         <strong> Skor Min.</strong> membuat komponen hanya dibayar bila skor kinerja bulanan karyawan mencapai ambang tersebut (kosong = tanpa syarat).
+        Tipe <strong>Harian (Tunai)</strong> dibagikan manual setiap hari di luar transfer gaji bulanan: nominalnya tetap dihitung dan tampil sebagai informasi di slip gaji, tetapi <strong>tidak</strong> menambah gaji kotor maupun gaji bersih.
       </p>
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
@@ -128,6 +130,7 @@ export default function WageComponents() {
               <option value="allowance">Tunjangan</option>
               <option value="bonus">Bonus</option>
               <option value="deduction">Potongan</option>
+              <option value="daily_allowance">Harian (Tunai)</option>
             </select>
           </div>
           <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 130 }}>
@@ -208,6 +211,7 @@ export default function WageComponents() {
                   <option value="allowance">Tunjangan</option>
                   <option value="bonus">Bonus</option>
                   <option value="deduction">Potongan</option>
+                  <option value="daily_allowance">Harian (Tunai)</option>
                 </select>
               </div>
               <div className="form-group">

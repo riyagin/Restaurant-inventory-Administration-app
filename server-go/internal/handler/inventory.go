@@ -1,13 +1,18 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -212,11 +217,19 @@ func (h *InventoryHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if accountID.Valid {
-		if err := service.UpdateBalance(ctx, qtx, accountID.Bytes, body.Value); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun")
-			return
-		}
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        date,
+		SourceType:  service.SourceInventory,
+		SourceID:    itemID,
+		Description: fmt.Sprintf("Penambahan lot manual (%s)", unitName),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(uuidFromPg(accountID), body.Value),
+			service.Cr(inventoryAdjustmentAccountID(ctx, qtx), body.Value),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penyesuaian inventori")
+		return
 	}
 
 	if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
@@ -305,14 +318,21 @@ func (h *InventoryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID, err := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
-	if err == nil && accountID.Valid {
-		delta := body.Value - existing.Value
-		if delta != 0 {
-			if err := service.UpdateBalance(ctx, qtx, accountID.Bytes, delta); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun")
-				return
-			}
+	accountID, _ := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
+	if delta := body.Value - existing.Value; delta != 0 {
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        date,
+			SourceType:  service.SourceInventory,
+			SourceID:    id,
+			Description: "Perubahan nilai lot manual",
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Dr(uuidFromPg(accountID), delta),
+				service.Cr(inventoryAdjustmentAccountID(ctx, qtx), delta),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penyesuaian inventori")
+			return
 		}
 	}
 
@@ -352,12 +372,20 @@ func (h *InventoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID, err := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
-	if err == nil && accountID.Valid {
-		if err := service.UpdateBalance(ctx, qtx, accountID.Bytes, -existing.Value); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun")
-			return
-		}
+	accountID, _ := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceInventory,
+		SourceID:    id,
+		Description: "Penghapusan lot manual",
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Cr(uuidFromPg(accountID), existing.Value),
+			service.Dr(inventoryAdjustmentAccountID(ctx, qtx), existing.Value),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penyesuaian inventori")
+		return
 	}
 
 	userID := middleware.UserIDFromCtx(ctx)
@@ -388,4 +416,30 @@ func getUnitName(unitsJSON []byte, idx int32) string {
 		return ""
 	}
 	return units[idx].Name
+}
+
+// inventoryAdjustmentAccountID returns the account that carries inventory value
+// appearing or disappearing outside a purchase or a dispatch — the same
+// "Stock Waste" bucket stock opname posts its count differences to.
+//
+// Manual lot create/edit/delete used to move the warehouse inventory account on
+// its own, conjuring asset value with no counterpart. They now post against this
+// account, so a manual stock correction reads as what it is: a difference
+// charged to (or credited back from) shrinkage.
+func inventoryAdjustmentAccountID(ctx context.Context, qtx *db.Queries) uuid.UUID {
+	acctID, err := qtx.GetStockWasteAccountID(ctx)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil
+		}
+		created, err := qtx.CreateAccount(ctx, &db.CreateAccountParams{
+			Name:        "Stock Waste",
+			AccountType: "expense",
+		})
+		if err != nil {
+			return uuid.Nil
+		}
+		return created.ID.Bytes
+	}
+	return uuidFromPg(acctID)
 }

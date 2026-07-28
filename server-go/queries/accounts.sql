@@ -38,3 +38,6 @@ SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1);
 
 -- name: RenameAccount :exec
 UPDATE accounts SET name = $1 WHERE id = $2;
+
+-- name: GetAccountByName :one
+SELECT id, name, account_type FROM accounts WHERE name = $1 LIMIT 1;

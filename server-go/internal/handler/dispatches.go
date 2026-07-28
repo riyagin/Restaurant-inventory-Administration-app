@@ -335,25 +335,31 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		totalDispatchValue += valueDeducted
 	}
 
-	// 3. Update account balances
+	// 3. Post to the journal: Dr branch/division expense, Cr warehouse inventory.
+	// Stock consumed by a dispatch becomes expense at its FIFO value.
 	expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun beban")
 		return
 	}
-	if expAcctID != uuid.Nil && totalDispatchValue > 0 {
-		if err := service.UpdateBalance(ctx, qtx, expAcctID, totalDispatchValue); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban")
-			return
-		}
+	var invAcctIDValue uuid.UUID
+	if invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil && invAcctID.Valid {
+		invAcctIDValue = invAcctID.Bytes
 	}
 
-	invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true})
-	if err == nil && invAcctID.Valid && totalDispatchValue > 0 {
-		if err := service.UpdateBalance(ctx, qtx, invAcctID.Bytes, -totalDispatchValue); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun inventaris")
-			return
-		}
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        effectiveDate,
+		SourceType:  service.SourceDispatch,
+		SourceID:    dispatchID,
+		Description: "Pengiriman ke cabang/divisi",
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(expAcctID, totalDispatchValue),
+			service.Cr(invAcctIDValue, totalDispatchValue),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pengiriman")
+		return
 	}
 
 	// 4. Auto-create expense invoice linked to this dispatch
@@ -757,25 +763,43 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	newExpAcct, _ := invoiceExpenseAccountID(ctx, qtx, newDivisionID, newBranchID)
 	invAcct, _ := qtx.GetWarehouseInventoryAccountID(ctx, curWarehouse)
 
-	if oldExpAcct != newExpAcct && oldExpAcct != uuid.Nil && newExpAcct != uuid.Nil && currentBookedValue != 0 {
-		if err := service.UpdateBalance(ctx, qtx, oldExpAcct, -currentBookedValue); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban lama")
-			return
-		}
-		if err := service.UpdateBalance(ctx, qtx, newExpAcct, currentBookedValue); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban baru")
+	// Relocating the booked expense between branches/divisions moves value
+	// sideways within expense; the net item delta moves value between inventory
+	// and expense. They are separate events, so they get separate entries.
+	if oldExpAcct != newExpAcct && currentBookedValue != 0 {
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        effectiveDate,
+			SourceType:  service.SourceDispatch,
+			SourceID:    id,
+			Description: "Pemindahan beban pengiriman antar cabang/divisi",
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Cr(oldExpAcct, currentBookedValue),
+				service.Dr(newExpAcct, currentBookedValue),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pemindahan beban")
 			return
 		}
 	}
-	if newExpAcct != uuid.Nil && netExpenseDelta != 0 {
-		if err := service.UpdateBalance(ctx, qtx, newExpAcct, netExpenseDelta); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban")
-			return
+
+	if netExpenseDelta != 0 {
+		var invAcctIDValue uuid.UUID
+		if invAcct.Valid {
+			invAcctIDValue = invAcct.Bytes
 		}
-	}
-	if invAcct.Valid && netExpenseDelta != 0 {
-		if err := service.UpdateBalance(ctx, qtx, invAcct.Bytes, -netExpenseDelta); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun inventaris")
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        effectiveDate,
+			SourceType:  service.SourceDispatch,
+			SourceID:    id,
+			Description: "Penyesuaian pengiriman (revisi)",
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Dr(newExpAcct, netExpenseDelta),
+				service.Cr(invAcctIDValue, netExpenseDelta),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penyesuaian pengiriman")
 			return
 		}
 	}
@@ -1025,20 +1049,27 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Reverse account balances.
+	// Reverse the dispatch posting: stock comes back, expense unwinds.
 	expAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuidFromPg(divisionID), uuidFromPg(branchID))
 	invAcct, _ := qtx.GetWarehouseInventoryAccountID(ctx, warehouseID)
-	if expAcct != uuid.Nil && totalBooked != 0 {
-		if err := service.UpdateBalance(ctx, qtx, expAcct, -totalBooked); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban")
-			return
-		}
+	var invAcctIDValue uuid.UUID
+	if invAcct.Valid {
+		invAcctIDValue = invAcct.Bytes
 	}
-	if invAcct.Valid && totalBooked != 0 {
-		if err := service.UpdateBalance(ctx, qtx, invAcct.Bytes, totalBooked); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun inventaris")
-			return
-		}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceDispatch,
+		SourceID:    id,
+		Description: "Pembalikan pengiriman (dibatalkan)",
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Cr(expAcct, totalBooked),
+			service.Dr(invAcctIDValue, totalBooked),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembatalan pengiriman")
+		return
 	}
 
 	if _, err := tx.Exec(ctx,

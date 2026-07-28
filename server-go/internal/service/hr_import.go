@@ -139,6 +139,8 @@ func componentTypeLabel(t string) string {
 		return "Bonus"
 	case "deduction":
 		return "Potongan"
+	case "daily_allowance":
+		return "Harian"
 	default:
 		return t
 	}

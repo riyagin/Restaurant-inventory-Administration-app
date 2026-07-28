@@ -272,7 +272,8 @@ func (h *HRImportHandler) Template(w http.ResponseWriter, r *http.Request) {
 		"5. position dan branch harus PERSIS cocok (huruf besar/kecil diabaikan) dengan nama yang sudah ada.",
 		"6. Semua nominal (base_salary dan komponen) ditulis dalam RUPIAH PENUH, bilangan bulat (tanpa titik desimal, contoh: 5000000).",
 		"7. working_days_per_month antara 1 sampai 31.",
-		"8. Kolom komponen ([Tunjangan]/[Bonus]/[Potongan]) opsional — kosongkan jika tidak berlaku.",
+		"8. Kolom komponen ([Tunjangan]/[Bonus]/[Potongan]/[Harian]) opsional — kosongkan jika tidak berlaku.",
+		"9. Komponen [Harian] dibayar tunai setiap hari di luar transfer gaji — hanya tampil sebagai informasi di slip gaji.",
 		"",
 		"DAFTAR JABATAN (position) YANG TERSEDIA:",
 	}

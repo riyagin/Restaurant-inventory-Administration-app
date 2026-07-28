@@ -145,12 +145,18 @@ func ProcessKasbon(ctx context.Context, qtx *db.Queries, kasbon *db.Kasbon, proc
 		return nil, err
 	}
 
-	// Debit the fund source (cash/asset out): balance decreases by amount.
-	if err := UpdateBalance(ctx, qtx, kasbon.FundSourceAccountID.Bytes, -kasbon.Amount); err != nil {
-		return nil, err
-	}
-	// Credit the employee receivable (asset in): balance increases by amount.
-	if err := UpdateBalance(ctx, qtx, piutang.ID.Bytes, kasbon.Amount); err != nil {
+	// Cash goes out, an employee receivable comes in.
+	if _, err := Post(ctx, qtx, Entry{
+		Date:        time.Now(),
+		SourceType:  SourceKasbon,
+		SourceID:    kasbon.ID.Bytes,
+		Description: "Pencairan kasbon karyawan",
+		CreatedBy:   processedBy.Bytes,
+		Lines: []Line{
+			Cr(kasbon.FundSourceAccountID.Bytes, kasbon.Amount),
+			Dr(piutang.ID.Bytes, kasbon.Amount),
+		},
+	}); err != nil {
 		return nil, err
 	}
 

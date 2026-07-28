@@ -13,11 +13,12 @@ import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDash
 
 const SERVER = 'http://localhost:5000';
 
-const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan' };
+const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)' };
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
 // Per-hari-hadir components carry a daily rate, so project them across the structure's expected working days.
+// daily_allowance components are left out: they are handed over in cash each day, outside the monthly transfer.
 function monthlyProjection(structure) {
   if (!structure) return 0;
   const workDays = Number(structure.working_days_per_month || 0);
@@ -28,6 +29,20 @@ function monthlyProjection(structure) {
     const value = Number(c.amount || 0) * (perDay ? workDays : 1);
     if (c.component_type === 'allowance') total += value;
     else if (c.component_type === 'deduction') total -= value;
+  }
+  return total;
+}
+
+// Projected monthly value of the daily-cash components, shown separately from the
+// transfer projection so the two are never read as one figure.
+function dailyPaidProjection(structure) {
+  if (!structure) return 0;
+  const workDays = Number(structure.working_days_per_month || 0);
+  let total = 0;
+  for (const c of structure.components || []) {
+    if (c.component_type !== 'daily_allowance') continue;
+    const perDay = c.component_calc_method === 'per_present_day';
+    total += Number(c.amount || 0) * (perDay ? workDays : 1);
   }
   return total;
 }
@@ -440,7 +455,12 @@ function ComponentRows({ components }) {
               {c.component_name}
               {c.component_min_score != null && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · syarat skor ≥ {c.component_min_score}</span>}
             </td>
-            <td>{TYPE_LABELS[c.component_type] || c.component_type}</td>
+            <td>
+              {TYPE_LABELS[c.component_type] || c.component_type}
+              {c.component_type === 'daily_allowance' && (
+                <div style={{ color: '#8a93a6', fontSize: '0.75rem' }}>di luar transfer gaji</div>
+              )}
+            </td>
             <td>{c.component_is_fixed ? 'Tetap' : 'Variabel'}</td>
             <td style={{ textAlign: 'right' }}>
               {fmtIDR(c.amount)}
@@ -544,6 +564,7 @@ function WageTab({ employeeId, editable, isContract }) {
   if (loading) return <div style={{ color: '#999', padding: '2rem' }}>Memuat struktur gaji...</div>;
 
   const projection = monthlyProjection(current);
+  const dailyPaid = dailyPaidProjection(current);
 
   return (
     <div style={{ display: 'grid', gap: '1rem' }}>
@@ -569,6 +590,12 @@ function WageTab({ employeeId, editable, isContract }) {
               <span>Proyeksi Gaji Bulanan (pokok + tunjangan tetap − potongan tetap)</span>
               <span>{fmtIDR(projection)}</span>
             </div>
+            {dailyPaid > 0 && (
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#667' }}>
+                <span>Dibayar harian secara tunai (di luar transfer gaji, estimasi {current.working_days_per_month} hari kerja)</span>
+                <span>{fmtIDR(dailyPaid)}</span>
+              </div>
+            )}
             {current.thr ? (
               <div style={{ marginTop: '0.75rem', padding: '0.75rem 1rem', background: '#f5f9ff', border: '1px solid #d9e6fb', borderRadius: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: 600 }}>

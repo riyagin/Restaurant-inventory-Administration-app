@@ -19,14 +19,17 @@ const (
 // VendorPayablePrefix is the name prefix of every per-vendor payable sub-account.
 const VendorPayablePrefix = "Utang Usaha - "
 
-// UpdateBalance adds delta to the account's balance.
-// Positive delta increases the balance. Must be called with a transaction-scoped *db.Queries.
-func UpdateBalance(ctx context.Context, qtx *db.Queries, accountID uuid.UUID, delta int64) error {
-	return qtx.AddToAccountBalance(ctx, &db.AddToAccountBalanceParams{
-		Column1: delta,
-		ID:      pgtype.UUID{Bytes: accountID, Valid: true},
-	})
-}
+// UpdateBalance is deliberately gone.
+//
+// It moved a single account's balance with no counterpart and no record of what
+// the entry was supposed to be, which is how the books drifted ~982M out of
+// balance: several callers moved one side and forgot the other, and nothing
+// recorded the intent, so the mistakes were neither detectable nor reversible.
+//
+// Every financial mutation now goes through service.Post (journal.go), which
+// writes both legs and the balance cache together and refuses an entry whose
+// legs do not sum to zero. If you need to move a balance, write the journal
+// entry that explains it.
 
 // PayableOtherAccountID returns the shared "Utang Usaha - Lainnya" bucket, used
 // by invoices that carry no vendor. Falls back to the 20100 parent if the

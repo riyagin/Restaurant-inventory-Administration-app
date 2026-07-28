@@ -23,11 +23,21 @@ import (
 type PayrollHandler struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
+	// poster writes each closed period's journal entry off the request path, so a
+	// close returns as soon as the payroll data is committed.
+	poster *service.PayrollPoster
 }
 
 func NewPayrollHandler(pool *pgxpool.Pool, queries *db.Queries) *PayrollHandler {
-	return &PayrollHandler{pool: pool, queries: queries}
+	return &PayrollHandler{
+		pool:    pool,
+		queries: queries,
+		poster:  service.NewPayrollPoster(pool, queries),
+	}
 }
+
+// Poster exposes the background poster so main can start its retry sweep.
+func (h *PayrollHandler) Poster() *service.PayrollPoster { return h.poster }
 
 // ── Periods ──────────────────────────────────────────────────────────────────
 
@@ -149,9 +159,17 @@ func (h *PayrollHandler) GetPeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Posting status is absent for periods that are still open, and for periods
+	// closed before automatic posting existed (those were posted by hand).
+	var posting any
+	if p, perr := h.queries.GetPayrollPosting(ctx, pgID); perr == nil {
+		posting = p
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"period":  period,
 		"summary": summary,
+		"posting": posting,
 	})
 }
 
@@ -375,10 +393,12 @@ func (h *PayrollHandler) ReviewLine(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// daily_allowance components are intentionally absent here: they are paid in
+		// cash during the month and must stay out of gross/net on review too.
 		switch c.Type {
-		case "bonus":
+		case service.ComponentTypeBonus:
 			bonusTotal += amt
-		case "allowance":
+		case service.ComponentTypeAllowance:
 			allowanceTotal += amt
 		}
 	}
@@ -606,7 +626,82 @@ func (h *PayrollHandler) ClosePeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The queue row is committed, so the entry is owed no matter what happens next.
+	// Fire the posting now for a prompt result; the sweep is the safety net if this
+	// attempt dies with the process.
+	h.poster.Enqueue(pgID, middleware.UserIDFromCtx(ctx))
+
 	respondJSON(w, http.StatusOK, updated)
+}
+
+// RetryPosting — POST /api/hr/payroll/periods/:id/post-accounting
+// Re-runs a failed ledger posting. The automatic path already retries on a timer;
+// this is the manual override for when someone has just fixed the cause (a missing
+// account, a renamed branch) and does not want to wait for the next sweep.
+func (h *PayrollHandler) RetryPosting(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	period, err := h.queries.GetPayrollPeriodByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "periode penggajian tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil periode penggajian")
+		return
+	}
+	if period.Status == "open" {
+		respondError(w, http.StatusConflict, "periode belum ditutup, belum ada yang perlu dicatat")
+		return
+	}
+
+	// A period with no queue row was closed before automatic posting existed and
+	// was posted by hand through the old dialog. Creating a row here would post it a
+	// second time — the journal check cannot see the old adjustment-based postings.
+	if _, err := h.queries.GetPayrollPosting(ctx, pgID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusConflict,
+				"periode ini ditutup sebelum pencatatan otomatis ada dan sudah dicatat manual")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil status pencatatan")
+		return
+	}
+
+	// Requeue resets attempts-exhausted rows back to pending; a period already
+	// posted is left alone by the upsert's WHERE clause.
+	if err := service.QueuePayrollPosting(ctx, h.queries, pgID); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menjadwalkan pencatatan akuntansi")
+		return
+	}
+
+	if err := h.poster.PostOne(ctx, pgID, middleware.UserIDFromCtx(ctx)); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("gagal mencatat ke akuntansi: %v", err))
+		return
+	}
+
+	posting, err := h.queries.GetPayrollPosting(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil status pencatatan")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "payroll_period",
+		EntityID:    id,
+		Description: fmt.Sprintf("Mencatat penggajian %s ke buku besar", period.PeriodMonth.Time.Format("2006-01")),
+	})
+
+	respondJSON(w, http.StatusOK, posting)
 }
 
 // DeletePeriod — DELETE /api/hr/payroll/periods/:id
@@ -898,7 +993,7 @@ func (h *PayrollHandler) ApplyBonus(w http.ResponseWriter, r *http.Request) {
 		}
 		var bonusTotal int64
 		for _, c := range comps {
-			if c.Type == "bonus" {
+			if c.Type == service.ComponentTypeBonus {
 				bonusTotal += c.Amount
 			}
 		}
@@ -1024,12 +1119,14 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		}
 		compAmounts[c.WageComponentID] = amt
 		switch c.ComponentType {
-		case "allowance":
+		case service.ComponentTypeAllowance:
 			allowanceTotal += amt
-		case "bonus":
+		case service.ComponentTypeBonus:
 			bonusTotal += amt
-		case "deduction":
+		case service.ComponentTypeDeduction:
 			deductionTotal += amt
+		case service.ComponentTypeDailyAllowance:
+			// disbursed manually day by day — outside gross/net, payslip info only
 		}
 	}
 

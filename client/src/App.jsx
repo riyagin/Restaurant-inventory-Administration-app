@@ -27,6 +27,7 @@ import TransferDetail from './pages/TransferDetail';
 import DispatchDetail from './pages/DispatchDetail';
 import StockOpnameDetail from './pages/StockOpnameDetail';
 import NonStockItemDetail from './pages/NonStockItemDetail';
+import StockItemDetail from './pages/StockItemDetail';
 import InventoryValueReport from './pages/InventoryValueReport';
 import Recipes from './pages/Recipes';
 import Productions from './pages/Productions';
@@ -367,6 +368,7 @@ export default function App() {
                 <Route path="/items/new" element={<ItemForm />} />
                 <Route path="/items/edit/:id" element={<ItemForm />} />
                 <Route path="/items/history/:id" element={<NonStockItemDetail />} />
+                <Route path="/items/stock/:id" element={<StockItemDetail />} />
                 <Route path="/inventory" element={<Inventory />} />
                 <Route path="/inventory/new" element={<InventoryForm />} />
                 <Route path="/inventory/edit/:id" element={<InventoryForm />} />

@@ -74,6 +74,7 @@ SELECT
     sh.id, sh.item_id, sh.warehouse_id, sh.quantity_change,
     sh.unit_name, sh.vendor, sh.type, sh.reference,
     sh.date, sh.created_at, sh.value,
+    sh.source_id, sh.source_type,
     w.name AS warehouse_name
 FROM stock_history sh
 LEFT JOIN warehouses w ON w.id = sh.warehouse_id
@@ -101,6 +102,8 @@ type ListStockHistoryByItemRow struct {
 	Date           pgtype.Date        `json:"date"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	Value          pgtype.Int8        `json:"value"`
+	SourceID       pgtype.UUID        `json:"source_id"`
+	SourceType     pgtype.Text        `json:"source_type"`
 	WarehouseName  pgtype.Text        `json:"warehouse_name"`
 }
 
@@ -125,6 +128,8 @@ func (q *Queries) ListStockHistoryByItem(ctx context.Context, arg *ListStockHist
 			&i.Date,
 			&i.CreatedAt,
 			&i.Value,
+			&i.SourceID,
+			&i.SourceType,
 			&i.WarehouseName,
 		); err != nil {
 			return nil, err

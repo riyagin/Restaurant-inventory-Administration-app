@@ -315,3 +315,48 @@ FROM kasbon_installments ki
 JOIN kasbons k ON k.id = ki.kasbon_id
 WHERE ki.payroll_line_id = $1
 ORDER BY k.kasbon_number;
+
+-- name: ListPayrollBranchPostingTotals :many
+-- Per-branch figures the ledger posting needs. kasbon is split out because it is
+-- not an expense: it clears the employee receivable created when the advance was
+-- disbursed. Employees with no branch fall into a single NULL group.
+SELECT e.branch_id, b.name AS branch_name,
+       COALESCE(SUM(l.gross_pay), 0)::bigint         AS total_gross,
+       COALESCE(SUM(l.net_pay), 0)::bigint           AS total_net,
+       COALESCE(SUM(l.kasbon_deduction), 0)::bigint  AS total_kasbon
+FROM payroll_lines l
+JOIN employees e ON e.id = l.employee_id
+LEFT JOIN branches b ON b.id = e.branch_id
+WHERE l.payroll_period_id = $1
+GROUP BY e.branch_id, b.name
+ORDER BY b.name NULLS LAST;
+
+-- name: UpsertPayrollPosting :exec
+INSERT INTO payroll_postings (period_id, status, queued_at)
+VALUES ($1, 'pending', now())
+ON CONFLICT (period_id) DO UPDATE
+SET status = 'pending', last_error = '', queued_at = now()
+WHERE payroll_postings.status <> 'posted';
+
+-- name: GetPayrollPosting :one
+SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, posted_at
+FROM payroll_postings WHERE period_id = $1;
+
+-- name: MarkPayrollPostingAttempt :exec
+UPDATE payroll_postings SET attempts = attempts + 1 WHERE period_id = $1;
+
+-- name: MarkPayrollPostingPosted :exec
+UPDATE payroll_postings
+SET status = 'posted', last_error = '', journal_entry_id = $2, posted_at = now()
+WHERE period_id = $1;
+
+-- name: MarkPayrollPostingFailed :exec
+UPDATE payroll_postings SET status = 'failed', last_error = $2 WHERE period_id = $1;
+
+-- name: ListUnpostedPayrollPostings :many
+-- The sweep's working set. attempts is capped by the caller so a permanently
+-- broken period (e.g. a deleted account) stops burning retries.
+SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, posted_at
+FROM payroll_postings
+WHERE status <> 'posted' AND attempts < $1
+ORDER BY queued_at;

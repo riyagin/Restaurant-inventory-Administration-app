@@ -112,13 +112,20 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 	earnings := []service.PayslipLineItem{
 		{Label: "Gaji Pokok", Amount: line.BaseSalary},
 	}
+	// daily_allowance components are collected separately: they were handed out in
+	// cash during the month, so they belong on the slip but not in gross/net.
+	var dailyPaid []service.PayslipLineItem
 	for _, c := range components {
 		switch c.Type {
-		case "allowance":
+		case service.ComponentTypeAllowance:
 			earnings = append(earnings, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
-		case "bonus":
+		case service.ComponentTypeBonus:
 			if c.Amount != 0 {
 				earnings = append(earnings, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
+			}
+		case service.ComponentTypeDailyAllowance:
+			if c.Amount != 0 {
+				dailyPaid = append(dailyPaid, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
 			}
 		}
 	}
@@ -144,7 +151,7 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 	// ── Deductions (POTONGAN) ──────────────────────────────────────────────────
 	var deductions []service.PayslipLineItem
 	for _, c := range components {
-		if c.Type == "deduction" && c.Amount != 0 {
+		if c.Type == service.ComponentTypeDeduction && c.Amount != 0 {
 			deductions = append(deductions, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
 		}
 	}
@@ -188,6 +195,7 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		PeriodLabel:    monthLabelID(line.PeriodMonth.Time),
 		Earnings:       earnings,
 		Deductions:     deductions,
+		DailyPaid:      dailyPaid,
 		TotalEarnings:  line.GrossPay,
 		TotalDeduction: totalDeduction,
 		NetPay:         line.NetPay,

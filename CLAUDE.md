@@ -225,7 +225,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | FinancialReport | `/reports/financial` | Yes |
 | InventoryValueReport | `/reports/inventory-value` | Yes |
 | AccountAdjustments | `/account-adjustments` | Yes |
-| NonStockItemDetail | `/items/:id/non-stock` | Yes |
+| NonStockItemDetail | `/items/history/:id` | Yes |
+| StockItemDetail | `/items/stock/:id` | Yes |
 | Employees | `/hr/employees` | Manager+ |
 | EmployeeForm | `/hr/employees/new`, `/hr/employees/:id/edit` | Manager+ |
 | EmployeeDetail | `/hr/employees/:id` | Manager+ |
@@ -305,7 +306,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `activity_log` | Audit trail — user, action (CREATE/UPDATE/DELETE), entity_type, description |
 | `employees` | HR employee master — code, name, position, branch, bank details, status |
 | `positions` | Job positions catalog (Kasir, Koki, etc.) |
-| `wage_components` | Catalog of wage component types (allowance/bonus/deduction, fixed/variable) |
+| `wage_components` | Catalog of wage component types (allowance/bonus/deduction/daily_allowance, fixed/variable) |
 | `employee_wage_structures` | Versioned wage structures per employee — base_salary, daily_rate, effective_date |
 | `employee_wage_components` | Components attached to a wage structure version — amount |
 | `attendance_records` | Daily attendance per employee — check_in/out times, source (manual/fingerprint/face), status, anomaly flags |
@@ -322,6 +323,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `kasbon_installments` | Per-installment schedule for a kasbon (deducted on payroll close) |
 | `payroll_periods` | Payroll period header — month, status (open/closed/paid) |
 | `payroll_lines` | Per-employee line within a period — gross, deductions, net, reviewed flag |
+| `payroll_postings` | Queue/status of a closed period's automatic ledger posting — status, attempts, last_error, journal_entry_id |
 | `hr_settings` | Company-level HR config — company_name, logo_path, payslip footer text |
 
 ### Key DB Rules
@@ -331,6 +333,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 - Inventory stored at lowest unit (unit_index = 0) — all conversions use `items.units` JSONB ratios
 - FIFO lot consumption: always deduct from oldest `inventory` rows first
 - Currency: BigInt cents throughout; never use NUMERIC/FLOAT for money
+- Closing a payroll period does NOT write the ledger inline: it queues a `payroll_postings` row in the same transaction, and `service.PayrollPoster` writes one balanced journal entry per period in the background (`Beban Gaji - <cabang>` debited net + kasbon per branch, Kas credited net, Piutang Karyawan credited the kasbon repayments). The queue row is the durability guarantee — a restart mid-post is retried by the startup/5-min sweep, capped at `MaxPostingAttempts`. Never post payroll to the ledger from the frontend, and never re-add a manual "process to accounting" step
+- `wage_components.type = 'daily_allowance'` (e.g. uang makan) is disbursed manually in cash each day, outside payroll. It is still snapshotted into `payroll_line_components` (honouring `calc_method`, so a `per_present_day` rate resolves to rate × present days) and printed on the payslip as information, but it must never enter `allowance_total` / `gross_pay` / `net_pay` — counting it would pay it twice. Use the `service.ComponentType*` constants when switching on the type
 
 ---
 
@@ -344,7 +348,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Vendors** (5): CRUD /api/vendors + GET /api/vendors/:id/history
 
-**Items** (7): CRUD /api/items + GET /:id/last-price + GET /:id/history
+**Items** (9): CRUD /api/items + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page)
 
 **Accounts** (4): CRUD /api/accounts
 
@@ -404,7 +408,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **HR Kasbon** (8): GET/POST /api/hr/kasbons; GET/:id; PUT/:id; POST process/cancel/approve/reject
 
-**HR Payroll** (11): periods GET/POST/:id/lines/regenerate-line/close/mark-paid; lines review/unreview/payslip; period payslips ZIP
+**HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips ZIP
 
 **HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo
 

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -10,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
 	"inventory-app/server-go/internal/service"
 )
 
@@ -176,14 +179,40 @@ func (h *VendorsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusConflict, "vendor masih memiliki saldo hutang")
 				return
 			}
-			if err := service.UpdateBalance(ctx, qtx, otherID, acct.Balance); err != nil {
+			// Move the payable as a real two-legged entry: Dr the vendor's
+			// account down to zero, Cr the shared bucket. Total liabilities are
+			// unchanged, and unlike before, the source account is actually
+			// cleared rather than being zeroed only by its own deletion.
+			if _, err := service.Post(ctx, qtx, service.Entry{
+				Date:        time.Now(),
+				SourceType:  service.SourceVendorMerge,
+				SourceID:    id,
+				Description: fmt.Sprintf("Pemindahan saldo hutang vendor %s ke Utang Usaha - Lainnya", vendor.Name),
+				CreatedBy:   middleware.UserIDFromCtx(ctx),
+				Lines: []service.Line{
+					service.Dr(vendor.AccountID.Bytes, acct.Balance),
+					service.Cr(otherID, acct.Balance),
+				},
+			}); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal memindahkan saldo hutang vendor")
 				return
 			}
 		}
-		if err := qtx.DeleteAccount(ctx, vendor.AccountID); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menghapus akun hutang vendor")
+
+		// An account carrying ledger history cannot be deleted without destroying
+		// the audit trail those entries belong to, so it is left behind at a zero
+		// balance and simply unlinked from the vendor.
+		var journalLines int
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM journal_lines WHERE account_id = $1`, vendor.AccountID).Scan(&journalLines); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memeriksa riwayat jurnal akun")
 			return
+		}
+		if journalLines == 0 {
+			if err := qtx.DeleteAccount(ctx, vendor.AccountID); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal menghapus akun hutang vendor")
+				return
+			}
 		}
 	}
 

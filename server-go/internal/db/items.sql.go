@@ -153,6 +153,287 @@ func (q *Queries) GetItemStockHistory(ctx context.Context, arg *GetItemStockHist
 	return items, nil
 }
 
+const getItemPurchaseHistory = `-- name: GetItemPurchaseHistory :many
+SELECT
+    ii.id, ii.quantity, ii.unit_index, ii.price,
+    (ii.quantity * ii.price) AS line_total,
+    ii.description,
+    inv.id AS invoice_id, inv.invoice_number, inv.date,
+    inv.invoice_type, inv.payment_status,
+    v.name AS vendor_name,
+    b.name AS branch_name,
+    dv.name AS division_name,
+    wh.name AS warehouse_name,
+    it.units->ii.unit_index->>'name' AS unit_name
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it ON it.id = ii.item_id
+LEFT JOIN vendors v     ON v.id  = COALESCE(ii.vendor_id, inv.vendor_id)
+LEFT JOIN branches b    ON b.id  = inv.branch_id
+LEFT JOIN divisions dv  ON dv.id = inv.division_id
+LEFT JOIN warehouses wh ON wh.id = inv.warehouse_id
+WHERE ii.item_id = $1
+ORDER BY inv.date DESC, inv.created_at DESC
+`
+
+type GetItemPurchaseHistoryRow struct {
+	ID            pgtype.UUID    `json:"id"`
+	Quantity      pgtype.Numeric `json:"quantity"`
+	UnitIndex     pgtype.Int4    `json:"unit_index"`
+	Price         int64          `json:"price"`
+	LineTotal     pgtype.Numeric `json:"line_total"`
+	Description   pgtype.Text    `json:"description"`
+	InvoiceID     pgtype.UUID    `json:"invoice_id"`
+	InvoiceNumber string         `json:"invoice_number"`
+	Date          pgtype.Date    `json:"date"`
+	InvoiceType   string         `json:"invoice_type"`
+	PaymentStatus string         `json:"payment_status"`
+	VendorName    pgtype.Text    `json:"vendor_name"`
+	BranchName    pgtype.Text    `json:"branch_name"`
+	DivisionName  pgtype.Text    `json:"division_name"`
+	WarehouseName pgtype.Text    `json:"warehouse_name"`
+	UnitName      pgtype.Text    `json:"unit_name"`
+}
+
+func (q *Queries) GetItemPurchaseHistory(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPurchaseHistoryRow, error) {
+	rows, err := q.db.Query(ctx, getItemPurchaseHistory, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemPurchaseHistoryRow
+	for rows.Next() {
+		var i GetItemPurchaseHistoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Quantity,
+			&i.UnitIndex,
+			&i.Price,
+			&i.LineTotal,
+			&i.Description,
+			&i.InvoiceID,
+			&i.InvoiceNumber,
+			&i.Date,
+			&i.InvoiceType,
+			&i.PaymentStatus,
+			&i.VendorName,
+			&i.BranchName,
+			&i.DivisionName,
+			&i.WarehouseName,
+			&i.UnitName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemStockByWarehouse = `-- name: GetItemStockByWarehouse :many
+SELECT
+    w.id   AS warehouse_id,
+    w.name AS warehouse_name,
+    SUM(inv.quantity)::numeric AS quantity,
+    SUM(inv.value)::bigint     AS value,
+    COUNT(*)::int              AS lot_count,
+    MIN(inv.date)              AS oldest_lot_date
+FROM inventory inv
+JOIN warehouses w ON w.id = inv.warehouse_id
+WHERE inv.item_id = $1
+GROUP BY w.id, w.name
+ORDER BY w.name
+`
+
+type GetItemStockByWarehouseRow struct {
+	WarehouseID   pgtype.UUID    `json:"warehouse_id"`
+	WarehouseName string         `json:"warehouse_name"`
+	Quantity      pgtype.Numeric `json:"quantity"`
+	Value         int64          `json:"value"`
+	LotCount      int32          `json:"lot_count"`
+	OldestLotDate pgtype.Date    `json:"oldest_lot_date"`
+}
+
+func (q *Queries) GetItemStockByWarehouse(ctx context.Context, itemID pgtype.UUID) ([]*GetItemStockByWarehouseRow, error) {
+	rows, err := q.db.Query(ctx, getItemStockByWarehouse, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemStockByWarehouseRow
+	for rows.Next() {
+		var i GetItemStockByWarehouseRow
+		if err := rows.Scan(
+			&i.WarehouseID,
+			&i.WarehouseName,
+			&i.Quantity,
+			&i.Value,
+			&i.LotCount,
+			&i.OldestLotDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemUsageByDestination = `-- name: GetItemUsageByDestination :many
+SELECT
+    b.name  AS branch_name,
+    dv.name AS division_name,
+    di.unit_name,
+    SUM(di.quantity)::numeric      AS quantity,
+    COUNT(DISTINCT d.id)::int      AS dispatch_count,
+    MAX(d.dispatched_at)           AS last_dispatched_at
+FROM dispatch_items di
+JOIN dispatches d ON d.id = di.dispatch_id
+LEFT JOIN branches b   ON b.id  = d.branch_id
+LEFT JOIN divisions dv ON dv.id = d.division_id
+WHERE di.item_id = $1
+  AND COALESCE(d.status, 'active') <> 'cancelled'
+GROUP BY b.name, dv.name, di.unit_name
+ORDER BY quantity DESC
+`
+
+type GetItemUsageByDestinationRow struct {
+	BranchName       pgtype.Text        `json:"branch_name"`
+	DivisionName     pgtype.Text        `json:"division_name"`
+	UnitName         string             `json:"unit_name"`
+	Quantity         pgtype.Numeric     `json:"quantity"`
+	DispatchCount    int32              `json:"dispatch_count"`
+	LastDispatchedAt pgtype.Timestamptz `json:"last_dispatched_at"`
+}
+
+func (q *Queries) GetItemUsageByDestination(ctx context.Context, itemID pgtype.UUID) ([]*GetItemUsageByDestinationRow, error) {
+	rows, err := q.db.Query(ctx, getItemUsageByDestination, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemUsageByDestinationRow
+	for rows.Next() {
+		var i GetItemUsageByDestinationRow
+		if err := rows.Scan(
+			&i.BranchName,
+			&i.DivisionName,
+			&i.UnitName,
+			&i.Quantity,
+			&i.DispatchCount,
+			&i.LastDispatchedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemMonthlyFlow = `-- name: GetItemMonthlyFlow :many
+SELECT
+    to_char(date_trunc('month', sh.date), 'YYYY-MM') AS month,
+    SUM(CASE WHEN sh.quantity_change > 0 THEN sh.quantity_change ELSE 0 END)::numeric AS qty_in,
+    SUM(CASE WHEN sh.quantity_change < 0 THEN -sh.quantity_change ELSE 0 END)::numeric AS qty_out,
+    COALESCE(SUM(CASE WHEN sh.value > 0 THEN sh.value ELSE 0 END), 0)::bigint  AS value_in,
+    COALESCE(SUM(CASE WHEN sh.value < 0 THEN -sh.value ELSE 0 END), 0)::bigint AS value_out,
+    COUNT(*)::int AS movement_count
+FROM stock_history sh
+WHERE sh.item_id = $1
+GROUP BY 1
+ORDER BY 1 DESC
+`
+
+type GetItemMonthlyFlowRow struct {
+	Month         pgtype.Text    `json:"month"`
+	QtyIn         pgtype.Numeric `json:"qty_in"`
+	QtyOut        pgtype.Numeric `json:"qty_out"`
+	ValueIn       int64          `json:"value_in"`
+	ValueOut      int64          `json:"value_out"`
+	MovementCount int32          `json:"movement_count"`
+}
+
+func (q *Queries) GetItemMonthlyFlow(ctx context.Context, itemID pgtype.UUID) ([]*GetItemMonthlyFlowRow, error) {
+	rows, err := q.db.Query(ctx, getItemMonthlyFlow, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemMonthlyFlowRow
+	for rows.Next() {
+		var i GetItemMonthlyFlowRow
+		if err := rows.Scan(
+			&i.Month,
+			&i.QtyIn,
+			&i.QtyOut,
+			&i.ValueIn,
+			&i.ValueOut,
+			&i.MovementCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemFlowByType = `-- name: GetItemFlowByType :many
+SELECT
+    sh.type,
+    SUM(CASE WHEN sh.quantity_change > 0 THEN sh.quantity_change ELSE 0 END)::numeric AS qty_in,
+    SUM(CASE WHEN sh.quantity_change < 0 THEN -sh.quantity_change ELSE 0 END)::numeric AS qty_out,
+    COALESCE(SUM(sh.value), 0)::bigint AS value_net,
+    COUNT(*)::int AS movement_count
+FROM stock_history sh
+WHERE sh.item_id = $1
+GROUP BY sh.type
+ORDER BY movement_count DESC
+`
+
+type GetItemFlowByTypeRow struct {
+	Type          string         `json:"type"`
+	QtyIn         pgtype.Numeric `json:"qty_in"`
+	QtyOut        pgtype.Numeric `json:"qty_out"`
+	ValueNet      int64          `json:"value_net"`
+	MovementCount int32          `json:"movement_count"`
+}
+
+func (q *Queries) GetItemFlowByType(ctx context.Context, itemID pgtype.UUID) ([]*GetItemFlowByTypeRow, error) {
+	rows, err := q.db.Query(ctx, getItemFlowByType, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemFlowByTypeRow
+	for rows.Next() {
+		var i GetItemFlowByTypeRow
+		if err := rows.Scan(
+			&i.Type,
+			&i.QtyIn,
+			&i.QtyOut,
+			&i.ValueNet,
+			&i.MovementCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listItems = `-- name: ListItems :many
 SELECT id, name, code, units, is_stock FROM items ORDER BY name
 `

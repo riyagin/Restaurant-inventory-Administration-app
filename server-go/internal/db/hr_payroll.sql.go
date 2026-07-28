@@ -744,7 +744,8 @@ func (q *Queries) ListLineKasbonNumbers(ctx context.Context, payrollLineID pgtyp
 
 const listPayrollLineBranchTotals = `-- name: ListPayrollLineBranchTotals :many
 SELECT e.branch_id, COALESCE(SUM(l.gross_pay), 0)::bigint AS total_gross,
-       COALESCE(SUM(l.net_pay), 0)::bigint AS total_net
+       COALESCE(SUM(l.net_pay), 0)::bigint AS total_net,
+       COALESCE(SUM(l.kasbon_deduction), 0)::bigint AS total_kasbon
 FROM payroll_lines l
 JOIN employees e ON e.id = l.employee_id
 WHERE l.payroll_period_id = $1
@@ -752,9 +753,10 @@ GROUP BY e.branch_id
 `
 
 type ListPayrollLineBranchTotalsRow struct {
-	BranchID   pgtype.UUID `json:"branch_id"`
-	TotalGross int64       `json:"total_gross"`
-	TotalNet   int64       `json:"total_net"`
+	BranchID    pgtype.UUID `json:"branch_id"`
+	TotalGross  int64       `json:"total_gross"`
+	TotalNet    int64       `json:"total_net"`
+	TotalKasbon int64       `json:"total_kasbon"`
 }
 
 func (q *Queries) ListPayrollLineBranchTotals(ctx context.Context, payrollPeriodID pgtype.UUID) ([]*ListPayrollLineBranchTotalsRow, error) {
@@ -766,7 +768,7 @@ func (q *Queries) ListPayrollLineBranchTotals(ctx context.Context, payrollPeriod
 	var items []*ListPayrollLineBranchTotalsRow
 	for rows.Next() {
 		var i ListPayrollLineBranchTotalsRow
-		if err := rows.Scan(&i.BranchID, &i.TotalGross, &i.TotalNet); err != nil {
+		if err := rows.Scan(&i.BranchID, &i.TotalGross, &i.TotalNet, &i.TotalKasbon); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)

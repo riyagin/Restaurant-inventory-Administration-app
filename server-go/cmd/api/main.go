@@ -135,6 +135,11 @@ func main() {
 	kasbonHandler := handler.NewKasbonHandler(pool, queries)
 	kasbonHandler.SetUploadsDir(cfg.UploadsDir)
 	payrollHandler := handler.NewPayrollHandler(pool, queries)
+	// Retry sweep for payroll ledger postings. Closing a period queues a
+	// payroll_postings row and fires the posting in the background; this catches
+	// anything that failed or was interrupted by a restart, so a closed period
+	// always ends up in the journal without anyone pressing a button.
+	payrollHandler.Poster().Start(ctx)
 	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
@@ -208,12 +213,15 @@ func main() {
 		r.Get("/api/items/{id}", itemsHandler.Get)
 		r.Get("/api/items/{id}/last-price", itemsHandler.GetLastPrice)
 		r.Get("/api/items/{id}/history", itemsHandler.GetHistory)
+		r.Get("/api/items/{id}/stock-history", itemsHandler.GetStockHistory)
+		r.Get("/api/items/{id}/stock-detail", itemsHandler.GetStockDetail)
 		r.Post("/api/items", itemsHandler.Create)
 		r.Put("/api/items/{id}", itemsHandler.Update)
 		r.Delete("/api/items/{id}", itemsHandler.Delete)
 
 		// Accounts — all authenticated
 		r.Get("/api/accounts", accountsHandler.List)
+		r.Get("/api/accounts/trial-balance", accountsHandler.TrialBalance)
 		r.Post("/api/accounts", accountsHandler.Create)
 		r.Put("/api/accounts/{id}", accountsHandler.Update)
 		r.Delete("/api/accounts/{id}", accountsHandler.Delete)
@@ -504,6 +512,7 @@ func main() {
 			r.Delete("/api/hr/payroll/periods/{id}", payrollHandler.DeletePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/close", payrollHandler.ClosePeriod)
 			r.Post("/api/hr/payroll/periods/{id}/mark-paid", payrollHandler.MarkPaid)
+			r.Post("/api/hr/payroll/periods/{id}/post-accounting", payrollHandler.RetryPosting)
 			r.Post("/api/hr/payroll/periods/{id}/review-all", payrollHandler.ReviewAll)
 			r.Get("/api/hr/payroll/lines/{id}/review", payrollHandler.GetLineReview)
 			r.Post("/api/hr/payroll/lines/{id}/review", payrollHandler.ReviewLine)

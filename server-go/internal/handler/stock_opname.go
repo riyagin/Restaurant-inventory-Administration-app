@@ -418,6 +418,16 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		wasteAccountID = created.ID
 	}
 
+	// Both directions of a count difference post against the same pair, so an
+	// over-count nets against an under-count instead of accumulating in
+	// unrelated accounts:
+	//   loss    Dr Stock Waste (expense)  Cr inventory
+	//   surplus Dr inventory              Cr Stock Waste
+	// The surplus leg used to be posted alone, which added inventory value out
+	// of thin air; that is what overstated Persediaan.
+	wasteAcctID := uuidFromPg(wasteAccountID)
+	invAcctID := uuidFromPg(wh.InventoryAccountID)
+
 	// Insert stock_opname header
 	opname, err := qtx.InsertStockOpname(ctx, &db.InsertStockOpnameParams{
 		WarehouseID:  pgtype.UUID{Bytes: warehouseID, Valid: true},
@@ -483,10 +493,19 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			wasteValue = 0
-			// Credit the inventory asset account for the value added
-			if surplusValue > 0 && wh.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, surplusValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
+			if surplusValue > 0 {
+				if _, err := service.Post(ctx, qtx, service.Entry{
+					Date:        today,
+					SourceType:  service.SourceOpname,
+					SourceID:    opname.ID.Bytes,
+					Description: "Selisih lebih stok opname",
+					CreatedBy:   middleware.UserIDFromCtx(ctx),
+					Lines: []service.Line{
+						service.Dr(invAcctID, surplusValue),
+						service.Cr(wasteAcctID, surplusValue),
+					},
+				}); err != nil {
+					respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal selisih lebih")
 					return
 				}
 			}
@@ -523,17 +542,19 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if wasteValue > 0 {
-			if wasteAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wasteAccountID.Bytes, wasteValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun waste")
-					return
-				}
-			}
-			if wh.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, -wasteValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
-					return
-				}
+			if _, err := service.Post(ctx, qtx, service.Entry{
+				Date:        today,
+				SourceType:  service.SourceOpname,
+				SourceID:    opname.ID.Bytes,
+				Description: "Selisih kurang stok opname (waste)",
+				CreatedBy:   middleware.UserIDFromCtx(ctx),
+				Lines: []service.Line{
+					service.Dr(wasteAcctID, wasteValue),
+					service.Cr(invAcctID, wasteValue),
+				},
+			}); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal waste")
+				return
 			}
 		}
 	}
@@ -638,6 +659,10 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 		wasteAccountID = created.ID
 	}
 
+	// Same posting pair as Create — see the comment there.
+	wasteAcctID := uuidFromPg(wasteAccountID)
+	invAcctID := uuidFromPg(wh.InventoryAccountID)
+
 	applied := 0
 	for _, it := range body.Items {
 		itemID, err := parseUUID(it.ItemID)
@@ -678,9 +703,19 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok opname")
 				return
 			}
-			if surplusValue > 0 && wh.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, surplusValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
+			if surplusValue > 0 {
+				if _, err := service.Post(ctx, qtx, service.Entry{
+					Date:        now,
+					SourceType:  service.SourceOpname,
+					SourceID:    id,
+					Description: "Koreksi selisih lebih stok opname",
+					CreatedBy:   middleware.UserIDFromCtx(ctx),
+					Lines: []service.Line{
+						service.Dr(invAcctID, surplusValue),
+						service.Cr(wasteAcctID, surplusValue),
+					},
+				}); err != nil {
+					respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal selisih lebih")
 					return
 				}
 			}
@@ -718,17 +753,19 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if wasteValue > 0 {
-			if wasteAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wasteAccountID.Bytes, wasteValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun waste")
-					return
-				}
-			}
-			if wh.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, wh.InventoryAccountID.Bytes, -wasteValue); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui akun inventori")
-					return
-				}
+			if _, err := service.Post(ctx, qtx, service.Entry{
+				Date:        now,
+				SourceType:  service.SourceOpname,
+				SourceID:    id,
+				Description: "Koreksi selisih kurang stok opname (waste)",
+				CreatedBy:   middleware.UserIDFromCtx(ctx),
+				Lines: []service.Line{
+					service.Dr(wasteAcctID, wasteValue),
+					service.Cr(invAcctID, wasteValue),
+				},
+			}); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal waste")
+				return
 			}
 		}
 		applied++

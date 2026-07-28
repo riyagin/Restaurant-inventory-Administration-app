@@ -249,20 +249,13 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 5 & 6. Update source warehouse account balance
-		if fromWH.InventoryAccountID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, fromWH.InventoryAccountID.Bytes, -valueDeducted); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun asal")
-				return
-			}
-		}
-
-		// 7. Update destination warehouse account balance
-		if toWH.InventoryAccountID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, toWH.InventoryAccountID.Bytes, valueDeducted); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun tujuan")
-				return
-			}
+		// 5-7. Value moves from the source warehouse's inventory account to the
+		// destination's, as one balanced entry.
+		if err := postInventoryMove(ctx, qtx, today, groupID, middleware.UserIDFromCtx(ctx),
+			fmt.Sprintf("Transfer stok %s → %s", fromWH.Name, toWH.Name),
+			fromWH.InventoryAccountID, toWH.InventoryAccountID, valueDeducted); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal transfer")
+			return
 		}
 
 		// 8. Insert stock_transfer record
@@ -567,17 +560,11 @@ func (h *StockTransfersHandler) Update(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 				return
 			}
-			if fromWH.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, fromWH.InventoryAccountID.Bytes, -v); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun asal")
-					return
-				}
-			}
-			if toWH.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, toWH.InventoryAccountID.Bytes, v); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun tujuan")
-					return
-				}
+			if err := postInventoryMove(ctx, qtx, effectiveDate, groupID, middleware.UserIDFromCtx(ctx),
+				fmt.Sprintf("Koreksi transfer %s → %s", fromWH.Name, toWH.Name),
+				fromWH.InventoryAccountID, toWH.InventoryAccountID, v); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal koreksi transfer")
+				return
 			}
 			if err := appendCorrection(itemID, unitIndex, unitName, delta); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menyimpan koreksi transfer")
@@ -616,17 +603,11 @@ func (h *StockTransfersHandler) Update(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 				return
 			}
-			if toWH.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, toWH.InventoryAccountID.Bytes, -v); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun tujuan")
-					return
-				}
-			}
-			if fromWH.InventoryAccountID.Valid {
-				if err := service.UpdateBalance(ctx, qtx, fromWH.InventoryAccountID.Bytes, v); err != nil {
-					respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun asal")
-					return
-				}
+			if err := postInventoryMove(ctx, qtx, effectiveDate, groupID, middleware.UserIDFromCtx(ctx),
+				fmt.Sprintf("Koreksi transfer %s → %s (pengembalian)", toWH.Name, fromWH.Name),
+				toWH.InventoryAccountID, fromWH.InventoryAccountID, v); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal koreksi transfer")
+				return
 			}
 			if err := appendCorrection(itemID, unitIndex, unitName, -ret); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menyimpan koreksi transfer")
@@ -753,17 +734,11 @@ func (h *StockTransfersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 			return
 		}
-		if toWH.InventoryAccountID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, toWH.InventoryAccountID.Bytes, -v); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun tujuan")
-				return
-			}
-		}
-		if fromWH.InventoryAccountID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, fromWH.InventoryAccountID.Bytes, v); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun asal")
-				return
-			}
+		if err := postInventoryMove(ctx, qtx, reversalDate, groupID, middleware.UserIDFromCtx(ctx),
+			fmt.Sprintf("Pembatalan transfer %s → %s", toWH.Name, fromWH.Name),
+			toWH.InventoryAccountID, fromWH.InventoryAccountID, v); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembatalan transfer")
+			return
 		}
 	}
 
@@ -788,4 +763,39 @@ func (h *StockTransfersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	})
 
 	respondJSON(w, http.StatusOK, map[string]any{"status": "cancelled"})
+}
+
+// postInventoryMove records value moving between two warehouse inventory
+// accounts — the shape every transfer, transfer edit and transfer cancellation
+// takes. Either side may be unset (a warehouse with no inventory account
+// configured); service.Post routes those legs to the suspense account so the
+// entry still balances instead of silently losing one side.
+func postInventoryMove(
+	ctx context.Context,
+	qtx *db.Queries,
+	date time.Time,
+	groupID, userID uuid.UUID,
+	description string,
+	fromAcct, toAcct pgtype.UUID,
+	value int64,
+) error {
+	var from, to uuid.UUID
+	if fromAcct.Valid {
+		from = fromAcct.Bytes
+	}
+	if toAcct.Valid {
+		to = toAcct.Bytes
+	}
+	_, err := service.Post(ctx, qtx, service.Entry{
+		Date:        date,
+		SourceType:  service.SourceTransfer,
+		SourceID:    groupID,
+		Description: description,
+		CreatedBy:   userID,
+		Lines: []service.Line{
+			service.Cr(from, value),
+			service.Dr(to, value),
+		},
+	})
+	return err
 }

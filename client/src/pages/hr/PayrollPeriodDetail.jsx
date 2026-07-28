@@ -7,7 +7,7 @@ import {
   closePayrollPeriod, markPayrollPeriodPaid, getPositions, getBranches,
   downloadPayslip, downloadPeriodPayslips, getEmployee,
   getWageComponents, getPayrollBonusEligible, applyPayrollBonus,
-  getAccounts, getAccountAdjustments, createAccountTransfer,
+  retryPayrollPosting,
 } from '../../api';
 
 // Classify an employee's saved bank into an export bucket.
@@ -125,7 +125,10 @@ export default function PayrollPeriodDetail() {
 
   const [drawerLineId, setDrawerLineId] = useState(null);
   const [showBonusModal, setShowBonusModal] = useState(false);
-  const [showAccountingModal, setShowAccountingModal] = useState(false);
+  // Ledger posting status for this period, written by the background poster.
+  // null for periods closed before automatic posting existed (those were posted
+  // by hand through the old dialog).
+  const [posting, setPosting] = useState(null);
 
   const locked = period && period.status !== 'open';
 
@@ -134,6 +137,7 @@ export default function PayrollPeriodDetail() {
       const { data } = await getPayrollPeriod(id);
       setPeriod(data.period);
       setSummary(data.summary);
+      setPosting(data.posting || null);
     } catch {
       setError('Gagal memuat periode');
     }
@@ -168,6 +172,27 @@ export default function PayrollPeriodDetail() {
   useEffect(() => { loadLines(); }, [loadLines]);
 
   const refreshAll = async () => { await loadPeriod(); await loadLines(); };
+
+  // The ledger posting runs in the background, so the page follows it instead of
+  // making the user reload. Polling stops as soon as it settles (posted/failed).
+  useEffect(() => {
+    if (posting?.status !== 'pending') return undefined;
+    const t = setInterval(() => { loadPeriod(); }, 3000);
+    return () => clearInterval(t);
+  }, [posting?.status, loadPeriod]);
+
+  const doRetryPosting = async () => {
+    setBusy(true); setError('');
+    try {
+      const { data } = await retryPayrollPosting(id);
+      setPosting(data);
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Gagal mencatat ke akuntansi');
+      await loadPeriod();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const sortedLines = useMemo(() => sortLines(lines, sort, order), [lines, sort, order]);
 
@@ -371,12 +396,8 @@ export default function PayrollPeriodDetail() {
               {busy ? 'Memproses…' : 'Ekspor Bank (Excel)'}
             </button>
           )}
-          {locked && (
-            <button onClick={() => setShowAccountingModal(true)} disabled={busy}
-              title="Catat gaji ke buku besar: kurangi Kas, bebankan ke akun Beban Gaji tiap cabang"
-              style={{ background: '#fff', color: '#6a1b9a', border: '1px solid #6a1b9a', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
-              Proses ke Akuntansi
-            </button>
+          {locked && posting && (
+            <AccountingStatus posting={posting} busy={busy} onRetry={doRetryPosting} />
           )}
           {downloadablePayslips && (
             <button onClick={doDownloadAll} disabled={busy}
@@ -515,213 +536,43 @@ export default function PayrollPeriodDetail() {
         />
       )}
 
-      {showAccountingModal && (
-        <AccountingPostModal
-          periodId={id}
-          period={period}
-          onClose={() => setShowAccountingModal(false)}
-        />
-      )}
     </div>
   );
 }
 
-// Posts the finished payroll to the ledger: for each branch, credit (reduce) the
-// cash account and debit (increase) that branch's "Beban Gaji - <Branch>" expense
-// account, using the existing atomic transfer endpoint. Amounts are net pay — the
-// cash actually disbursed. Guards against double-posting per branch via a marker
-// embedded in the adjustment description.
-function AccountingPostModal({ periodId, period, onClose }) {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [rows, setRows] = useState([]);          // per-branch preview rows
-  const [cashAccount, setCashAccount] = useState(null);
-  const [result, setResult] = useState(null);    // { posted, skipped }
+// Ledger posting status for a closed period. The posting itself is automatic —
+// queued inside the close transaction and written by a background worker — so this
+// only reports what happened. The retry button appears solely for the failed case,
+// where someone has fixed the cause (a missing account) and does not want to wait
+// for the next retry sweep.
+function AccountingStatus({ posting, busy, onRetry }) {
+  const base = { borderRadius: 8, padding: '10px 16px', fontWeight: 600, fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 8 };
 
-  const monthLabel = fmtMonth(period.period_month);
-  const marker = (branchId) => `[gaji:${periodId}:${branchId}]`;
+  if (posting.status === 'posted') {
+    return (
+      <span title="Gaji sudah tercatat di buku besar" style={{ ...base, background: '#e6f4ea', color: '#1e7e34', border: '1px solid #b7e1c4' }}>
+        ✓ Tercatat di Akuntansi
+      </span>
+    );
+  }
 
-  const findCash = (accounts) =>
-    accounts.find((a) => Number(a.account_number) === 11000) ||
-    accounts.find((a) => a.account_type === 'asset' && /kas/i.test(a.name || ''));
-
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
-    try {
-      const [accRes, lineRes] = await Promise.all([
-        getAccounts(),
-        getPayrollLines(periodId, { sort: 'name', order: 'asc' }),
-      ]);
-      const accounts = Array.isArray(accRes.data) ? accRes.data : [];
-      const lines = Array.isArray(lineRes.data) ? lineRes.data : [];
-
-      const cash = findCash(accounts);
-      setCashAccount(cash || null);
-
-      // Existing postings to the cash account, to detect what's already been posted.
-      let existing = [];
-      if (cash) {
-        try {
-          const adjRes = await getAccountAdjustments({ account_id: cash.id });
-          existing = Array.isArray(adjRes.data) ? adjRes.data : [];
-        } catch { /* non-fatal — treat as none posted */ }
-      }
-      const postedText = existing.map((a) => a.description || '').join('\n');
-
-      // Group net pay by branch.
-      const byBranch = new Map();
-      for (const l of lines) {
-        const bid = l.branch_id || 'none';
-        const bname = l.branch_name || '(Tanpa Cabang)';
-        const cur = byBranch.get(bid) || { branchId: bid, branchName: bname, count: 0, total: 0 };
-        cur.count += 1;
-        cur.total += Math.round(numVal(l.net_pay));
-        byBranch.set(bid, cur);
-      }
-
-      const preview = [...byBranch.values()].map((b) => {
-        const wage = accounts.find((a) => a.name === `Beban Gaji - ${b.branchName}`);
-        return {
-          ...b,
-          wageAccount: wage || null,
-          alreadyPosted: postedText.includes(marker(b.branchId)),
-        };
-      }).sort((a, b) => a.branchName.localeCompare(b.branchName));
-
-      setRows(preview);
-    } catch {
-      setError('Gagal memuat data akuntansi');
-    } finally {
-      setLoading(false);
-    }
-  }, [periodId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const missingWage = rows.filter((r) => r.total > 0 && !r.wageAccount);
-  const toPost = rows.filter((r) => r.total > 0 && r.wageAccount && !r.alreadyPosted);
-  const grandTotal = rows.reduce((s, r) => s + r.total, 0);
-  const canPost = !!cashAccount && missingWage.length === 0 && toPost.length > 0 && !busy;
-
-  const post = async () => {
-    if (!canPost) return;
-    setBusy(true); setError('');
-    let posted = 0;
-    try {
-      for (const r of toPost) {
-        await createAccountTransfer({
-          from_account_id: cashAccount.id,
-          to_account_id: r.wageAccount.id,
-          amount: r.total,
-          description: `Gaji ${monthLabel} — ${r.branchName} ${marker(r.branchId)}`,
-        });
-        posted += 1;
-      }
-      setResult({ posted });
-      await load();
-    } catch {
-      setError(`Sebagian gagal diproses. ${posted} dari ${toPost.length} cabang berhasil dicatat. Silakan tutup dan buka kembali untuk melanjutkan sisanya.`);
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (posting.status === 'pending') {
+    return (
+      <span title="Pencatatan ke buku besar sedang diproses di latar belakang" style={{ ...base, background: '#fff8e1', color: '#8a6d00', border: '1px solid #f0e0a0' }}>
+        ⏳ Mencatat ke Akuntansi…
+      </span>
+    );
+  }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: 680, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,.18)' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e6e8ee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>Proses ke Akuntansi — {monthLabel}</h2>
-          <button onClick={onClose} style={{ background: 'none', border: 0, fontSize: 22, cursor: 'pointer', color: '#889' }}>×</button>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-          {loading ? <p>Memuat…</p> : (
-            <>
-              {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 10, borderRadius: 6, marginBottom: 12 }}>{error}</div>}
-
-              {result && (
-                <div style={{ background: '#e6f4ea', color: '#1e7e34', padding: 10, borderRadius: 6, marginBottom: 12 }}>
-                  Berhasil mencatat {result.posted} cabang ke buku besar.
-                </div>
-              )}
-
-              <div style={{ fontSize: 13, color: '#556', marginBottom: 12, lineHeight: 1.5 }}>
-                Setiap cabang akan mengurangi <strong>{cashAccount ? cashAccount.name : 'Kas'}</strong> dan
-                membebankan gaji (nilai bersih) ke akun <strong>Beban Gaji</strong> cabang tersebut.
-              </div>
-
-              {!cashAccount && (
-                <div style={{ background: '#fff3cd', color: '#7a5200', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
-                  Akun Kas (no. 11000) tidak ditemukan. Tidak dapat memproses.
-                </div>
-              )}
-
-              {missingWage.length > 0 && (
-                <div style={{ background: '#fff3cd', color: '#7a5200', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 13 }}>
-                  Akun <strong>Beban Gaji</strong> belum ada untuk: {missingWage.map((r) => r.branchName).join(', ')}.
-                  Jalankan migrasi <code>037_payroll_wage_accounts</code> (restart server atau <code>migrate.sh up</code>) untuk membuatnya, lalu buka kembali dialog ini.
-                </div>
-              )}
-
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ background: '#f1f3f7', textAlign: 'left' }}>
-                    <th style={{ padding: 8 }}>Cabang</th>
-                    <th style={{ padding: 8, textAlign: 'right' }}>Karyawan</th>
-                    <th style={{ padding: 8, textAlign: 'right' }}>Total (Bersih)</th>
-                    <th style={{ padding: 8 }}>Akun Beban</th>
-                    <th style={{ padding: 8, textAlign: 'center' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 ? (
-                    <tr><td colSpan={5} style={{ padding: 12, color: '#889' }}>Tidak ada data.</td></tr>
-                  ) : rows.map((r) => (
-                    <tr key={r.branchId} style={{ borderTop: '1px solid #eef0f4' }}>
-                      <td style={{ padding: 8 }}>{r.branchName}</td>
-                      <td style={{ padding: 8, textAlign: 'right' }}>{r.count}</td>
-                      <td style={{ padding: 8, textAlign: 'right', fontWeight: 600 }}>{fmtIDR(r.total)}</td>
-                      <td style={{ padding: 8, color: r.wageAccount ? '#334' : '#c5221f' }}>
-                        {r.wageAccount ? r.wageAccount.name : 'Belum ada'}
-                      </td>
-                      <td style={{ padding: 8, textAlign: 'center' }}>
-                        {r.total <= 0 ? <span style={{ color: '#aab' }}>—</span>
-                          : r.alreadyPosted ? <span style={{ color: '#1e7e34', fontWeight: 600 }}>✓ Tercatat</span>
-                          : <span style={{ color: '#a06800' }}>Belum</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                {rows.length > 0 && (
-                  <tfoot>
-                    <tr style={{ background: '#f8f9fb', fontWeight: 700, borderTop: '2px solid #e6e8ee' }}>
-                      <td style={{ padding: 8 }} colSpan={2}>Total</td>
-                      <td style={{ padding: 8, textAlign: 'right' }}>{fmtIDR(grandTotal)}</td>
-                      <td colSpan={2}></td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </>
-          )}
-        </div>
-
-        <div style={{ padding: '12px 20px', borderTop: '1px solid #e6e8ee', display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
-          {!loading && toPost.length === 0 && missingWage.length === 0 && rows.length > 0 && !result && (
-            <span style={{ color: '#1e7e34', fontSize: 13, marginRight: 'auto' }}>Semua cabang sudah tercatat.</span>
-          )}
-          <button onClick={onClose} disabled={busy}
-            style={{ background: '#fff', border: '1px solid #ccd', borderRadius: 8, padding: '10px 16px', cursor: 'pointer' }}>
-            Tutup
-          </button>
-          <button onClick={post} disabled={!canPost}
-            style={{ background: canPost ? '#6a1b9a' : '#ccc', color: '#fff', border: 0, borderRadius: 8, padding: '10px 20px', fontWeight: 600, cursor: canPost ? 'pointer' : 'not-allowed' }}>
-            {busy ? 'Memproses…' : `Catat ${toPost.length} Cabang`}
-          </button>
-        </div>
-      </div>
-    </div>
+    <span title={posting.last_error || 'Pencatatan gagal'}
+      style={{ ...base, background: '#fce8e6', color: '#c5221f', border: '1px solid #f3b9b4' }}>
+      ⚠ Akuntansi Gagal ({posting.attempts}×)
+      <button onClick={onRetry} disabled={busy}
+        style={{ background: '#c5221f', color: '#fff', border: 0, borderRadius: 6, padding: '4px 10px', fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 12 }}>
+        {busy ? 'Mencoba…' : 'Coba Lagi'}
+      </button>
+    </span>
   );
 }
 
@@ -878,9 +729,12 @@ function calcAmounts(line, mult, overtimeDays, overtimeHours, holidayDays, compo
   const holidayAmt = Math.round(Number(holidayDays) * Number(line.daily_rate) * mult.holiday);
   const allowTotal = components.filter(c => c.type === 'allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const bonusTotal = components.filter(c => c.type === 'bonus').reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  // daily_allowance is handed out in cash during the month, so it stays out of gross/net
+  // and is only surfaced as a separate informational total.
+  const dailyPaidTotal = components.filter(c => c.type === 'daily_allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const gross = Number(line.base_salary) + allowTotal + bonusTotal + overtimeAmt + overtimeHourlyAmt + holidayAmt;
   const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction) - Number(line.half_day_deduction || 0);
-  return { overtimeAmt, overtimeHourlyAmt, holidayAmt, gross, net };
+  return { overtimeAmt, overtimeHourlyAmt, holidayAmt, gross, net, dailyPaidTotal };
 }
 
 function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
@@ -927,7 +781,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
         overtime_hours: Number(overtimeHours) || 0,
         public_holiday_days: Number(holidayDays) || 0,
         components: components
-          .filter((c) => c.type === 'bonus' || c.type === 'allowance')
+          .filter((c) => c.type === 'bonus' || c.type === 'allowance' || c.type === 'daily_allowance')
           .map((c) => ({ id: c.id, amount: Number(c.amount) || 0 })),
         review_note: note,
       });
@@ -950,6 +804,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
   const overtimeRequests = data?.overtime_requests ?? [];
   const bonusComps = components.filter((c) => c.type === 'bonus');
   const allowanceComps = components.filter((c) => c.type === 'allowance');
+  const dailyComps = components.filter((c) => c.type === 'daily_allowance');
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'flex', justifyContent: 'flex-end', zIndex: 100 }} onClick={onClose}>
@@ -1117,6 +972,23 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                   </>
                 )}
 
+                {dailyComps.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Dibayar Harian (Tunai)</div>
+                    <p style={{ fontSize: 11, color: '#9aa', margin: '0 0 6px' }}>
+                      Sudah dibagikan tunai setiap hari di luar transfer gaji. Tidak menambah gaji bruto/bersih — hanya tampil di slip gaji.
+                    </p>
+                    {dailyComps.map((c) => (
+                      <div key={c.id} style={{ marginBottom: 8 }}>
+                        <label style={{ display: 'block', fontSize: 12, color: '#778', marginBottom: 2 }}>{c.name}</label>
+                        <input type="number" min="0" value={c.amount} disabled={!editable}
+                          onChange={(e) => setCompAmount(c.id, e.target.value)}
+                          style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px dashed #ccd', background: '#fafbfd' }} />
+                      </div>
+                    ))}
+                  </>
+                )}
+
                 <label style={{ display: 'block', fontSize: 13, marginBottom: 4, marginTop: 4 }}>Catatan</label>
                 <textarea value={note} disabled={!editable} onChange={(e) => setNote(e.target.value)} rows={2}
                   style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccd' }} />
@@ -1151,6 +1023,12 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 <span>Gaji Bersih</span>
                 <strong style={{ color: '#1e7e34', fontSize: 15 }}>{fmtIDR(live ? live.net : line.net_pay)}</strong>
               </div>
+              {live && live.dailyPaidTotal > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 12, color: '#889' }}>
+                  <span>Dibayar harian tunai (di luar transfer)</span>
+                  <span>{fmtIDR(live.dailyPaidTotal)}</span>
+                </div>
+              )}
             </div>
 
             {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 8, borderRadius: 6, marginBottom: 8, fontSize: 13 }}>{error}</div>}

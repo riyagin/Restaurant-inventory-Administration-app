@@ -152,19 +152,21 @@ func (h *SalesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dr cash account (asset increases)
-	if err := service.UpdateBalance(ctx, qtx, accountID, body.Amount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun kas")
-		return
-	}
-
-	// Cr revenue account (revenue increases)
+	// Dr cash, Cr revenue.
 	revAcctID, _ := saleRevenueAccountID(ctx, qtx, divisionID, branchID)
-	if revAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, revAcctID, body.Amount); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun pendapatan")
-			return
-		}
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        saleDate,
+		SourceType:  service.SourceSale,
+		SourceID:    sale.ID.Bytes,
+		Description: "Penjualan manual",
+		CreatedBy:   userID,
+		Lines: []service.Line{
+			service.Dr(accountID, body.Amount),
+			service.Cr(revAcctID, body.Amount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penjualan")
+		return
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -241,19 +243,21 @@ func (h *SalesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	// Reverse cash account
-	if err := service.UpdateBalance(ctx, qtx, accountID, -sale.Amount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun kas")
-		return
-	}
-
-	// Reverse revenue account
+	// Reverse the sale: Cr cash, Dr revenue.
 	revAcctID, _ := saleRevenueAccountID(ctx, qtx, divisionID, branchID)
-	if revAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, revAcctID, -sale.Amount); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun pendapatan")
-			return
-		}
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceSale,
+		SourceID:    id,
+		Description: "Pembalikan penjualan (dihapus)",
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Cr(accountID, sale.Amount),
+			service.Dr(revAcctID, sale.Amount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan penjualan")
+		return
 	}
 
 	if err := qtx.DeleteSale(ctx, pgtype.UUID{Bytes: id, Valid: true}); err != nil {

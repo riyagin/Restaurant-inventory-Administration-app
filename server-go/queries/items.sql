@@ -25,6 +25,84 @@ WHERE ii.item_id = $1
 ORDER BY i.date DESC, i.created_at DESC
 LIMIT 1;
 
+-- name: GetItemPurchaseHistory :many
+SELECT
+    ii.id, ii.quantity, ii.unit_index, ii.price,
+    (ii.quantity * ii.price) AS line_total,
+    ii.description,
+    inv.id AS invoice_id, inv.invoice_number, inv.date,
+    inv.invoice_type, inv.payment_status,
+    v.name AS vendor_name,
+    b.name AS branch_name,
+    dv.name AS division_name,
+    wh.name AS warehouse_name,
+    it.units->ii.unit_index->>'name' AS unit_name
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it ON it.id = ii.item_id
+LEFT JOIN vendors v     ON v.id  = COALESCE(ii.vendor_id, inv.vendor_id)
+LEFT JOIN branches b    ON b.id  = inv.branch_id
+LEFT JOIN divisions dv  ON dv.id = inv.division_id
+LEFT JOIN warehouses wh ON wh.id = inv.warehouse_id
+WHERE ii.item_id = $1
+ORDER BY inv.date DESC, inv.created_at DESC;
+
+-- name: GetItemStockByWarehouse :many
+SELECT
+    w.id   AS warehouse_id,
+    w.name AS warehouse_name,
+    SUM(inv.quantity)::numeric AS quantity,
+    SUM(inv.value)::bigint     AS value,
+    COUNT(*)::int              AS lot_count,
+    MIN(inv.date)              AS oldest_lot_date
+FROM inventory inv
+JOIN warehouses w ON w.id = inv.warehouse_id
+WHERE inv.item_id = $1
+GROUP BY w.id, w.name
+ORDER BY w.name;
+
+-- name: GetItemUsageByDestination :many
+SELECT
+    b.name  AS branch_name,
+    dv.name AS division_name,
+    di.unit_name,
+    SUM(di.quantity)::numeric      AS quantity,
+    COUNT(DISTINCT d.id)::int      AS dispatch_count,
+    MAX(d.dispatched_at)           AS last_dispatched_at
+FROM dispatch_items di
+JOIN dispatches d ON d.id = di.dispatch_id
+LEFT JOIN branches b   ON b.id  = d.branch_id
+LEFT JOIN divisions dv ON dv.id = d.division_id
+WHERE di.item_id = $1
+  AND COALESCE(d.status, 'active') <> 'cancelled'
+GROUP BY b.name, dv.name, di.unit_name
+ORDER BY quantity DESC;
+
+-- name: GetItemMonthlyFlow :many
+SELECT
+    to_char(date_trunc('month', sh.date), 'YYYY-MM') AS month,
+    SUM(CASE WHEN sh.quantity_change > 0 THEN sh.quantity_change ELSE 0 END)::numeric AS qty_in,
+    SUM(CASE WHEN sh.quantity_change < 0 THEN -sh.quantity_change ELSE 0 END)::numeric AS qty_out,
+    COALESCE(SUM(CASE WHEN sh.value > 0 THEN sh.value ELSE 0 END), 0)::bigint  AS value_in,
+    COALESCE(SUM(CASE WHEN sh.value < 0 THEN -sh.value ELSE 0 END), 0)::bigint AS value_out,
+    COUNT(*)::int AS movement_count
+FROM stock_history sh
+WHERE sh.item_id = $1
+GROUP BY 1
+ORDER BY 1 DESC;
+
+-- name: GetItemFlowByType :many
+SELECT
+    sh.type,
+    SUM(CASE WHEN sh.quantity_change > 0 THEN sh.quantity_change ELSE 0 END)::numeric AS qty_in,
+    SUM(CASE WHEN sh.quantity_change < 0 THEN -sh.quantity_change ELSE 0 END)::numeric AS qty_out,
+    COALESCE(SUM(sh.value), 0)::bigint AS value_net,
+    COUNT(*)::int AS movement_count
+FROM stock_history sh
+WHERE sh.item_id = $1
+GROUP BY sh.type
+ORDER BY movement_count DESC;
+
 -- name: GetItemStockHistory :many
 SELECT
     sh.id, sh.quantity_change, sh.unit_name, sh.vendor,

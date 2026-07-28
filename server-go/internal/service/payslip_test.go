@@ -79,3 +79,74 @@ func TestFormatRupiah(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildPayslipPDF_DailyPaid renders a slip carrying daily_allowance components
+// (uang makan handed out in cash). The block is informational: TotalEarnings and
+// NetPay stay exactly as passed in, so the PDF must render without touching them.
+func TestBuildPayslipPDF_DailyPaid(t *testing.T) {
+	d := PayslipData{
+		CompanyName:  "PT Contoh Sejahtera",
+		EmployeeName: "Budi Santoso",
+		EmployeeCode: "EMP-0001",
+		PeriodLabel:  "Juli 2026",
+		Earnings:     []PayslipLineItem{{Label: "Gaji Pokok", Amount: 3000000}},
+		DailyPaid: []PayslipLineItem{
+			{Label: "Uang Makan", Amount: 330000},
+		},
+		TotalEarnings: 3000000,
+		NetPay:        3000000,
+	}
+	out, err := BuildPayslipPDF(d)
+	if err != nil {
+		t.Fatalf("BuildPayslipPDF error: %v", err)
+	}
+	if !bytes.HasPrefix(out, []byte("%PDF")) {
+		t.Fatalf("output does not start with %%PDF magic bytes")
+	}
+}
+
+// TestComponentTotalsExcludeDailyAllowance pins the payroll rule that a
+// daily_allowance component lands in no total — it is disbursed manually day by
+// day, so counting it in gross/net would pay it twice.
+func TestComponentTotalsExcludeDailyAllowance(t *testing.T) {
+	comps := []struct {
+		typ    string
+		amount int64
+	}{
+		{ComponentTypeAllowance, 500000},
+		{ComponentTypeBonus, 300000},
+		{ComponentTypeDeduction, 120000},
+		{ComponentTypeDailyAllowance, 330000},
+	}
+
+	var allowance, bonus, deduction int64
+	for _, c := range comps {
+		switch c.typ {
+		case ComponentTypeAllowance:
+			allowance += c.amount
+		case ComponentTypeBonus:
+			bonus += c.amount
+		case ComponentTypeDeduction:
+			deduction += c.amount
+		case ComponentTypeDailyAllowance:
+			// intentionally excluded
+		}
+	}
+
+	if allowance != 500000 || bonus != 300000 || deduction != 120000 {
+		t.Fatalf("unexpected totals: allowance=%d bonus=%d deduction=%d", allowance, bonus, deduction)
+	}
+
+	res := CalcLine(CalcLineInput{
+		BaseSalary:              3000000,
+		AllowanceTotal:          allowance,
+		BonusTotal:              bonus,
+		ComponentDeductionTotal: deduction,
+	})
+	if res.GrossPay != 3800000 {
+		t.Errorf("gross = %d, want 3800000 (daily allowance must not be added)", res.GrossPay)
+	}
+	if res.NetPay != 3680000 {
+		t.Errorf("net = %d, want 3680000", res.NetPay)
+	}
+}

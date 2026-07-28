@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
@@ -180,18 +182,41 @@ func CloseThrRun(ctx context.Context, qtx *db.Queries, run *db.ThrRun) (*db.ThrR
 	if err != nil {
 		return nil, err
 	}
+
+	// Same shape as the payroll close (see payroll_posting.go): THR is paid out
+	// of cash, so the branch wage expense is debited and Kas is credited. This
+	// used to debit the expense and credit nothing, leaving the books out of
+	// balance by the full THR amount on every run.
+	var lines []Line
+	var total int64
 	for _, bt := range branchTotals {
-		if !bt.BranchID.Valid || bt.TotalThr == 0 {
+		if bt.TotalThr == 0 {
 			continue
 		}
-		expenseAcct, err := qtx.GetBranchExpenseAccountID(ctx, bt.BranchID)
+		var expenseAcctID uuid.UUID
+		if bt.BranchID.Valid {
+			if acct, err := qtx.GetBranchExpenseAccountID(ctx, bt.BranchID); err == nil && acct.Valid {
+				expenseAcctID = acct.Bytes
+			}
+		}
+		lines = append(lines, Dr(expenseAcctID, bt.TotalThr))
+		total += bt.TotalThr
+	}
+
+	if total > 0 {
+		cash, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: CashAccountNumber, Valid: true})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("akun sistem 'Kas' (%d) tidak ditemukan: %w", CashAccountNumber, err)
 		}
-		if !expenseAcct.Valid {
-			continue
-		}
-		if err := UpdateBalance(ctx, qtx, expenseAcct.Bytes, bt.TotalThr); err != nil {
+		lines = append(lines, Cr(cash.ID.Bytes, total).WithMemo("pembayaran THR"))
+
+		if _, err := Post(ctx, qtx, Entry{
+			Date:        time.Now(),
+			SourceType:  SourceTHR,
+			SourceID:    run.ID.Bytes,
+			Description: "Pembayaran THR",
+			Lines:       lines,
+		}); err != nil {
 			return nil, err
 		}
 	}

@@ -46,6 +46,12 @@ type PayslipData struct {
 	Earnings   []PayslipLineItem
 	Deductions []PayslipLineItem
 
+	// DailyPaid lists wage components disbursed manually day by day during the period
+	// (type 'daily_allowance', e.g. uang makan handed out in cash). They are shown for
+	// the employee's information only and are NOT part of TotalEarnings / NetPay, so
+	// they render in their own block below the net-pay box.
+	DailyPaid []PayslipLineItem
+
 	// Totals.
 	TotalEarnings  int64
 	TotalDeduction int64
@@ -208,6 +214,27 @@ func BuildPayslipPDF(d PayslipData) ([]byte, error) {
 	terbilang := Terbilang(d.NetPay) + " rupiah"
 	pdf.MultiCell(contentW, 5, tr("Terbilang: "+capitalizeFirst(terbilang)), "", "C", false)
 	pdf.Ln(4)
+
+	// ── Dibayar harian (informational, outside the take-home total) ────────────
+	if len(d.DailyPaid) > 0 {
+		var dailyTotal int64
+		pdf.SetFont("Arial", "B", 9)
+		pdf.CellFormat(contentW, 6, tr("DIBAYAR HARIAN (di luar transfer gaji)"), "B", 1, "L", false, 0, "")
+		pdf.SetFont("Arial", "", 9)
+		for _, it := range d.DailyPaid {
+			dailyTotal += it.Amount
+			pdf.CellFormat(contentW-32, 5, tr(it.Label), "", 0, "L", false, 0, "")
+			pdf.CellFormat(32, 5, formatRupiah(it.Amount), "", 1, "R", false, 0, "")
+		}
+		pdf.SetFont("Arial", "B", 9)
+		pdf.CellFormat(contentW-32, 5, tr("Total Dibayar Harian"), "T", 0, "L", false, 0, "")
+		pdf.CellFormat(32, 5, formatRupiah(dailyTotal), "T", 1, "R", false, 0, "")
+		pdf.SetFont("Arial", "I", 8)
+		pdf.SetTextColor(110, 110, 110)
+		pdf.MultiCell(contentW, 4, tr("Sudah diterima tunai secara harian, tidak termasuk dalam gaji bersih di atas."), "", "L", false)
+		pdf.SetTextColor(0, 0, 0)
+		pdf.Ln(3)
+	}
 
 	// ── Catatan + footer ───────────────────────────────────────────────────────
 	if strings.TrimSpace(d.Note) != "" {

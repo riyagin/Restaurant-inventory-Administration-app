@@ -154,3 +154,48 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"message": "akun berhasil dihapus"})
 }
+
+// TrialBalance reports whether the books balance, and where they do not.
+//
+// Two independent checks:
+//
+//   - `equation`: assets - (liabilities + equity + revenue - expense) over the
+//     cached balances. Zero is the only correct value. This is the number that
+//     was 982,420,908 before the journal existed.
+//   - `drift`: per account, cached balance minus the balance implied by its
+//     journal lines. Non-zero means something wrote accounts.balance outside
+//     service.Post, or that the account carries history from before the journal.
+//
+// Only accounts with non-zero drift are returned, so a healthy system responds
+// with an empty list.
+func (h *AccountsHandler) TrialBalance(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	eq, err := h.queries.AccountingEquation(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung persamaan akuntansi")
+		return
+	}
+
+	rows, err := h.queries.TrialBalance(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung neraca saldo")
+		return
+	}
+
+	drifted := []*db.TrialBalanceRow{}
+	var totalDrift int64
+	for _, row := range rows {
+		if row.Drift != 0 {
+			drifted = append(drifted, row)
+			totalDrift += row.Drift
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"equation":    eq,
+		"balanced":    eq.Difference == 0,
+		"total_drift": totalDrift,
+		"drifted":     drifted,
+	})
+}

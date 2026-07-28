@@ -128,8 +128,33 @@ func (h *AccountAdjustmentsHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := service.UpdateBalance(ctx, qtx, accountID, body.Amount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun")
+	// A single-account adjustment has no counterparty by construction, so the
+	// balancing leg goes to equity. Previously only the target account moved,
+	// which unbalanced the books by the adjustment amount every time.
+	equityAcct, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.ManualAdjustmentEquityNumber, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "akun penyesuaian saldo tidak ditemukan")
+		return
+	}
+
+	// `amount` means "increase this account's balance", which is a debit on a
+	// debit-normal account and a credit on a credit-normal one.
+	target := service.Dr(accountID, body.Amount)
+	counter := service.Cr(equityAcct.ID.Bytes, body.Amount)
+	if account.AccountType == "liability" || account.AccountType == "equity" || account.AccountType == "revenue" {
+		target = service.Cr(accountID, body.Amount)
+		counter = service.Dr(equityAcct.ID.Bytes, body.Amount)
+	}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceAdjustment,
+		SourceID:    adjustment.ID.Bytes,
+		Description: body.Description,
+		CreatedBy:   userID,
+		Lines:       []service.Line{target, counter},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal penyesuaian")
 		return
 	}
 
@@ -241,12 +266,19 @@ func (h *AccountAdjustmentsHandler) Transfer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := service.UpdateBalance(ctx, qtx, fromAccountID, -body.Amount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun sumber")
-		return
-	}
-	if err := service.UpdateBalance(ctx, qtx, toAccountID, body.Amount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun tujuan")
+	// A transfer between two cash accounts: Cr the source, Dr the destination.
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceAdjustment,
+		SourceID:    transferID,
+		Description: body.Description,
+		CreatedBy:   userID,
+		Lines: []service.Line{
+			service.Cr(fromAccountID, body.Amount),
+			service.Dr(toAccountID, body.Amount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal transfer")
 		return
 	}
 

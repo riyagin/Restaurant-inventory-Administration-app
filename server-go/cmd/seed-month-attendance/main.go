@@ -369,7 +369,9 @@ func wageCatalog() []wageComponent {
 	gate := 90
 	return []wageComponent{
 		{name: "Tunjangan Jabatan", typ: "allowance", calcMethod: "fixed", amount: 500_000},
-		{name: "Uang Makan", typ: "allowance", calcMethod: "per_present_day", amount: 15_000},
+		// Handed out in cash every day, so it is informational on the payslip only
+		// (see wage_components.type 'daily_allowance') — never part of gross/net.
+		{name: "Uang Makan", typ: "daily_allowance", calcMethod: "per_present_day", amount: 15_000},
 		{name: "Tunjangan Kinerja", typ: "bonus", calcMethod: "fixed", minScore: &gate, amount: 300_000},
 		{name: "Iuran BPJS", typ: "deduction", calcMethod: "fixed", amount: 120_000},
 	}

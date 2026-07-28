@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { getItems, deleteItem, createItem } from '../api';
 
+// Stock and non-stock items have different history pages: stock items get
+// warehouse balances + movements, non-stock items only ever have invoice lines.
+const historyPath = (item) =>
+  item.is_stock === false ? `/items/history/${item.id}` : `/items/stock/${item.id}`;
+
 function UnitChain({ units }) {
   return (
     <span style={{fontSize:'0.85rem'}}>
@@ -324,9 +329,7 @@ export default function Items() {
             ) : items.map(item => (
               <tr key={item.id}>
                 <td style={{fontWeight: 500}}>
-                  {item.is_stock === false ? (
-                    <Link to={`/items/history/${item.id}`} style={{color:'#4f8ef7',textDecoration:'none'}}>{item.name}</Link>
-                  ) : item.name}
+                  <Link to={historyPath(item)} style={{color:'#4f8ef7',textDecoration:'none'}}>{item.name}</Link>
                 </td>
                 <td style={{color:'#888',fontSize:'0.85rem'}}>{item.code}</td>
                 <td>
@@ -339,9 +342,7 @@ export default function Items() {
                 <td><UnitChain units={item.units} /></td>
                 <td>
                   <div className="actions">
-                    {item.is_stock === false && (
-                      <Link to={`/items/history/${item.id}`} className="btn btn-secondary btn-sm">Riwayat</Link>
-                    )}
+                    <Link to={historyPath(item)} className="btn btn-secondary btn-sm">Riwayat</Link>
                     <Link to={`/items/edit/${item.id}`} className="btn btn-secondary btn-sm">Edit</Link>
                     <button onClick={() => handleDelete(item.id)} className="btn btn-danger btn-sm">Hapus</button>
                   </div>

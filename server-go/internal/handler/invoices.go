@@ -408,22 +408,18 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Update account balances
+	// 4. Post to the journal — Dr inventory (purchase) or expense, Cr payable.
+	// An account that cannot be resolved is left as uuid.Nil and lands in the
+	// suspense account; it is never skipped, which is what used to leave the
+	// entry one-sided.
+	var debitAcctID uuid.UUID
 	if invoiceType == "purchase" {
-		invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true})
-		if err == nil && invAcctID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, invAcctID.Bytes, grandTotal); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun inventaris")
-				return
-			}
+		if invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil && invAcctID.Valid {
+			debitAcctID = invAcctID.Bytes
 		}
 	} else {
-		expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID)
-		if err == nil && expAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, expAcctID, grandTotal); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban")
-				return
-			}
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+			debitAcctID = expAcctID
 		}
 	}
 
@@ -434,11 +430,20 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal menyiapkan akun hutang vendor")
 		return
 	}
-	if apAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcctID, grandTotal); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
-			return
-		}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        invoiceDate,
+		SourceType:  service.SourceInvoice,
+		SourceID:    invoiceID,
+		Description: fmt.Sprintf("Faktur %s %s", invoiceType, invoiceNumber),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(debitAcctID, grandTotal),
+			service.Cr(apAcctID, grandTotal),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal faktur")
+		return
 	}
 
 	// 5. If already paid/partial at creation, settle immediately within the same transaction
@@ -461,16 +466,24 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, fmt.Sprintf("saldo akun \"%s\" tidak cukup", cashAcct.Name))
 			return
 		}
-		// Debit AP (liability decreases — already credited above)
-		if apAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, apAcctID, -grandTotal); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
-				return
-			}
-		}
-		// Credit cash (asset decreases)
-		if err := service.UpdateBalance(ctx, qtx, cashAcctID, -grandTotal); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo kas")
+		// Settlement is its own financial event: Dr payable, Cr cash.
+		//
+		// NOTE: a "partial" invoice settles the full grandTotal here, because the
+		// create request carries no partial amount. That is pre-existing behaviour
+		// and it balances, but AP and cash are both overstated for partial
+		// invoices until the request grows an amount field.
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        invoiceDate,
+			SourceType:  service.SourceInvoicePay,
+			SourceID:    invoiceID,
+			Description: fmt.Sprintf("Pembayaran faktur %s", invoiceNumber),
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Dr(apAcctID, grandTotal),
+				service.Cr(cashAcctID, grandTotal),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembayaran")
 			return
 		}
 		if _, err := qtx.UpdateInvoicePayment(ctx, &db.UpdateInvoicePaymentParams{
@@ -597,7 +610,10 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	oldBranchID := old.BranchID.Bytes
 	oldDivisionID := old.DivisionID.Bytes
 
-	// 2. Reverse old account balances
+	// 2. Reverse the old posting. Only unpaid invoices reach here (paid ones are
+	// rejected above), so there is no settlement entry to unwind — just the
+	// original Dr inventory-or-expense / Cr payable.
+	var oldDebitAcctID uuid.UUID
 	if old.InvoiceType == "purchase" && old.WarehouseID.Valid {
 		for _, it := range oldItems {
 			if !it.ItemID.Valid {
@@ -621,20 +637,12 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal menghapus riwayat stok lama")
 			return
 		}
-		oldInvAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: oldWarehouseID, Valid: old.WarehouseID.Valid})
-		if err == nil && oldInvAcctID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, oldInvAcctID.Bytes, -old.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun inventaris")
-				return
-			}
+		if oldInvAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: oldWarehouseID, Valid: old.WarehouseID.Valid}); err == nil && oldInvAcctID.Valid {
+			oldDebitAcctID = oldInvAcctID.Bytes
 		}
 	} else if old.InvoiceType == "expense" {
-		expAcctID, err := invoiceExpenseAccountID(ctx, qtx, oldDivisionID, oldBranchID)
-		if err == nil && expAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, expAcctID, -old.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun beban")
-				return
-			}
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, oldDivisionID, oldBranchID); err == nil {
+			oldDebitAcctID = expAcctID
 		}
 	}
 
@@ -645,11 +653,23 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor lama")
 		return
 	}
-	if oldAPAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, oldAPAcctID, -old.TotalAmount); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang usaha")
-			return
-		}
+
+	// The reversal is appended as its own entry rather than rewriting the
+	// original — the ledger is append-only, matching the invoice edit/delete
+	// convention already used elsewhere.
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        invoiceDate,
+		SourceType:  service.SourceInvoice,
+		SourceID:    id,
+		Description: fmt.Sprintf("Pembalikan faktur %s (revisi)", old.InvoiceNumber),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Cr(oldDebitAcctID, old.TotalAmount),
+			service.Dr(oldAPAcctID, old.TotalAmount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan faktur")
+		return
 	}
 
 	// 3. Delete old items
@@ -753,22 +773,15 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 6. Apply new account balances
+	// 6. Post the revised invoice as a fresh entry.
+	var newDebitAcctID uuid.UUID
 	if old.InvoiceType == "purchase" {
-		newInvAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil})
-		if err == nil && newInvAcctID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, newInvAcctID.Bytes, grandTotal); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun inventaris")
-				return
-			}
+		if newInvAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil}); err == nil && newInvAcctID.Valid {
+			newDebitAcctID = newInvAcctID.Bytes
 		}
 	} else {
-		expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID)
-		if err == nil && expAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, expAcctID, grandTotal); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun beban")
-				return
-			}
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+			newDebitAcctID = expAcctID
 		}
 	}
 	newAPAcctID, err := service.VendorPayableAccountID(ctx, qtx, vendorID)
@@ -776,11 +789,20 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal menyiapkan akun hutang vendor")
 		return
 	}
-	if newAPAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, newAPAcctID, grandTotal); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang usaha")
-			return
-		}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        invoiceDate,
+		SourceType:  service.SourceInvoice,
+		SourceID:    id,
+		Description: fmt.Sprintf("Faktur %s (revisi)", old.InvoiceNumber),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(newDebitAcctID, grandTotal),
+			service.Cr(newAPAcctID, grandTotal),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal faktur revisi")
+		return
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -842,7 +864,8 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	branchID := inv.BranchID.Bytes
 	divisionID := inv.DivisionID.Bytes
 
-	// Reverse inventory lots + account (purchase)
+	// Reverse inventory lots + the account that was originally debited
+	var debitAcctID uuid.UUID
 	if inv.InvoiceType == "purchase" && inv.WarehouseID.Valid {
 		for _, it := range items {
 			if !it.ItemID.Valid {
@@ -866,58 +889,48 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal menghapus riwayat stok")
 			return
 		}
-		invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true})
-		if err == nil && invAcctID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, invAcctID.Bytes, -inv.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun inventaris")
-				return
-			}
+		if invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil && invAcctID.Valid {
+			debitAcctID = invAcctID.Bytes
 		}
 	} else if inv.InvoiceType == "expense" {
-		expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID)
-		if err == nil && expAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, expAcctID, -inv.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun beban")
-				return
-			}
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+			debitAcctID = expAcctID
 		}
 	}
 
-	// Reverse cash/AP based on payment_status
 	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, inv.VendorID.Bytes)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor")
 		return
 	}
+
+	// One reversing entry: credit back whatever was debited, and unwind the
+	// settlement side according to how much had been paid. Dated today rather
+	// than at the invoice date so a deletion never reaches back into a period
+	// that has already been reported on.
+	reversal := []service.Line{service.Cr(debitAcctID, inv.TotalAmount)}
 	switch inv.PaymentStatus {
 	case "paid":
-		if inv.AccountID.Valid {
-			if err := service.UpdateBalance(ctx, qtx, inv.AccountID.Bytes, inv.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memulihkan saldo kas")
-				return
-			}
-		}
+		reversal = append(reversal, service.Dr(inv.AccountID.Bytes, inv.TotalAmount))
 	case "partial":
-		if inv.AccountID.Valid && inv.AmountPaid > 0 {
-			if err := service.UpdateBalance(ctx, qtx, inv.AccountID.Bytes, inv.AmountPaid); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal memulihkan saldo kas")
-				return
-			}
-		}
-		unpaid := inv.TotalAmount - inv.AmountPaid
-		if apAcctID != uuid.Nil && unpaid > 0 {
-			if err := service.UpdateBalance(ctx, qtx, apAcctID, -unpaid); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang")
-				return
-			}
-		}
-	case "unpaid":
-		if apAcctID != uuid.Nil {
-			if err := service.UpdateBalance(ctx, qtx, apAcctID, -inv.TotalAmount); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membalik saldo hutang")
-				return
-			}
-		}
+		reversal = append(reversal,
+			service.Dr(inv.AccountID.Bytes, inv.AmountPaid),
+			service.Dr(apAcctID, inv.TotalAmount-inv.AmountPaid),
+		)
+	default: // unpaid
+		reversal = append(reversal, service.Dr(apAcctID, inv.TotalAmount))
+	}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceInvoice,
+		SourceID:    id,
+		Description: fmt.Sprintf("Pembalikan faktur %s (dihapus)", inv.InvoiceNumber),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines:       reversal,
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan faktur")
+		return
 	}
 
 	if err := qtx.DeleteInvoiceItems(ctx, invoiceUUID); err != nil {
@@ -1020,22 +1033,25 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	// Debit the vendor's AP sub-account (liability decreases)
+	// Settlement: Dr the vendor's AP sub-account, Cr cash.
 	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, inv.VendorID.Bytes)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor")
 		return
 	}
-	if apAcctID != uuid.Nil {
-		if err := service.UpdateBalance(ctx, qtx, apAcctID, -payAmount); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo hutang")
-			return
-		}
-	}
 
-	// Credit cash account (asset decreases)
-	if err := service.UpdateBalance(ctx, qtx, cashAcctID, -payAmount); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo kas")
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourceInvoicePay,
+		SourceID:    id,
+		Description: fmt.Sprintf("Pembayaran faktur %s", inv.InvoiceNumber),
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(apAcctID, payAmount),
+			service.Cr(cashAcctID, payAmount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembayaran")
 		return
 	}
 

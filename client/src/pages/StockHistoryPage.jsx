@@ -1,31 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getItem, getWarehouses, getStockHistory } from '../api';
-
-const SOURCE_PATH = {
-  invoice:  (id) => `/invoices/view/${id}`,
-  transfer: (id) => `/transfers/group/${id}`,
-  dispatch: (id) => `/dispatches/${id}`,
-  opname:   (id) => `/stock-opname/detail/${id}`,
-};
-
-const TYPE_LABEL = {
-  invoice:          'Invoice',
-  manual_in:        'Manual In',
-  manual_out:       'Manual Out',
-  manual_adjustment:'Adjustment',
-  pemakaian:        'Pemakaian',
-  SO:               'SO',
-};
-
-const TYPE_STYLE = {
-  invoice:           { background: '#e8f0fe', color: '#4f8ef7' },
-  manual_in:         { background: '#e6f9f0', color: '#27ae60' },
-  manual_out:        { background: '#fdecea', color: '#e74c3c' },
-  manual_adjustment: { background: '#fef9e7', color: '#e67e22' },
-  pemakaian:         { background: '#f3e8ff', color: '#8b5cf6' },
-  SO:                { background: '#fff3e0', color: '#f57c00' },
-};
+import { TYPE_LABEL, typeLabel, typeStyle, sourcePath } from '../stockMovements';
 
 const idr     = (v) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt     = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
@@ -124,15 +100,15 @@ export default function StockHistoryPage() {
               <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Tidak ada pergerakan ditemukan</td></tr>
             ) : rows.map(r => {
               const isPos = Number(r.quantity_change) > 0;
-              const style = TYPE_STYLE[r.type] ?? { background: '#eee', color: '#555' };
-              const refPath = r.source_type && r.source_id ? SOURCE_PATH[r.source_type]?.(r.source_id) : null;
+              const style = typeStyle(r.type);
+              const refPath = sourcePath(r.source_type, r.source_id);
               const val = r.value != null ? Number(r.value) : null;
               return (
                 <tr key={r.id}>
                   <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmtTime(r.created_at)}</td>
                   <td>
                     <span style={{ display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600, ...style }}>
-                      {TYPE_LABEL[r.type] ?? r.type}
+                      {typeLabel(r.type)}
                     </span>
                   </td>
                   <td style={{ fontWeight: 700, color: isPos ? '#27ae60' : '#e74c3c', whiteSpace: 'nowrap' }}>

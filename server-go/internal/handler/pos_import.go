@@ -152,20 +152,62 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 
 		qtx := h.queries.WithTx(tx)
 
-		// Update balances: revenue, expense, and cash lines. Discount lines are NOT updated.
-		allBalanceLines := append(append(entry.RevenueMappings, entry.ExpenseMappings...), entry.CashMappings...)
-		for _, m := range allBalanceLines {
+		// One journal entry per import: Dr cash, Dr expense, Cr revenue.
+		//
+		// Discount lines are still not posted. The revenue figures the POS
+		// exports are already net of discount (across the existing imports,
+		// recorded cash tracks recorded revenue to within a rounding error while
+		// discounts total ~51M), so posting them again would double-count.
+		//
+		// The expense lines are the ones that used to have no counter-leg at all,
+		// which is where 7,128,062 of the drift came from. A till expense has to
+		// be balanced by something; where the import's own numbers do not add up,
+		// the residual goes to the suspense account with a memo rather than being
+		// silently dropped.
+		var journalLines []service.Line
+		var net int64
+
+		addLine := func(m confirmMapping, debit bool) bool {
 			accountID, err := parseUUID(m.AccountID)
 			if err != nil {
 				tx.Rollback(ctx)
 				respondError(w, http.StatusBadRequest, fmt.Sprintf("account_id tidak valid untuk \"%s\"", m.Label))
+				return false
+			}
+			line := service.Cr(accountID, m.Amount)
+			if debit {
+				line = service.Dr(accountID, m.Amount)
+			}
+			journalLines = append(journalLines, line.WithMemo(m.Label))
+			net += line.Amount
+			return true
+		}
+
+		for _, m := range entry.CashMappings {
+			if !addLine(m, true) {
 				return
 			}
-			if err := service.UpdateBalance(ctx, qtx, accountID, m.Amount); err != nil {
+		}
+		for _, m := range entry.ExpenseMappings {
+			if !addLine(m, true) {
+				return
+			}
+		}
+		for _, m := range entry.RevenueMappings {
+			if !addLine(m, false) {
+				return
+			}
+		}
+
+		if net != 0 {
+			suspense, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.SuspenseAccountNumber, Valid: true})
+			if err != nil {
 				tx.Rollback(ctx)
-				respondError(w, http.StatusInternalServerError, "gagal memperbarui saldo akun")
+				respondError(w, http.StatusInternalServerError, "akun sementara tidak ditemukan")
 				return
 			}
+			journalLines = append(journalLines,
+				service.Dr(suspense.ID.Bytes, -net).WithMemo("selisih impor POS (kas + beban ≠ pendapatan)"))
 		}
 
 		imp, err := qtx.InsertPOSImport(ctx, &db.InsertPOSImportParams{
@@ -178,6 +220,20 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			tx.Rollback(ctx)
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan import")
+			return
+		}
+
+		// Posted after the import row exists so the entry carries its source id.
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        saleDate,
+			SourceType:  service.SourcePOSImport,
+			SourceID:    imp.ID.Bytes,
+			Description: description,
+			CreatedBy:   userID,
+			Lines:       journalLines,
+		}); err != nil {
+			tx.Rollback(ctx)
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal impor POS")
 			return
 		}
 
@@ -347,18 +403,47 @@ func (h *POSImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.queries.WithTx(tx)
 
-	// Reverse balances for all non-discount lines.
+	// Reverse the import: mirror of the confirm posting, with each line's
+	// direction taken from its line_type. Rebuilt from pos_import_lines rather
+	// than from the journal so that imports confirmed before the journal existed
+	// still reverse correctly.
+	var reversal []service.Line
+	var net int64
 	for _, line := range lines {
 		if line.LineType == "discount" {
 			continue
 		}
-		if !line.AccountID.Valid {
-			continue
+		var l service.Line
+		switch line.LineType {
+		case "cash", "expense":
+			l = service.Cr(uuidFromPg(line.AccountID), line.Amount)
+		default: // revenue
+			l = service.Dr(uuidFromPg(line.AccountID), line.Amount)
 		}
-		if err := service.UpdateBalance(ctx, qtx, line.AccountID.Bytes, -line.Amount); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal membalik saldo akun")
+		reversal = append(reversal, l)
+		net += l.Amount
+	}
+
+	if net != 0 {
+		suspense, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.SuspenseAccountNumber, Valid: true})
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "akun sementara tidak ditemukan")
 			return
 		}
+		reversal = append(reversal,
+			service.Dr(suspense.ID.Bytes, -net).WithMemo("selisih pembalikan impor POS"))
+	}
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        time.Now(),
+		SourceType:  service.SourcePOSImport,
+		SourceID:    id,
+		Description: "Pembalikan impor POS (dihapus)",
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines:       reversal,
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan impor POS")
+		return
 	}
 
 	// Cascade delete via pos_imports (lines deleted by FK CASCADE).

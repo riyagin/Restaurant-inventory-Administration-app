@@ -3,6 +3,7 @@ SELECT
     sh.id, sh.item_id, sh.warehouse_id, sh.quantity_change,
     sh.unit_name, sh.vendor, sh.type, sh.reference,
     sh.date, sh.created_at, sh.value,
+    sh.source_id, sh.source_type,
     w.name AS warehouse_name
 FROM stock_history sh
 LEFT JOIN warehouses w ON w.id = sh.warehouse_id

@@ -116,6 +116,9 @@ export const updateItem = (id, data) => api.put(`/items/${id}`, data);
 export const deleteItem = (id) => api.delete(`/items/${id}`);
 export const getItemHistory   = (id) => api.get(`/items/${id}/history`);
 export const getItemLastPrice = (id, params) => api.get(`/items/${id}/last-price`, { params });
+// Everything the stock-item history page needs in one call: on-hand stock per
+// warehouse, purchase invoice lines, dispatch usage, monthly/per-type rollups.
+export const getItemStockDetail = (id) => api.get(`/items/${id}/stock-detail`);
 
 export const getInventory = (params) => api.get('/inventory', { params });
 export const getInventoryCount = (params) => api.get('/inventory/count', { params });
@@ -404,6 +407,9 @@ export const regeneratePayrollLine = (id, employeeId) => api.post(`/hr/payroll/p
 export const reviewAllPayrollLines = (id) => api.post(`/hr/payroll/periods/${id}/review-all`);
 export const closePayrollPeriod  = (id) => api.post(`/hr/payroll/periods/${id}/close`);
 export const markPayrollPeriodPaid = (id) => api.post(`/hr/payroll/periods/${id}/mark-paid`);
+// Ledger posting runs automatically when a period is closed; this only re-runs one
+// that failed (after fixing its cause) instead of waiting for the retry sweep.
+export const retryPayrollPosting = (id) => api.post(`/hr/payroll/periods/${id}/post-accounting`);
 export const deletePayrollPeriod = (id) => api.delete(`/hr/payroll/periods/${id}`);
 export const getPayrollBonusEligible = (id, wageComponentId) => api.get(`/hr/payroll/periods/${id}/bonus-eligible`, { params: { wage_component_id: wageComponentId } });
 export const applyPayrollBonus = (id, data) => api.post(`/hr/payroll/periods/${id}/apply-bonus`, data);
