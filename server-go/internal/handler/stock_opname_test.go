@@ -254,3 +254,96 @@ func itemLastPriceSetup(t *testing.T, pool *pgxpool.Pool, itemID, warehouseID uu
 		pool.Exec(bCtx, `DELETE FROM vendors WHERE id = $1`, vendorID)
 	})
 }
+
+// TestStockOpname_SurplusConvertsPriceToBaseUnit covers surplus valuation when
+// the item's last purchase was priced at a larger unit than the one inventory is
+// stored in.
+//
+// Inventory lots live at the item's lowest unit (kaleng), but purchases are
+// often made by the dus. The surplus quantity is therefore in kaleng while
+// GetItemLastPrice returns a price per dus, and applying that price directly
+// values every single can at the price of a whole carton — a 24x overstatement
+// for this item.
+func TestStockOpname_SurplusConvertsPriceToBaseUnit(t *testing.T) {
+	pool := testutil.OpenDB(t)
+	userID := createTestUser(t, pool)
+	ctx := context.Background()
+	q := db.New(pool)
+	suffix := uuid.New().String()[:8]
+
+	invAcct, err := q.CreateAccount(ctx, &db.CreateAccountParams{
+		Name: "InvAcctUnit-" + suffix, AccountType: "asset",
+	})
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	itemID := uuid.New()
+	warehouseID := uuid.New()
+
+	// 1 dus = 24 kaleng; kaleng (index 1) is the base unit.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO items (id, name, code, units, is_stock)
+		 VALUES ($1, 'UnitItem-'||$2, 'UNI-'||$2,
+		         '[{"name":"dus","perPrev":null},{"name":"kaleng","perPrev":24}]', true)`,
+		itemID, suffix); err != nil {
+		t.Fatalf("insert item: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO warehouses (id, name, inventory_account_id) VALUES ($1, 'WHUnit-'||$2, $3)`,
+		warehouseID, suffix, invAcct.ID); err != nil {
+		t.Fatalf("insert warehouse: %v", err)
+	}
+
+	t.Cleanup(func() {
+		bCtx := context.Background()
+		pool.Exec(bCtx, `DELETE FROM journal_lines WHERE account_id = $1`, invAcct.ID)
+		pool.Exec(bCtx, `DELETE FROM inventory WHERE item_id = $1`, itemID)
+		pool.Exec(bCtx, `DELETE FROM stock_history WHERE item_id = $1`, itemID)
+		pool.Exec(bCtx, `DELETE FROM stock_opname_items WHERE item_id = $1`, itemID)
+		pool.Exec(bCtx, `DELETE FROM warehouses WHERE id = $1`, warehouseID)
+		pool.Exec(bCtx, `DELETE FROM items WHERE id = $1`, itemID)
+		pool.Exec(bCtx, `DELETE FROM accounts WHERE id = $1`, invAcct.ID)
+	})
+
+	// Last purchase: 240,000 per dus (unit_index 0) = 10,000 per kaleng.
+	itemLastPriceSetup(t, pool, itemID, warehouseID, 240_000)
+
+	// Existing stock: 10 kaleng.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO inventory (id, item_id, warehouse_id, quantity, unit_index, value, date)
+		 VALUES (gen_random_uuid(), $1, $2, 10, 1, 100000, '2026-01-01')`,
+		itemID, warehouseID); err != nil {
+		t.Fatalf("insert lot: %v", err)
+	}
+
+	// Count finds 34 kaleng → 24 kaleng surplus, worth exactly one dus.
+	h := handler.NewStockOpnameHandler(pool, db.New(pool))
+	authCtx := middleware.ContextWithClaims(ctx, testClaims(userID))
+
+	rr := postJSON(t, h.Create, authCtx, map[string]any{
+		"warehouse_id": warehouseID.String(),
+		"items": []map[string]any{{
+			"item_id": itemID.String(), "unit_index": 1,
+			"unit_name": "kaleng", "actual_quantity": 34.0,
+		}},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// The surplus lot is the one that is not the seeded 100000 lot.
+	var surplusValue int64
+	if err := pool.QueryRow(ctx,
+		`SELECT value FROM inventory
+		 WHERE item_id = $1 AND warehouse_id = $2 AND value <> 100000`,
+		itemID, warehouseID).Scan(&surplusValue); err != nil {
+		t.Fatalf("read surplus lot: %v", err)
+	}
+
+	// 24 kaleng x (240000 / 24) = 240000. Without the conversion this would be
+	// 24 x 240000 = 5,760,000.
+	if surplusValue != 240_000 {
+		t.Errorf("surplus value = %d, want 240000 (price converted to base unit)", surplusValue)
+	}
+}

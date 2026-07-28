@@ -3,19 +3,24 @@ package handler
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 type AccountsHandler struct {
+	pool    *pgxpool.Pool
 	queries *db.Queries
 }
 
-func NewAccountsHandler(queries *db.Queries) *AccountsHandler {
-	return &AccountsHandler{queries: queries}
+func NewAccountsHandler(pool *pgxpool.Pool, queries *db.Queries) *AccountsHandler {
+	return &AccountsHandler{pool: pool, queries: queries}
 }
 
 func (h *AccountsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -198,4 +203,157 @@ func (h *AccountsHandler) TrialBalance(w http.ResponseWriter, r *http.Request) {
 		"total_drift": totalDrift,
 		"drifted":     drifted,
 	})
+}
+
+// CapitalInjection records money the owner puts into the business — including
+// the cash carried over when a previous system is replaced.
+//
+// This exists because its absence is what broke the books in the first place.
+// There was no legitimate way to record an owner's deposit, so opening balances
+// were typed straight into accounts.balance (the old Node backend let
+// POST /api/accounts set a balance directly) with nothing on the credit side.
+// That is not an error in the money — the cash was real — but the matching
+// capital entry was missing, and the books were out by that amount from day one.
+//
+// Here the entry is two-sided by construction: Dr the cash account, Cr "Modal
+// Pemilik". There is no way to record one without the other.
+func (h *AccountsHandler) CapitalInjection(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AccountID   string `json:"account_id"`
+		Amount      int64  `json:"amount"`
+		Date        string `json:"date"`
+		Description string `json:"description"`
+	}
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	if body.Amount <= 0 {
+		respondError(w, http.StatusBadRequest, "jumlah setoran harus lebih dari nol")
+		return
+	}
+
+	accountID, err := parseUUID(body.AccountID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "account_id tidak valid")
+		return
+	}
+
+	entryDate := time.Now()
+	if body.Date != "" {
+		parsed, err := time.Parse("2006-01-02", body.Date)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "format tanggal tidak valid (gunakan YYYY-MM-DD)")
+			return
+		}
+		entryDate = parsed
+	}
+
+	ctx := r.Context()
+
+	target, err := h.queries.GetAccountByID(ctx, pgtype.UUID{Bytes: accountID, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "akun tujuan tidak ditemukan")
+		return
+	}
+	// Capital arrives as an asset — cash, a bank account, equipment. Crediting
+	// equity against anything else is a different transaction entirely.
+	if target.AccountType != "asset" {
+		respondError(w, http.StatusBadRequest, "setoran modal harus masuk ke akun aset")
+		return
+	}
+
+	capital, err := h.queries.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.OwnerCapitalAccountNumber, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "akun modal pemilik tidak ditemukan")
+		return
+	}
+
+	description := strings.TrimSpace(body.Description)
+	if description == "" {
+		description = "Setoran modal pemilik"
+	}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.queries.WithTx(tx)
+
+	if _, err := service.Post(ctx, qtx, service.Entry{
+		Date:        entryDate,
+		SourceType:  service.SourceCapital,
+		Description: description,
+		CreatedBy:   middleware.UserIDFromCtx(ctx),
+		Lines: []service.Line{
+			service.Dr(accountID, body.Amount),
+			service.Cr(capital.ID.Bytes, body.Amount),
+		},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal setoran modal")
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan setoran modal")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "CapitalInjection",
+		Description: description,
+	})
+
+	respondJSON(w, http.StatusCreated, map[string]any{
+		"account":     target.Name,
+		"amount":      body.Amount,
+		"credited_to": capital.Name,
+	})
+}
+
+// CashReconciliation reports, per cash account, the balance against what
+// recorded transactions actually explain. A positive `unexplained` is money that
+// entered outside any transaction — the signature of an opening balance carried
+// over from a previous system, or of a one-sided write.
+//
+// Run this before trusting the capital/error split that migration 042 made:
+// check each figure against what the old system said the account held at
+// cutover, and move anything misattributed between "Modal Pemilik" and
+// "Selisih Migrasi" with an ordinary journal entry.
+func (h *AccountsHandler) CashReconciliation(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.pool.Query(r.Context(), `
+		SELECT id, name, balance, explained, unexplained
+		FROM cash_reconciliation ORDER BY unexplained DESC`)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung rekonsiliasi kas")
+		return
+	}
+	defer rows.Close()
+
+	type row struct {
+		ID          pgtype.UUID `json:"id"`
+		Name        string      `json:"name"`
+		Balance     int64       `json:"balance"`
+		Explained   int64       `json:"explained"`
+		Unexplained int64       `json:"unexplained"`
+	}
+	out := []row{}
+	for rows.Next() {
+		var v row
+		if err := rows.Scan(&v.ID, &v.Name, &v.Balance, &v.Explained, &v.Unexplained); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membaca rekonsiliasi kas")
+			return
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membaca rekonsiliasi kas")
+		return
+	}
+	respondJSON(w, http.StatusOK, out)
 }

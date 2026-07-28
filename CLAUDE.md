@@ -224,6 +224,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | DailyReport | `/reports/daily` | Yes |
 | FinancialReport | `/reports/financial` | Yes |
 | InventoryValueReport | `/reports/inventory-value` | Yes |
+| PriceChangeReport | `/reports/price-changes` | Yes |
+| UsageTrendReport | `/reports/usage-trend` | Yes |
 | AccountAdjustments | `/account-adjustments` | Yes |
 | NonStockItemDetail | `/items/history/:id` | Yes |
 | StockItemDetail | `/items/stock/:id` | Yes |
@@ -346,9 +348,9 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Warehouses** (4): CRUD /api/warehouses
 
-**Vendors** (5): CRUD /api/vendors + GET /api/vendors/:id/history
+**Vendors** (5): CRUD /api/vendors + GET /api/vendors/:id/history (vendor + invoices it appears on + per-item purchase breakdown with latest/avg price + payable summary — powers the vendor activity page)
 
-**Items** (9): CRUD /api/items + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page)
+**Items** (10): CRUD /api/items + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page) + GET /:id/price-history (purchase price rolled up per unit, per vendor and per month — powers the "Riwayat Harga" tab on both item detail pages)
 
 **Accounts** (4): CRUD /api/accounts
 
@@ -386,7 +388,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Enumerations** (3): GET, POST, DELETE /:id — /api/enumerations
 
-**Reports** (4): GET /api/reports/financial, /daily, /inventory-value, /expense-summary
+**Reports** (6): GET /api/reports/financial, /daily, /inventory-value, /expense-summary + /price-changes (weighted fixed-basket purchase-price index per week over a range, plus per item/unit first-vs-last price and rupiah impact) + /usage-trend (daily item usage over a range: stock items via dispatch stock_history, non-stock items via invoice lines, with start-vs-end percentage changes)
 
 **Stats** (3): GET /api/stats, /stats/daily-sales, /stats/stock-flow
 
@@ -408,11 +410,11 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **HR Kasbon** (8): GET/POST /api/hr/kasbons; GET/:id; PUT/:id; POST process/cancel/approve/reject
 
-**HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips ZIP
+**HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips (single PDF, two slips per A4-landscape page — cut down the middle for two A5-portrait slips)
 
 **HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo
 
-_(HR total: ~78 endpoints; grand total: ~174)_
+_(HR total: ~78 endpoints; grand total: ~175)_
 
 ---
 

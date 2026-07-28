@@ -103,7 +103,7 @@ func main() {
 	warehousesHandler := handler.NewWarehousesHandler(pool, queries)
 	vendorsHandler := handler.NewVendorsHandler(pool, queries)
 	itemsHandler := handler.NewItemsHandler(queries)
-	accountsHandler := handler.NewAccountsHandler(queries)
+	accountsHandler := handler.NewAccountsHandler(pool, queries)
 	templatesHandler := handler.NewInvoiceTemplatesHandler(pool, queries)
 	branchesHandler := handler.NewBranchesHandler(pool, queries)
 	divisionsHandler := handler.NewDivisionsHandler(pool, queries)
@@ -122,6 +122,7 @@ func main() {
 	activityLogHandler := handler.NewActivityLogHandler(queries)
 	adjustmentsHandler := handler.NewAccountAdjustmentsHandler(pool, queries)
 	reportsHandler := handler.NewReportsHandler(pool, queries)
+	analyticsHandler := handler.NewAnalyticsHandler(pool, queries)
 	statsHandler := handler.NewStatsHandler(pool)
 	hrEmployeesHandler := handler.NewHREmployeesHandler(pool, queries)
 	hrEmployeesHandler.SetUploadsDir(cfg.UploadsDir)
@@ -215,6 +216,7 @@ func main() {
 		r.Get("/api/items/{id}/history", itemsHandler.GetHistory)
 		r.Get("/api/items/{id}/stock-history", itemsHandler.GetStockHistory)
 		r.Get("/api/items/{id}/stock-detail", itemsHandler.GetStockDetail)
+		r.Get("/api/items/{id}/price-history", itemsHandler.GetPriceHistory)
 		r.Post("/api/items", itemsHandler.Create)
 		r.Put("/api/items/{id}", itemsHandler.Update)
 		r.Delete("/api/items/{id}", itemsHandler.Delete)
@@ -222,9 +224,14 @@ func main() {
 		// Accounts — all authenticated
 		r.Get("/api/accounts", accountsHandler.List)
 		r.Get("/api/accounts/trial-balance", accountsHandler.TrialBalance)
+		r.Get("/api/accounts/cash-reconciliation", accountsHandler.CashReconciliation)
 		r.Post("/api/accounts", accountsHandler.Create)
 		r.Put("/api/accounts/{id}", accountsHandler.Update)
 		r.Delete("/api/accounts/{id}", accountsHandler.Delete)
+		// Owner capital deposits — the supported way to put money into the
+		// business, including cash carried over from a previous system. Admin
+		// only: it moves equity.
+		r.With(appmiddleware.RequireAdmin).Post("/api/accounts/capital-injection", accountsHandler.CapitalInjection)
 
 		// Invoice Templates — all authenticated
 		r.Get("/api/invoice-templates", templatesHandler.List)
@@ -556,6 +563,8 @@ func main() {
 		r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
 		r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
 		r.Get("/api/expense-report", reportsHandler.ExpenseReport)
+		r.Get("/api/reports/price-changes", analyticsHandler.PriceChanges)
+		r.Get("/api/reports/usage-trend", analyticsHandler.UsageTrend)
 		r.Get("/api/stats", statsHandler.GeneralStats)
 		r.Get("/api/stats/daily-sales", statsHandler.DailySales)
 		r.Get("/api/stats/stock-flow", statsHandler.StockFlow)

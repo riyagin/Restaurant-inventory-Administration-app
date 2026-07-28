@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getItem, getItemHistory } from '../api';
+import ItemPriceBreakdown from '../components/ItemPriceBreakdown';
+
+const TABS = [
+  ['riwayat', 'Riwayat Pembelian'],
+  ['harga',   'Riwayat Harga'],
+];
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -11,6 +17,7 @@ export default function NonStockItemDetail() {
   const [item, setItem]       = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab]         = useState('riwayat');
 
   useEffect(() => {
     Promise.all([getItem(id), getItemHistory(id)]).then(([ir, hr]) => {
@@ -63,6 +70,22 @@ export default function NonStockItemDetail() {
         ))}
       </div>
 
+      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        {TABS.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={tab === key ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'harga' && <ItemPriceBreakdown itemId={id} />}
+
+      {tab === 'riwayat' && (
       <div className="card">
         <div className="card-header"><h2>Riwayat Pembelian &amp; Pemakaian</h2></div>
         {history.length === 0 ? (
@@ -73,6 +96,7 @@ export default function NonStockItemDetail() {
               <tr>
                 <th>Tanggal</th>
                 <th>Invoice</th>
+                <th>Vendor</th>
                 <th>Cabang</th>
                 <th>Divisi</th>
                 <th style={{ textAlign: 'right' }}>Qty</th>
@@ -87,6 +111,7 @@ export default function NonStockItemDetail() {
                 <tr key={row.id ?? idx}>
                   <td style={{ color: '#888', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{fmt(row.date)}</td>
                   <td style={{ fontWeight: 600 }}>{row.invoice_number}</td>
+                  <td style={{ color: '#555' }}>{row.vendor_name ?? <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>}</td>
                   <td style={{ color: '#555' }}>{row.branch_name ?? <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>}</td>
                   <td style={{ color: '#555' }}>{row.division_name ?? <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{Number(row.quantity).toLocaleString('id-ID')}</td>
@@ -101,7 +126,7 @@ export default function NonStockItemDetail() {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Pengeluaran:</td>
+                <td colSpan={8} style={{ textAlign: 'right', fontWeight: 600, paddingTop: '0.75rem', color: '#555' }}>Total Pengeluaran:</td>
                 <td style={{ textAlign: 'right', fontWeight: 700, paddingTop: '0.75rem', color: '#e74c3c' }}>{idr(totalSpend)}</td>
                 <td></td>
               </tr>
@@ -109,6 +134,7 @@ export default function NonStockItemDetail() {
           </table>
         )}
       </div>
+      )}
     </>
   );
 }

@@ -29,6 +29,8 @@ import StockOpnameDetail from './pages/StockOpnameDetail';
 import NonStockItemDetail from './pages/NonStockItemDetail';
 import StockItemDetail from './pages/StockItemDetail';
 import InventoryValueReport from './pages/InventoryValueReport';
+import PriceChangeReport from './pages/PriceChangeReport';
+import UsageTrendReport from './pages/UsageTrendReport';
 import Recipes from './pages/Recipes';
 import Productions from './pages/Productions';
 import Enumerations from './pages/Enumerations';
@@ -232,6 +234,9 @@ function Nav() {
           {menuLink('/reports/statement', 'Dokumen Laporan Keuangan')}
           {menuLink('/expense-report', 'Laporan Pengeluaran')}
           {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
+          <div className="nav-dropdown-divider" />
+          {menuLink('/reports/price-changes', 'Perubahan Harga')}
+          {menuLink('/reports/usage-trend', 'Perubahan Pemakaian')}
         </NavDropdown>
 
         <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
@@ -309,6 +314,8 @@ function Nav() {
             <Link to="/reports/statement" className={isActive('/reports/statement') ? 'active' : ''}>Dokumen Laporan Keuangan</Link>
             <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
             <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
+            <Link to="/reports/price-changes" className={isActive('/reports/price-changes') ? 'active' : ''}>Perubahan Harga</Link>
+            <Link to="/reports/usage-trend" className={isActive('/reports/usage-trend') ? 'active' : ''}>Perubahan Pemakaian</Link>
           </MobileSection>
 
           <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
@@ -381,6 +388,8 @@ export default function App() {
                 <Route path="/sales/import" element={<SalesImport />} />
                 <Route path="/expense-report" element={<ExpenseReport />} />
                 <Route path="/reports/inventory-value" element={<InventoryValueReport />} />
+                <Route path="/reports/price-changes" element={<PriceChangeReport />} />
+                <Route path="/reports/usage-trend" element={<UsageTrendReport />} />
                 <Route path="/reports/financial" element={<FinancialReport />} />
                 <Route path="/reports/statement" element={<FinancialStatement />} />
                 <Route path="/reports/daily" element={<DailyReport />} />

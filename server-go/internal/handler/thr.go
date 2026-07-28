@@ -1,12 +1,9 @@
 package handler
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -769,7 +766,9 @@ func (h *ThrHandler) DownloadPayslip(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(pdfBytes)
 }
 
-// DownloadRunPayslips — GET /api/hr/thr/runs/:id/payslips (ZIP of all line PDFs)
+// DownloadRunPayslips — GET /api/hr/thr/runs/:id/payslips
+// One PDF holding every THR slip in the run, two per A4-landscape page so each
+// sheet cuts into two A5-portrait slips.
 func (h *ThrHandler) DownloadRunPayslips(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -808,34 +807,30 @@ func (h *ThrHandler) DownloadRunPayslips(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
 	dateStr := run.PaymentDate.Time.Format("2006-01-02")
+	slips := make([]service.PayslipData, 0, len(lines))
 	for _, l := range lines {
-		data, lineRow, derr := h.buildThrPayslipData(ctx, l.ID)
+		data, _, derr := h.buildThrPayslipData(ctx, l.ID)
 		if derr != nil {
 			continue
 		}
-		pdfBytes, perr := service.BuildPayslipPDF(data)
-		if perr != nil {
-			continue
-		}
-		entryName := fmt.Sprintf("slip-thr-%s-%s.pdf", lineRow.EmployeeCode, dateStr)
-		fwz, werr := zw.Create(entryName)
-		if werr != nil {
-			continue
-		}
-		_, _ = io.Copy(fwz, bytes.NewReader(pdfBytes))
+		slips = append(slips, data)
 	}
-	if err := zw.Close(); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membuat arsip ZIP")
+	if len(slips) == 0 {
+		respondError(w, http.StatusInternalServerError, "gagal menyiapkan data slip THR")
 		return
 	}
 
-	zipName := fmt.Sprintf("slip-thr-%s.zip", dateStr)
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
-	_, _ = w.Write(buf.Bytes())
+	pdfBytes, err := service.BuildPayslipSheetPDF(slips)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat PDF slip THR")
+		return
+	}
+
+	filename := fmt.Sprintf("slip-thr-%s.pdf", dateStr)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	_, _ = w.Write(pdfBytes)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

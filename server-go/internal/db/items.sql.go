@@ -232,6 +232,211 @@ func (q *Queries) GetItemPurchaseHistory(ctx context.Context, itemID pgtype.UUID
 	return items, nil
 }
 
+const getItemPriceByUnit = `-- name: GetItemPriceByUnit :many
+SELECT
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    COUNT(DISTINCT COALESCE(ii.vendor_id, inv.vendor_id))::int AS vendor_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    MIN(inv.date)                       AS first_purchase_date,
+    MAX(inv.date)                       AS last_purchase_date,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it     ON it.id = ii.item_id
+WHERE ii.item_id = $1
+GROUP BY ii.unit_index, it.units->ii.unit_index->>'name'
+ORDER BY total_spend DESC
+`
+
+type GetItemPriceByUnitRow struct {
+	UnitIndex         pgtype.Int4    `json:"unit_index"`
+	UnitName          pgtype.Text    `json:"unit_name"`
+	TotalQuantity     pgtype.Numeric `json:"total_quantity"`
+	TotalSpend        int64          `json:"total_spend"`
+	PurchaseCount     int32          `json:"purchase_count"`
+	VendorCount       int32          `json:"vendor_count"`
+	MinPrice          int64          `json:"min_price"`
+	MaxPrice          int64          `json:"max_price"`
+	FirstPurchaseDate pgtype.Date    `json:"first_purchase_date"`
+	LastPurchaseDate  pgtype.Date    `json:"last_purchase_date"`
+	LastPrice         int64          `json:"last_price"`
+	FirstPrice        int64          `json:"first_price"`
+}
+
+func (q *Queries) GetItemPriceByUnit(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceByUnitRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceByUnit, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemPriceByUnitRow
+	for rows.Next() {
+		var i GetItemPriceByUnitRow
+		if err := rows.Scan(
+			&i.UnitIndex,
+			&i.UnitName,
+			&i.TotalQuantity,
+			&i.TotalSpend,
+			&i.PurchaseCount,
+			&i.VendorCount,
+			&i.MinPrice,
+			&i.MaxPrice,
+			&i.FirstPurchaseDate,
+			&i.LastPurchaseDate,
+			&i.LastPrice,
+			&i.FirstPrice,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemPriceByVendor = `-- name: GetItemPriceByVendor :many
+SELECT
+    v.id   AS vendor_id,
+    v.name AS vendor_name,
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    MIN(inv.date)                       AS first_purchase_date,
+    MAX(inv.date)                       AS last_purchase_date,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
+FROM invoice_items ii
+JOIN invoices inv   ON inv.id = ii.invoice_id
+JOIN items it       ON it.id  = ii.item_id
+LEFT JOIN vendors v ON v.id   = COALESCE(ii.vendor_id, inv.vendor_id)
+WHERE ii.item_id = $1
+GROUP BY v.id, v.name, ii.unit_index, it.units->ii.unit_index->>'name'
+ORDER BY MAX(inv.date) DESC
+`
+
+type GetItemPriceByVendorRow struct {
+	VendorID          pgtype.UUID    `json:"vendor_id"`
+	VendorName        pgtype.Text    `json:"vendor_name"`
+	UnitIndex         pgtype.Int4    `json:"unit_index"`
+	UnitName          pgtype.Text    `json:"unit_name"`
+	TotalQuantity     pgtype.Numeric `json:"total_quantity"`
+	TotalSpend        int64          `json:"total_spend"`
+	PurchaseCount     int32          `json:"purchase_count"`
+	MinPrice          int64          `json:"min_price"`
+	MaxPrice          int64          `json:"max_price"`
+	FirstPurchaseDate pgtype.Date    `json:"first_purchase_date"`
+	LastPurchaseDate  pgtype.Date    `json:"last_purchase_date"`
+	LastPrice         int64          `json:"last_price"`
+	FirstPrice        int64          `json:"first_price"`
+}
+
+func (q *Queries) GetItemPriceByVendor(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceByVendorRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceByVendor, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemPriceByVendorRow
+	for rows.Next() {
+		var i GetItemPriceByVendorRow
+		if err := rows.Scan(
+			&i.VendorID,
+			&i.VendorName,
+			&i.UnitIndex,
+			&i.UnitName,
+			&i.TotalQuantity,
+			&i.TotalSpend,
+			&i.PurchaseCount,
+			&i.MinPrice,
+			&i.MaxPrice,
+			&i.FirstPurchaseDate,
+			&i.LastPurchaseDate,
+			&i.LastPrice,
+			&i.FirstPrice,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getItemPriceTrend = `-- name: GetItemPriceTrend :many
+SELECT
+    to_char(date_trunc('month', inv.date), 'YYYY-MM') AS month,
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it     ON it.id = ii.item_id
+WHERE ii.item_id = $1
+GROUP BY 1, ii.unit_index, 3
+ORDER BY 1 DESC
+`
+
+type GetItemPriceTrendRow struct {
+	Month         pgtype.Text    `json:"month"`
+	UnitIndex     pgtype.Int4    `json:"unit_index"`
+	UnitName      pgtype.Text    `json:"unit_name"`
+	TotalQuantity pgtype.Numeric `json:"total_quantity"`
+	TotalSpend    int64          `json:"total_spend"`
+	PurchaseCount int32          `json:"purchase_count"`
+	MinPrice      int64          `json:"min_price"`
+	MaxPrice      int64          `json:"max_price"`
+	LastPrice     int64          `json:"last_price"`
+}
+
+func (q *Queries) GetItemPriceTrend(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceTrendRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceTrend, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemPriceTrendRow
+	for rows.Next() {
+		var i GetItemPriceTrendRow
+		if err := rows.Scan(
+			&i.Month,
+			&i.UnitIndex,
+			&i.UnitName,
+			&i.TotalQuantity,
+			&i.TotalSpend,
+			&i.PurchaseCount,
+			&i.MinPrice,
+			&i.MaxPrice,
+			&i.LastPrice,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getItemStockByWarehouse = `-- name: GetItemStockByWarehouse :many
 SELECT
     w.id   AS warehouse_id,

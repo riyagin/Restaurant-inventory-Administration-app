@@ -28,7 +28,17 @@ const (
 	SourceTHR         = "thr"
 	SourceVendorMerge = "vendor_merge"
 	SourceOpening     = "opening_balance"
+	SourceCapital     = "capital_injection"
 )
+
+// OwnerCapitalAccountNumber is the equity account owner deposits are credited
+// to — including cash carried over when a previous system is replaced.
+const OwnerCapitalAccountNumber = 30100
+
+// DeliveryFeeReceivableNumber is where the POS "Biaya Tambahan" delivery fee is
+// debited. The fee is earned at the sale but excluded from the POS payment
+// breakdown, so it is receivable from the delivery platform until settled.
+const DeliveryFeeReceivableNumber = 10400
 
 // SuspenseAccountNumber is where a leg lands when its account cannot be
 // resolved — an unconfigured warehouse inventory account, a branch with no

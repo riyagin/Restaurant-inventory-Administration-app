@@ -400,32 +400,32 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 	qtx := h.queries.WithTx(tx)
 	today := time.Now()
 
-	// Get or create Stock Waste account
-	wasteAccountID, err := qtx.GetStockWasteAccountID(ctx)
+	// Get or create the inventory variance account.
+	varianceAccountID, err := qtx.GetInventoryVarianceAccountID(ctx)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusInternalServerError, "gagal mencari akun stok waste")
 			return
 		}
 		created, err := qtx.CreateAccount(ctx, &db.CreateAccountParams{
-			Name:        "Stock Waste",
+			Name:        "Selisih Persediaan",
 			AccountType: "expense",
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membuat akun stok waste")
 			return
 		}
-		wasteAccountID = created.ID
+		varianceAccountID = created.ID
 	}
 
 	// Both directions of a count difference post against the same pair, so an
 	// over-count nets against an under-count instead of accumulating in
 	// unrelated accounts:
-	//   loss    Dr Stock Waste (expense)  Cr inventory
-	//   surplus Dr inventory              Cr Stock Waste
+	//   loss    Dr Selisih Persediaan  Cr inventory
+	//   surplus Dr inventory           Cr Selisih Persediaan
 	// The surplus leg used to be posted alone, which added inventory value out
 	// of thin air; that is what overstated Persediaan.
-	wasteAcctID := uuidFromPg(wasteAccountID)
+	varianceAcctID := uuidFromPg(varianceAccountID)
 	invAcctID := uuidFromPg(wh.InventoryAccountID)
 
 	// Insert stock_opname header
@@ -502,7 +502,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 					CreatedBy:   middleware.UserIDFromCtx(ctx),
 					Lines: []service.Line{
 						service.Dr(invAcctID, surplusValue),
-						service.Cr(wasteAcctID, surplusValue),
+						service.Cr(varianceAcctID, surplusValue),
 					},
 				}); err != nil {
 					respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal selisih lebih")
@@ -549,7 +549,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 				Description: "Selisih kurang stok opname (waste)",
 				CreatedBy:   middleware.UserIDFromCtx(ctx),
 				Lines: []service.Line{
-					service.Dr(wasteAcctID, wasteValue),
+					service.Dr(varianceAcctID, wasteValue),
 					service.Cr(invAcctID, wasteValue),
 				},
 			}); err != nil {
@@ -641,26 +641,26 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 	qtx := h.queries.WithTx(tx)
 	now := time.Now()
 
-	// Get or create Stock Waste account (same as Create).
-	wasteAccountID, err := qtx.GetStockWasteAccountID(ctx)
+	// Get or create the inventory variance account (same as Create).
+	varianceAccountID, err := qtx.GetInventoryVarianceAccountID(ctx)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusInternalServerError, "gagal mencari akun stok waste")
 			return
 		}
 		created, err := qtx.CreateAccount(ctx, &db.CreateAccountParams{
-			Name:        "Stock Waste",
+			Name:        "Selisih Persediaan",
 			AccountType: "expense",
 		})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membuat akun stok waste")
 			return
 		}
-		wasteAccountID = created.ID
+		varianceAccountID = created.ID
 	}
 
 	// Same posting pair as Create — see the comment there.
-	wasteAcctID := uuidFromPg(wasteAccountID)
+	varianceAcctID := uuidFromPg(varianceAccountID)
 	invAcctID := uuidFromPg(wh.InventoryAccountID)
 
 	applied := 0
@@ -712,7 +712,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 					CreatedBy:   middleware.UserIDFromCtx(ctx),
 					Lines: []service.Line{
 						service.Dr(invAcctID, surplusValue),
-						service.Cr(wasteAcctID, surplusValue),
+						service.Cr(varianceAcctID, surplusValue),
 					},
 				}); err != nil {
 					respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal selisih lebih")
@@ -760,7 +760,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 				Description: "Koreksi selisih kurang stok opname (waste)",
 				CreatedBy:   middleware.UserIDFromCtx(ctx),
 				Lines: []service.Line{
-					service.Dr(wasteAcctID, wasteValue),
+					service.Dr(varianceAcctID, wasteValue),
 					service.Cr(invAcctID, wasteValue),
 				},
 			}); err != nil {
@@ -806,13 +806,64 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// latestItemValue returns the total IDR value to assign to `qty` surplus units
-// using the most recent purchase price for the item+unitIndex. Returns 0 if unknown.
+// latestItemValue returns the total IDR value to assign to `qty` surplus units,
+// priced from the item's most recent purchase. Returns 0 if unknown.
+//
+// `qty` is a base-unit quantity (inventory lots are stored at the item's lowest
+// unit), but the last purchase may have been priced at any unit — a carton
+// rather than a can. The price is therefore converted down to the base unit
+// before it is applied.
+//
+// Skipping that conversion is a real overstatement, not a theoretical one: an
+// item bought by the dus at 24 cans per dus had its surplus valued at the dus
+// price for every single can.
 func latestItemValue(ctx context.Context, qtx *db.Queries, itemID uuid.UUID, unitIndex int32, qty float64) int64 {
 	row, err := qtx.GetItemLastPrice(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 	if err != nil {
 		return 0
 	}
-	// price is per unit at the recorded unit_index; use it directly
-	return int64(math.Round(float64(row.Price) * qty))
+
+	priceUnitIndex := int32(0)
+	if row.UnitIndex.Valid {
+		priceUnitIndex = row.UnitIndex.Int32
+	}
+
+	pricePerBase := float64(row.Price)
+	if item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true}); err == nil {
+		if factor := baseUnitFactor(item.Units, priceUnitIndex); factor > 0 {
+			pricePerBase /= factor
+		}
+	}
+
+	return int64(math.Round(pricePerBase * qty))
+}
+
+// baseUnitFactor returns how many base units make up one unit at idx — the
+// product of every perPrev below it. The base unit is the last entry in the
+// array, so the factor for the base unit itself is 1.
+//
+// Example: [{dus}, {kaleng, perPrev: 24}] → factor(0) = 24, factor(1) = 1.
+//
+// Returns 1 when the units cannot be read, which leaves the caller's price
+// unchanged rather than scaling it by a guess.
+func baseUnitFactor(unitsJSON []byte, idx int32) float64 {
+	var units []struct {
+		Name    string   `json:"name"`
+		PerPrev *float64 `json:"perPrev"`
+	}
+	if err := json.Unmarshal(unitsJSON, &units); err != nil {
+		return 1
+	}
+	if idx < 0 || int(idx) >= len(units) {
+		return 1
+	}
+
+	factor := 1.0
+	for i := int(idx) + 1; i < len(units); i++ {
+		if units[i].PerPrev == nil || *units[i].PerPrev <= 0 {
+			continue
+		}
+		factor *= *units[i].PerPrev
+	}
+	return factor
 }

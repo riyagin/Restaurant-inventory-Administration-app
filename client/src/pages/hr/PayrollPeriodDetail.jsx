@@ -255,7 +255,7 @@ export default function PayrollPeriodDetail() {
     setBusy(true); setError('');
     try {
       const r = await downloadPeriodPayslips(id);
-      saveBlob(r.data, `slip-gaji-periode-${monthSlug(period.period_month)}.zip`);
+      saveBlob(r.data, `slip-gaji-periode-${monthSlug(period.period_month)}.pdf`);
     } catch {
       setError('Gagal mengunduh semua slip gaji');
     } finally {
@@ -401,8 +401,9 @@ export default function PayrollPeriodDetail() {
           )}
           {downloadablePayslips && (
             <button onClick={doDownloadAll} disabled={busy}
+              title="PDF A4 landscape, 2 karyawan per halaman. Potong di garis putus-putus untuk mendapat 2 slip A5 potrait."
               style={{ background: '#fff', color: '#1967d2', border: '1px solid #1967d2', borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
-              Unduh Semua Slip
+              Unduh Semua Slip (A4, 2 per halaman)
             </button>
           )}
           {period.status === 'open' && (

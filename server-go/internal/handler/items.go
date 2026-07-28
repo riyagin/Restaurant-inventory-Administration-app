@@ -216,6 +216,71 @@ func (h *ItemsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, history)
 }
 
+// GetPriceHistory returns how the purchase price of an item has moved over
+// time: rolled up per unit, per vendor, and per month. Prices are always kept
+// split by unit — a price per dus and a price per pcs are not the same number.
+func (h *ItemsHandler) GetPriceHistory(w http.ResponseWriter, r *http.Request) {
+	rawID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	id := pgtype.UUID{Bytes: rawID, Valid: true}
+	ctx := r.Context()
+
+	item, err := h.queries.GetItemByID(ctx, id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "item tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil item")
+		return
+	}
+
+	byUnit, err := h.queries.GetItemPriceByUnit(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan harga")
+		return
+	}
+	byVendor, err := h.queries.GetItemPriceByVendor(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil harga per vendor")
+		return
+	}
+	trend, err := h.queries.GetItemPriceTrend(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil tren harga")
+		return
+	}
+	purchases, err := h.queries.GetItemPurchaseHistory(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
+		return
+	}
+
+	if byUnit == nil {
+		byUnit = []*db.GetItemPriceByUnitRow{}
+	}
+	if byVendor == nil {
+		byVendor = []*db.GetItemPriceByVendorRow{}
+	}
+	if trend == nil {
+		trend = []*db.GetItemPriceTrendRow{}
+	}
+	if purchases == nil {
+		purchases = []*db.GetItemPurchaseHistoryRow{}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"item":      itemToResponse(item),
+		"by_unit":   byUnit,
+		"by_vendor": byVendor,
+		"monthly":   trend,
+		"purchases": purchases,
+	})
+}
+
 // GetStockHistory returns the raw stock_history rows for an item, optionally
 // bounded by ?from=/?to= dates.
 func (h *ItemsHandler) GetStockHistory(w http.ResponseWriter, r *http.Request) {

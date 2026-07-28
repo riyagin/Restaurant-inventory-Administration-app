@@ -48,26 +48,46 @@ const getVendorHistory = `-- name: GetVendorHistory :many
 SELECT
     i.id,
     i.invoice_number,
+    i.reference_number,
     i.date,
+    i.due_date,
     i.invoice_type,
     i.payment_status,
+    i.payment_method,
+    i.amount_paid,
+    a.name AS account_name,
+    w.name AS warehouse_name,
+    COALESCE(i.vendor_id = $1, FALSE) AS is_primary,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount,
-    i.amount_paid
+    COALESCE(SUM(ii.price * ii.quantity)
+        FILTER (WHERE COALESCE(ii.vendor_id, i.vendor_id) = $1), 0)::BIGINT AS vendor_amount,
+    COUNT(ii.id)::int AS line_count
 FROM invoices i
 LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+LEFT JOIN accounts a       ON a.id = i.account_id
+LEFT JOIN warehouses w     ON w.id = i.warehouse_id
 WHERE i.vendor_id = $1
-GROUP BY i.id, i.invoice_number, i.date, i.invoice_type, i.payment_status, i.amount_paid
-ORDER BY i.date DESC
+   OR EXISTS (SELECT 1 FROM invoice_items x WHERE x.invoice_id = i.id AND x.vendor_id = $1)
+GROUP BY i.id, a.name, w.name
+ORDER BY i.date DESC, i.created_at DESC
 `
 
 type GetVendorHistoryRow struct {
-	ID            pgtype.UUID `json:"id"`
-	InvoiceNumber string      `json:"invoice_number"`
-	Date          pgtype.Date `json:"date"`
-	InvoiceType   string      `json:"invoice_type"`
-	PaymentStatus string      `json:"payment_status"`
-	TotalAmount   int64       `json:"total_amount"`
-	AmountPaid    int64       `json:"amount_paid"`
+	ID              pgtype.UUID `json:"id"`
+	InvoiceNumber   string      `json:"invoice_number"`
+	ReferenceNumber pgtype.Text `json:"reference_number"`
+	Date            pgtype.Date `json:"date"`
+	DueDate         pgtype.Date `json:"due_date"`
+	InvoiceType     string      `json:"invoice_type"`
+	PaymentStatus   string      `json:"payment_status"`
+	PaymentMethod   pgtype.Text `json:"payment_method"`
+	AmountPaid      int64       `json:"amount_paid"`
+	AccountName     pgtype.Text `json:"account_name"`
+	WarehouseName   pgtype.Text `json:"warehouse_name"`
+	IsPrimary       bool        `json:"is_primary"`
+	TotalAmount     int64       `json:"total_amount"`
+	VendorAmount    int64       `json:"vendor_amount"`
+	LineCount       int32       `json:"line_count"`
 }
 
 func (q *Queries) GetVendorHistory(ctx context.Context, vendorID pgtype.UUID) ([]*GetVendorHistoryRow, error) {
@@ -82,11 +102,98 @@ func (q *Queries) GetVendorHistory(ctx context.Context, vendorID pgtype.UUID) ([
 		if err := rows.Scan(
 			&i.ID,
 			&i.InvoiceNumber,
+			&i.ReferenceNumber,
 			&i.Date,
+			&i.DueDate,
 			&i.InvoiceType,
 			&i.PaymentStatus,
-			&i.TotalAmount,
+			&i.PaymentMethod,
 			&i.AmountPaid,
+			&i.AccountName,
+			&i.WarehouseName,
+			&i.IsPrimary,
+			&i.TotalAmount,
+			&i.VendorAmount,
+			&i.LineCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getVendorItemSummary = `-- name: GetVendorItemSummary :many
+SELECT
+    it.id      AS item_id,
+    it.name    AS item_name,
+    it.code    AS item_code,
+    it.is_stock,
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric              AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint    AS total_spend,
+    COUNT(*)::int                          AS purchase_count,
+    MIN(ii.price)::bigint                  AS min_price,
+    MAX(ii.price)::bigint                  AS max_price,
+    MIN(inv.date)                          AS first_purchase_date,
+    MAX(inv.date)                          AS last_purchase_date,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it     ON it.id = ii.item_id
+WHERE COALESCE(ii.vendor_id, inv.vendor_id) = $1
+GROUP BY it.id, it.name, it.code, it.is_stock, ii.unit_index, it.units->ii.unit_index->>'name'
+ORDER BY total_spend DESC
+`
+
+type GetVendorItemSummaryRow struct {
+	ItemID            pgtype.UUID    `json:"item_id"`
+	ItemName          string         `json:"item_name"`
+	ItemCode          string         `json:"item_code"`
+	IsStock           bool           `json:"is_stock"`
+	UnitIndex         pgtype.Int4    `json:"unit_index"`
+	UnitName          pgtype.Text    `json:"unit_name"`
+	TotalQuantity     pgtype.Numeric `json:"total_quantity"`
+	TotalSpend        int64          `json:"total_spend"`
+	PurchaseCount     int32          `json:"purchase_count"`
+	MinPrice          int64          `json:"min_price"`
+	MaxPrice          int64          `json:"max_price"`
+	FirstPurchaseDate pgtype.Date    `json:"first_purchase_date"`
+	LastPurchaseDate  pgtype.Date    `json:"last_purchase_date"`
+	LastPrice         int64          `json:"last_price"`
+	FirstPrice        int64          `json:"first_price"`
+}
+
+func (q *Queries) GetVendorItemSummary(ctx context.Context, vendorID pgtype.UUID) ([]*GetVendorItemSummaryRow, error) {
+	rows, err := q.db.Query(ctx, getVendorItemSummary, vendorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetVendorItemSummaryRow
+	for rows.Next() {
+		var i GetVendorItemSummaryRow
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.ItemName,
+			&i.ItemCode,
+			&i.IsStock,
+			&i.UnitIndex,
+			&i.UnitName,
+			&i.TotalQuantity,
+			&i.TotalSpend,
+			&i.PurchaseCount,
+			&i.MinPrice,
+			&i.MaxPrice,
+			&i.FirstPurchaseDate,
+			&i.LastPurchaseDate,
+			&i.LastPrice,
+			&i.FirstPrice,
 		); err != nil {
 			return nil, err
 		}

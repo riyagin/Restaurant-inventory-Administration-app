@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"archive/zip"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -247,8 +245,8 @@ func (h *PayslipHandler) DownloadPayslip(w http.ResponseWriter, r *http.Request)
 }
 
 // DownloadPeriodPayslips — GET /api/hr/payroll/periods/:id/payslips
-// Streams a ZIP containing one PDF per payroll line in the period. Rejects open
-// periods with a 409.
+// Streams a single PDF holding every payslip in the period, two per A4-landscape
+// page so each sheet cuts into two A5-portrait slips. Rejects open periods (409).
 func (h *PayslipHandler) DownloadPeriodPayslips(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -287,35 +285,30 @@ func (h *PayslipHandler) DownloadPeriodPayslips(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Build the ZIP into a buffer (payslips are small; A4 PDFs ~ a few KB each).
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
 	monthStr := period.PeriodMonth.Time.Format("2006-01")
+	slips := make([]service.PayslipData, 0, len(lines))
 	for _, l := range lines {
-		data, lineRow, derr := h.buildPayslipData(r, l.ID)
+		data, _, derr := h.buildPayslipData(r, l.ID)
 		if derr != nil {
 			continue
 		}
-		pdfBytes, perr := service.BuildPayslipPDF(data)
-		if perr != nil {
-			continue
-		}
-		entryName := fmt.Sprintf("slip-gaji-%s-%s.pdf", lineRow.EmployeeCode, monthStr)
-		fwz, werr := zw.Create(entryName)
-		if werr != nil {
-			continue
-		}
-		_, _ = io.Copy(fwz, bytes.NewReader(pdfBytes))
+		slips = append(slips, data)
 	}
-	if err := zw.Close(); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membuat arsip ZIP")
+	if len(slips) == 0 {
+		respondError(w, http.StatusInternalServerError, "gagal menyiapkan data slip gaji")
 		return
 	}
 
-	zipName := fmt.Sprintf("slip-gaji-periode-%s.zip", monthStr)
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, zipName))
-	_, _ = w.Write(buf.Bytes())
+	pdfBytes, err := service.BuildPayslipSheetPDF(slips)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat PDF slip gaji")
+		return
+	}
+
+	filename := fmt.Sprintf("slip-gaji-periode-%s.pdf", monthStr)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	_, _ = w.Write(pdfBytes)
 }
 
 // ── HR Settings ───────────────────────────────────────────────────────────────

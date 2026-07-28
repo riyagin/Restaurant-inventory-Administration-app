@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getItemStockDetail, getStockHistory } from '../api';
 import { typeLabel, typeStyle, sourcePath } from '../stockMovements';
+import ItemPriceBreakdown from '../components/ItemPriceBreakdown';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(v) || 0);
@@ -24,6 +25,7 @@ const PAYMENT_STYLE = {
 const TABS = [
   ['ringkasan',  'Ringkasan'],
   ['pembelian',  'Pembelian'],
+  ['harga',      'Riwayat Harga'],
   ['pemakaian',  'Pemakaian'],
   ['pergerakan', 'Pergerakan Stok'],
 ];
@@ -337,6 +339,8 @@ export default function StockItemDetail() {
           </table>
         </Card>
       )}
+
+      {tab === 'harga' && <ItemPriceBreakdown itemId={id} />}
 
       {tab === 'pemakaian' && (
         <>

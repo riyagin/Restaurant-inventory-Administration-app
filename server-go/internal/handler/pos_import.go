@@ -152,18 +152,29 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 
 		qtx := h.queries.WithTx(tx)
 
-		// One journal entry per import: Dr cash, Dr expense, Cr revenue.
+		// One journal entry per import:
 		//
-		// Discount lines are still not posted. The revenue figures the POS
-		// exports are already net of discount (across the existing imports,
-		// recorded cash tracks recorded revenue to within a rounding error while
-		// discounts total ~51M), so posting them again would double-count.
+		//   Dr cash accounts        the payment-channel breakdown
+		//     Cr revenue accounts   per-category net sales
+		//   Dr Piutang Ongkir DO    delivery fee earned, not yet settled
+		//     Cr the mapped account delivery fee revenue
 		//
-		// The expense lines are the ones that used to have no counter-leg at all,
-		// which is where 7,128,062 of the drift came from. A till expense has to
-		// be balanced by something; where the import's own numbers do not add up,
-		// the residual goes to the suspense account with a memo rather than being
-		// silently dropped.
+		// Discount lines are not posted. The parser computes Net = gross - disc
+		// (service/pos_import.go) and the payment breakdown sums to Net, so the
+		// revenue figures are already net of discount — posting them again would
+		// double-count. Confirmed across the existing imports: cash equals
+		// revenue on 100 of 103 while discounts total ~51M.
+		//
+		// "ExpenseMappings" carries the POS "Biaya Tambahan" column, which is the
+		// delivery fee — revenue, despite the field name (kept for the client's
+		// payload shape). It used to be debited as an expense with no credit leg,
+		// which is where 7,128,062 of the drift came from. Net excludes it and so
+		// does the payment breakdown, so the money is earned but not yet in any
+		// cash account: it is a receivable until the platform settles.
+		//
+		// With both pairs balanced, the only residual left is the POS's own
+		// rounding (a few rupiah per import), which still goes to the suspense
+		// account rather than being dropped.
 		var journalLines []service.Line
 		var net int64
 
@@ -188,15 +199,30 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		for _, m := range entry.ExpenseMappings {
-			if !addLine(m, true) {
-				return
-			}
-		}
 		for _, m := range entry.RevenueMappings {
 			if !addLine(m, false) {
 				return
 			}
+		}
+
+		// Delivery fee: Cr the mapped revenue account, Dr the receivable.
+		var deliveryFee int64
+		for _, m := range entry.ExpenseMappings {
+			if !addLine(m, false) {
+				return
+			}
+			deliveryFee += m.Amount
+		}
+		if deliveryFee != 0 {
+			receivable, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.DeliveryFeeReceivableNumber, Valid: true})
+			if err != nil {
+				tx.Rollback(ctx)
+				respondError(w, http.StatusInternalServerError, "akun piutang ongkir DO tidak ditemukan")
+				return
+			}
+			journalLines = append(journalLines,
+				service.Dr(receivable.ID.Bytes, deliveryFee).WithMemo("ongkir DO belum diterima dari platform"))
+			net += deliveryFee
 		}
 
 		if net != 0 {
@@ -207,7 +233,7 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			journalLines = append(journalLines,
-				service.Dr(suspense.ID.Bytes, -net).WithMemo("selisih impor POS (kas + beban ≠ pendapatan)"))
+				service.Dr(suspense.ID.Bytes, -net).WithMemo("pembulatan impor POS"))
 		}
 
 		imp, err := qtx.InsertPOSImport(ctx, &db.InsertPOSImportParams{
@@ -409,17 +435,35 @@ func (h *POSImportHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// still reverse correctly.
 	var reversal []service.Line
 	var net int64
+	var deliveryFee int64
 	for _, line := range lines {
 		if line.LineType == "discount" {
 			continue
 		}
 		var l service.Line
 		switch line.LineType {
-		case "cash", "expense":
+		case "cash":
 			l = service.Cr(uuidFromPg(line.AccountID), line.Amount)
+		case "expense":
+			// The "Biaya Tambahan" delivery fee, credited to revenue on confirm
+			// against a receivable — so reversing debits the revenue back and
+			// releases the receivable below.
+			l = service.Dr(uuidFromPg(line.AccountID), line.Amount)
+			deliveryFee += line.Amount
 		default: // revenue
 			l = service.Dr(uuidFromPg(line.AccountID), line.Amount)
 		}
+		reversal = append(reversal, l)
+		net += l.Amount
+	}
+
+	if deliveryFee != 0 {
+		receivable, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.DeliveryFeeReceivableNumber, Valid: true})
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "akun piutang ongkir DO tidak ditemukan")
+			return
+		}
+		l := service.Cr(receivable.ID.Bytes, deliveryFee)
 		reversal = append(reversal, l)
 		net += l.Amount
 	}

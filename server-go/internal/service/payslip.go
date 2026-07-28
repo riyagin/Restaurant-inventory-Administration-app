@@ -84,29 +84,88 @@ func formatRupiah(n int64) string {
 	return out
 }
 
-// BuildPayslipPDF renders a single A4 payslip and returns the PDF bytes. It is
-// robust to a missing/unreadable logo (simply skips the image). No DB access.
-func BuildPayslipPDF(d PayslipData) ([]byte, error) {
-	pdf := fpdf.New("P", "mm", "A4", "")
-	pdf.SetMargins(15, 15, 15)
-	pdf.SetAutoPageBreak(true, 15)
-	pdf.AddPage()
+// Sheet geometry. Payslips are printed two-up on A4 *landscape* (297 x 210) and
+// split down the middle, which yields two A5 *portrait* halves (148.5 x 210) —
+// each one a self-contained slip. Cutting an A4 portrait sheet horizontally would
+// instead give landscape A5, which is why the sheet is landscape here.
+const (
+	sheetW    = 297.0
+	sheetH    = 210.0
+	panelW    = sheetW / 2 // 148.5 — one A5 portrait half
+	panelPadX = 9.0
+	panelPadY = 10.0
+	panelBotY = 8.0
+)
 
-	const pageW = 210.0
-	const left = 15.0
-	const right = 15.0
-	contentW := pageW - left - right // 180
+// BuildPayslipPDF renders a single payslip: one A4-landscape sheet with the slip
+// on the left half and the right half left blank, so it prints and cuts exactly
+// like a page from the bulk sheet. Robust to a missing/unreadable logo.
+func BuildPayslipPDF(d PayslipData) ([]byte, error) {
+	return BuildPayslipSheetPDF([]PayslipData{d})
+}
+
+// BuildPayslipSheetPDF renders many payslips two-up: each A4-landscape page holds
+// two A5-portrait slips side by side, separated by a dashed cut guide. Cutting
+// along the guide produces two portrait A5 documents.
+func BuildPayslipSheetPDF(items []PayslipData) ([]byte, error) {
+	pdf := fpdf.New("L", "mm", "A4", "")
+	pdf.SetMargins(panelPadX, panelPadY, panelPadX)
+	// Every panel is positioned absolutely and sized to fit an A5 half, so the
+	// automatic page break must stay off — otherwise a long slip would spill onto
+	// a new page and desynchronise the two-up pairing.
+	pdf.SetAutoPageBreak(false, 0)
+
+	if len(items) == 0 {
+		pdf.AddPage()
+	}
+	for i, d := range items {
+		if i%2 == 0 {
+			pdf.AddPage()
+			drawCutGuide(pdf)
+		}
+		originX := 0.0
+		if i%2 == 1 {
+			originX = panelW
+		}
+		drawPayslipPanel(pdf, d, originX)
+	}
+
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// drawCutGuide draws the dashed vertical line the sheet is cut along.
+func drawCutGuide(pdf *fpdf.Fpdf) {
+	pdf.SetLineWidth(0.2)
+	pdf.SetDrawColor(150, 150, 150)
+	pdf.SetDashPattern([]float64{2, 2}, 0)
+	pdf.Line(panelW, 4, panelW, sheetH-4)
+	pdf.SetDashPattern([]float64{}, 0)
+	pdf.SetDrawColor(0, 0, 0)
+}
+
+// drawPayslipPanel renders one complete slip inside the A5 half starting at
+// originX. All coordinates are absolute so the two panels never interfere. It
+// returns the Y the body ended at (footer excluded, since that is bottom-pinned)
+// so tests can assert a dense slip still fits inside the half.
+func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
+	left := originX + panelPadX
+	contentW := panelW - 2*panelPadX // 130.5
+	colW := contentW / 2
 
 	// ── Header: logo + company (left), SLIP GAJI + period (right) ──────────────
-	headerTop := pdf.GetY()
+	headerTop := panelPadY
 	logoW := 0.0
 	if d.LogoPath != "" {
 		// Register the image first; on any error (missing/corrupt file) clear the
 		// error state and render without a logo so a bad logo never aborts the slip.
 		info := pdf.RegisterImageOptions(d.LogoPath, fpdf.ImageOptions{})
 		if pdf.Ok() && info != nil {
-			pdf.ImageOptions(d.LogoPath, left, headerTop, 22, 0, false, fpdf.ImageOptions{}, 0, "")
-			logoW = 26
+			pdf.ImageOptions(d.LogoPath, left, headerTop, 15, 0, false, fpdf.ImageOptions{}, 0, "")
+			logoW = 18
 		}
 		if !pdf.Ok() {
 			pdf.ClearError()
@@ -115,16 +174,16 @@ func BuildPayslipPDF(d PayslipData) ([]byte, error) {
 	}
 
 	pdf.SetXY(left+logoW, headerTop)
-	pdf.SetFont("Arial", "B", 14)
+	pdf.SetFont("Arial", "B", 11)
 	company := d.CompanyName
 	if strings.TrimSpace(company) == "" {
 		company = "Perusahaan"
 	}
-	pdf.CellFormat(contentW/2-logoW, 7, tr(company), "", 2, "L", false, 0, "")
-	pdf.SetFont("Arial", "", 9)
+	pdf.CellFormat(contentW*0.58-logoW, 5.5, tr(company), "", 2, "L", false, 0, "")
+	pdf.SetFont("Arial", "", 7)
 	if strings.TrimSpace(d.Address) != "" {
 		pdf.SetX(left + logoW)
-		pdf.MultiCell(contentW/2-logoW, 5, tr(d.Address), "", "L", false)
+		pdf.MultiCell(contentW*0.58-logoW, 3.4, tr(d.Address), "", "L", false)
 	}
 
 	// Right block.
@@ -132,128 +191,130 @@ func BuildPayslipPDF(d PayslipData) ([]byte, error) {
 	if title == "" {
 		title = "SLIP GAJI"
 	}
-	pdf.SetXY(left+contentW/2, headerTop)
-	pdf.SetFont("Arial", "B", 16)
-	pdf.CellFormat(contentW/2, 8, tr(title), "", 2, "R", false, 0, "")
-	pdf.SetFont("Arial", "", 10)
-	pdf.SetX(left + contentW/2)
-	pdf.CellFormat(contentW/2, 6, tr("Periode: "+d.PeriodLabel), "", 1, "R", false, 0, "")
+	pdf.SetXY(left+contentW*0.58, headerTop)
+	pdf.SetFont("Arial", "B", 12)
+	pdf.CellFormat(contentW*0.42, 6, tr(title), "", 2, "R", false, 0, "")
+	pdf.SetFont("Arial", "", 8)
+	pdf.SetX(left + contentW*0.58)
+	pdf.CellFormat(contentW*0.42, 4.5, tr("Periode: "+d.PeriodLabel), "", 1, "R", false, 0, "")
 
-	pdf.SetY(headerTop + 24)
+	pdf.SetY(headerTop + 17)
 	pdf.SetLineWidth(0.3)
-	pdf.Line(left, pdf.GetY(), pageW-right, pdf.GetY())
-	pdf.Ln(4)
+	pdf.Line(left, pdf.GetY(), left+contentW, pdf.GetY())
+	pdf.Ln(2.5)
 
 	// ── Employee info (two columns) ────────────────────────────────────────────
-	pdf.SetFont("Arial", "", 10)
-	colW := contentW / 2
 	infoRow := func(lk, lv, rk, rv string) {
-		y := pdf.GetY()
-		pdf.SetXY(left, y)
-		pdf.SetFont("Arial", "B", 10)
-		pdf.CellFormat(35, 6, tr(lk), "", 0, "L", false, 0, "")
-		pdf.SetFont("Arial", "", 10)
-		pdf.CellFormat(colW-35, 6, tr(": "+lv), "", 0, "L", false, 0, "")
-		pdf.SetFont("Arial", "B", 10)
-		pdf.CellFormat(40, 6, tr(rk), "", 0, "L", false, 0, "")
-		pdf.SetFont("Arial", "", 10)
-		pdf.CellFormat(colW-40, 6, tr(": "+rv), "", 1, "L", false, 0, "")
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 7.5)
+		pdf.CellFormat(22, 4.5, tr(lk), "", 0, "L", false, 0, "")
+		pdf.SetFont("Arial", "", 7.5)
+		pdf.CellFormat(colW-22, 4.5, tr(": "+lv), "", 0, "L", false, 0, "")
+		pdf.SetFont("Arial", "B", 7.5)
+		pdf.CellFormat(24, 4.5, tr(rk), "", 0, "L", false, 0, "")
+		pdf.SetFont("Arial", "", 7.5)
+		pdf.CellFormat(colW-24, 4.5, tr(": "+rv), "", 1, "L", false, 0, "")
 	}
 	infoRow("Karyawan", d.EmployeeName+" ("+d.EmployeeCode+")", "Jabatan", orDash(d.Position))
-	infoRow("Cabang", orDash(d.Branch), "Tanggal Bergabung", orDash(d.JoinDate))
-	pdf.Ln(3)
+	infoRow("Cabang", orDash(d.Branch), "Bergabung", orDash(d.JoinDate))
+	pdf.Ln(2)
 
 	// ── Two-column earnings / deductions ───────────────────────────────────────
-	tableTop := pdf.GetY()
-	pdf.SetFont("Arial", "B", 11)
-	pdf.SetXY(left, tableTop)
-	pdf.CellFormat(colW-2, 7, "PENDAPATAN", "B", 0, "L", false, 0, "")
+	const amtW = 26.0
+	pdf.SetX(left)
+	pdf.SetFont("Arial", "B", 8.5)
+	pdf.CellFormat(colW-2, 5.5, "PENDAPATAN", "B", 0, "L", false, 0, "")
 	pdf.SetX(left + colW + 2)
-	pdf.CellFormat(colW-2, 7, "POTONGAN", "B", 1, "L", false, 0, "")
+	pdf.CellFormat(colW-2, 5.5, "POTONGAN", "B", 1, "L", false, 0, "")
 
-	pdf.SetFont("Arial", "", 9)
+	pdf.SetFont("Arial", "", 7)
 	maxRows := len(d.Earnings)
 	if len(d.Deductions) > maxRows {
 		maxRows = len(d.Deductions)
 	}
-	rowY := pdf.GetY() + 1
+	rowY := pdf.GetY() + 0.8
 	for i := 0; i < maxRows; i++ {
 		pdf.SetXY(left, rowY)
 		if i < len(d.Earnings) {
-			pdf.CellFormat(colW-32, 6, tr(d.Earnings[i].Label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(30, 6, formatRupiah(d.Earnings[i].Amount), "", 0, "R", false, 0, "")
+			pdf.CellFormat(colW-2-amtW, 4.2, tr(d.Earnings[i].Label), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 4.2, formatRupiah(d.Earnings[i].Amount), "", 0, "R", false, 0, "")
 		} else {
-			pdf.CellFormat(colW-2, 6, "", "", 0, "L", false, 0, "")
+			pdf.CellFormat(colW-2, 4.2, "", "", 0, "L", false, 0, "")
 		}
 		pdf.SetX(left + colW + 2)
 		if i < len(d.Deductions) {
-			pdf.CellFormat(colW-34, 6, tr(d.Deductions[i].Label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(30, 6, formatRupiah(d.Deductions[i].Amount), "", 1, "R", false, 0, "")
+			pdf.CellFormat(colW-2-amtW, 4.2, tr(d.Deductions[i].Label), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 4.2, formatRupiah(d.Deductions[i].Amount), "", 1, "R", false, 0, "")
 		} else {
-			pdf.CellFormat(colW-2, 6, "", "", 1, "L", false, 0, "")
+			pdf.CellFormat(colW-2, 4.2, "", "", 1, "L", false, 0, "")
 		}
 		rowY = pdf.GetY()
 	}
 
 	// Totals row.
-	pdf.SetY(rowY + 1)
-	pdf.SetFont("Arial", "B", 10)
+	pdf.SetY(rowY + 0.8)
+	pdf.SetFont("Arial", "B", 7.5)
 	pdf.SetX(left)
-	pdf.CellFormat(colW-32, 7, "Total Pendapatan", "T", 0, "L", false, 0, "")
-	pdf.CellFormat(30, 7, formatRupiah(d.TotalEarnings), "T", 0, "R", false, 0, "")
+	pdf.CellFormat(colW-2-amtW, 5.5, "Total Pendapatan", "T", 0, "L", false, 0, "")
+	pdf.CellFormat(amtW, 5.5, formatRupiah(d.TotalEarnings), "T", 0, "R", false, 0, "")
 	pdf.SetX(left + colW + 2)
-	pdf.CellFormat(colW-34, 7, "Total Potongan", "T", 0, "L", false, 0, "")
-	pdf.CellFormat(30, 7, formatRupiah(d.TotalDeduction), "T", 1, "R", false, 0, "")
-	pdf.Ln(4)
+	pdf.CellFormat(colW-2-amtW, 5.5, "Total Potongan", "T", 0, "L", false, 0, "")
+	pdf.CellFormat(amtW, 5.5, formatRupiah(d.TotalDeduction), "T", 1, "R", false, 0, "")
+	pdf.Ln(3)
 
 	// ── Net pay box ────────────────────────────────────────────────────────────
-	pdf.SetFont("Arial", "B", 12)
+	pdf.SetX(left)
+	pdf.SetFont("Arial", "B", 9.5)
 	pdf.SetFillColor(240, 243, 247)
-	pdf.CellFormat(contentW, 9, tr("GAJI BERSIH (Take Home Pay): "+formatRupiah(d.NetPay)), "1", 1, "C", true, 0, "")
-	pdf.SetFont("Arial", "I", 9)
+	pdf.CellFormat(contentW, 7.5, tr("GAJI BERSIH: "+formatRupiah(d.NetPay)), "1", 1, "C", true, 0, "")
+	pdf.SetX(left)
+	pdf.SetFont("Arial", "I", 7)
 	terbilang := Terbilang(d.NetPay) + " rupiah"
-	pdf.MultiCell(contentW, 5, tr("Terbilang: "+capitalizeFirst(terbilang)), "", "C", false)
-	pdf.Ln(4)
+	pdf.MultiCell(contentW, 3.6, tr("Terbilang: "+capitalizeFirst(terbilang)), "", "C", false)
+	pdf.Ln(2.5)
 
 	// ── Dibayar harian (informational, outside the take-home total) ────────────
 	if len(d.DailyPaid) > 0 {
 		var dailyTotal int64
-		pdf.SetFont("Arial", "B", 9)
-		pdf.CellFormat(contentW, 6, tr("DIBAYAR HARIAN (di luar transfer gaji)"), "B", 1, "L", false, 0, "")
-		pdf.SetFont("Arial", "", 9)
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 7)
+		pdf.CellFormat(contentW, 4.5, tr("DIBAYAR HARIAN (di luar transfer gaji)"), "B", 1, "L", false, 0, "")
+		pdf.SetFont("Arial", "", 7)
 		for _, it := range d.DailyPaid {
 			dailyTotal += it.Amount
-			pdf.CellFormat(contentW-32, 5, tr(it.Label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(32, 5, formatRupiah(it.Amount), "", 1, "R", false, 0, "")
+			pdf.SetX(left)
+			pdf.CellFormat(contentW-amtW, 4, tr(it.Label), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 4, formatRupiah(it.Amount), "", 1, "R", false, 0, "")
 		}
-		pdf.SetFont("Arial", "B", 9)
-		pdf.CellFormat(contentW-32, 5, tr("Total Dibayar Harian"), "T", 0, "L", false, 0, "")
-		pdf.CellFormat(32, 5, formatRupiah(dailyTotal), "T", 1, "R", false, 0, "")
-		pdf.SetFont("Arial", "I", 8)
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 7)
+		pdf.CellFormat(contentW-amtW, 4, tr("Total Dibayar Harian"), "T", 0, "L", false, 0, "")
+		pdf.CellFormat(amtW, 4, formatRupiah(dailyTotal), "T", 1, "R", false, 0, "")
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "I", 6.5)
 		pdf.SetTextColor(110, 110, 110)
-		pdf.MultiCell(contentW, 4, tr("Sudah diterima tunai secara harian, tidak termasuk dalam gaji bersih di atas."), "", "L", false)
+		pdf.MultiCell(contentW, 3.2, tr("Sudah diterima tunai secara harian, tidak termasuk dalam gaji bersih di atas."), "", "L", false)
 		pdf.SetTextColor(0, 0, 0)
-		pdf.Ln(3)
-	}
-
-	// ── Catatan + footer ───────────────────────────────────────────────────────
-	if strings.TrimSpace(d.Note) != "" {
-		pdf.SetFont("Arial", "", 9)
-		pdf.MultiCell(contentW, 5, tr("Catatan: "+d.Note), "", "L", false)
 		pdf.Ln(2)
 	}
+
+	// ── Catatan ────────────────────────────────────────────────────────────────
+	if strings.TrimSpace(d.Note) != "" {
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "", 7)
+		pdf.MultiCell(contentW, 3.6, tr("Catatan: "+d.Note), "", "L", false)
+	}
+	bodyEnd := pdf.GetY()
+
+	// ── Footer, pinned to the bottom of the A5 half ────────────────────────────
 	if strings.TrimSpace(d.PayslipFooter) != "" {
-		pdf.SetFont("Arial", "I", 8)
+		pdf.SetXY(left, sheetH-panelBotY-6)
+		pdf.SetFont("Arial", "I", 6.5)
 		pdf.SetTextColor(110, 110, 110)
-		pdf.MultiCell(contentW, 4, tr(d.PayslipFooter), "", "C", false)
+		pdf.MultiCell(contentW, 3, tr(d.PayslipFooter), "", "C", false)
 		pdf.SetTextColor(0, 0, 0)
 	}
-
-	var buf bytes.Buffer
-	if err := pdf.Output(&buf); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return bodyEnd
 }
 
 // tr converts a UTF-8 string to the cp1252 encoding fpdf's core fonts expect.

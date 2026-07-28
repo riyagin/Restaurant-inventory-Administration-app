@@ -223,20 +223,78 @@ func (h *VendorsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"message": "vendor berhasil dihapus"})
 }
 
+// GetHistory bundles everything the vendor activity page needs: the vendor
+// itself, every invoice it appears on, a per-item purchase breakdown, and the
+// payable summary.
 func (h *VendorsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
+	rawID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "ID tidak valid")
 		return
 	}
+	id := pgtype.UUID{Bytes: rawID, Valid: true}
+	ctx := r.Context()
 
-	history, err := h.queries.GetVendorHistory(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	vendor, err := h.queries.GetVendorByID(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "vendor tidak ditemukan")
+		return
+	}
+
+	invoices, err := h.queries.GetVendorHistory(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat vendor")
 		return
 	}
-	if history == nil {
-		history = []*db.GetVendorHistoryRow{}
+	if invoices == nil {
+		invoices = []*db.GetVendorHistoryRow{}
 	}
-	respondJSON(w, http.StatusOK, history)
+
+	items, err := h.queries.GetVendorItemSummary(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil rincian barang vendor")
+		return
+	}
+	if items == nil {
+		items = []*db.GetVendorItemSummaryRow{}
+	}
+
+	// Payment figures are only meaningful on invoices billed to this vendor;
+	// invoices that merely carry a line from it are counted in the billed total
+	// but never in paid/outstanding, which belong to the invoice's own vendor.
+	var totalInvoiced, totalPaid, totalOutstanding int64
+	var unpaidCount, primaryCount int
+	for _, inv := range invoices {
+		totalInvoiced += inv.VendorAmount
+		if !inv.IsPrimary {
+			continue
+		}
+		primaryCount++
+		// A settled invoice is fully paid even when amount_paid was never filled
+		// in — invoices paid straight from a cash account carry the status only.
+		if inv.PaymentStatus == "paid" {
+			totalPaid += inv.TotalAmount
+			continue
+		}
+		unpaidCount++
+		totalPaid += inv.AmountPaid
+		if remaining := inv.TotalAmount - inv.AmountPaid; remaining > 0 {
+			totalOutstanding += remaining
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"vendor":   vendor,
+		"invoices": invoices,
+		"items":    items,
+		"summary": map[string]any{
+			"total_invoiced":    totalInvoiced,
+			"total_paid":        totalPaid,
+			"total_outstanding": totalOutstanding,
+			"invoice_count":     len(invoices),
+			"own_invoice_count": primaryCount,
+			"unpaid_count":      unpaidCount,
+			"item_count":        len(items),
+		},
+	})
 }

@@ -420,20 +420,20 @@ func getUnitName(unitsJSON []byte, idx int32) string {
 
 // inventoryAdjustmentAccountID returns the account that carries inventory value
 // appearing or disappearing outside a purchase or a dispatch — the same
-// "Stock Waste" bucket stock opname posts its count differences to.
+// "Selisih Persediaan" bucket stock opname posts its count differences to.
 //
 // Manual lot create/edit/delete used to move the warehouse inventory account on
 // its own, conjuring asset value with no counterpart. They now post against this
 // account, so a manual stock correction reads as what it is: a difference
 // charged to (or credited back from) shrinkage.
 func inventoryAdjustmentAccountID(ctx context.Context, qtx *db.Queries) uuid.UUID {
-	acctID, err := qtx.GetStockWasteAccountID(ctx)
+	acctID, err := qtx.GetInventoryVarianceAccountID(ctx)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil
 		}
 		created, err := qtx.CreateAccount(ctx, &db.CreateAccountParams{
-			Name:        "Stock Waste",
+			Name:        "Selisih Persediaan",
 			AccountType: "expense",
 		})
 		if err != nil {

@@ -47,5 +47,11 @@ SELECT COALESCE(SUM(quantity), '0'::numeric) AS total_quantity
 FROM inventory
 WHERE item_id = $1 AND warehouse_id = $2;
 
--- name: GetStockWasteAccountID :one
-SELECT id FROM accounts WHERE name = 'Stock Waste' LIMIT 1;
+-- name: GetInventoryVarianceAccountID :one
+-- Matches the pre-044 name too, so a binary running against a database that has
+-- not been migrated yet finds the existing account instead of creating a second
+-- one under the new name.
+SELECT id FROM accounts
+WHERE name IN ('Selisih Persediaan', 'Stock Waste')
+ORDER BY (name = 'Selisih Persediaan') DESC
+LIMIT 1;

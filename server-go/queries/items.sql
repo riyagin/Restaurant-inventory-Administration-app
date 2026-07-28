@@ -47,6 +47,70 @@ LEFT JOIN warehouses wh ON wh.id = inv.warehouse_id
 WHERE ii.item_id = $1
 ORDER BY inv.date DESC, inv.created_at DESC;
 
+-- Price breakdown per unit: prices for different units of the same item are not
+-- comparable, so every rollup below keeps unit_index in the grouping key.
+-- name: GetItemPriceByUnit :many
+SELECT
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    COUNT(DISTINCT COALESCE(ii.vendor_id, inv.vendor_id))::int AS vendor_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    MIN(inv.date)                       AS first_purchase_date,
+    MAX(inv.date)                       AS last_purchase_date,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it     ON it.id = ii.item_id
+WHERE ii.item_id = $1
+GROUP BY ii.unit_index, it.units->ii.unit_index->>'name'
+ORDER BY total_spend DESC;
+
+-- name: GetItemPriceByVendor :many
+SELECT
+    v.id   AS vendor_id,
+    v.name AS vendor_name,
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    MIN(inv.date)                       AS first_purchase_date,
+    MAX(inv.date)                       AS last_purchase_date,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
+FROM invoice_items ii
+JOIN invoices inv   ON inv.id = ii.invoice_id
+JOIN items it       ON it.id  = ii.item_id
+LEFT JOIN vendors v ON v.id   = COALESCE(ii.vendor_id, inv.vendor_id)
+WHERE ii.item_id = $1
+GROUP BY v.id, v.name, ii.unit_index, it.units->ii.unit_index->>'name'
+ORDER BY MAX(inv.date) DESC;
+
+-- name: GetItemPriceTrend :many
+SELECT
+    to_char(date_trunc('month', inv.date), 'YYYY-MM') AS month,
+    ii.unit_index,
+    it.units->ii.unit_index->>'name' AS unit_name,
+    SUM(ii.quantity)::numeric           AS total_quantity,
+    SUM(ii.quantity * ii.price)::bigint AS total_spend,
+    COUNT(*)::int                       AS purchase_count,
+    MIN(ii.price)::bigint               AS min_price,
+    MAX(ii.price)::bigint               AS max_price,
+    (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+JOIN items it     ON it.id = ii.item_id
+WHERE ii.item_id = $1
+GROUP BY 1, ii.unit_index, 3
+ORDER BY 1 DESC;
+
 -- name: GetItemStockByWarehouse :many
 SELECT
     w.id   AS warehouse_id,

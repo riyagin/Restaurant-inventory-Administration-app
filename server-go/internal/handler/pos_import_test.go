@@ -39,9 +39,12 @@ func setupPOSAccounts(t *testing.T, pool *pgxpool.Pool) posAccounts {
 	}
 
 	accts := posAccounts{
-		revenueID:  mk("POSRevenue", "revenue"),
-		cashID:     mk("POSCash", "asset"),
-		expenseID:  mk("POSExpense", "expense"),
+		revenueID: mk("POSRevenue", "revenue"),
+		cashID:    mk("POSCash", "asset"),
+		// The "expense_mappings" field carries the POS "Biaya Tambahan" column,
+		// which is the delivery fee — revenue, not a cost. The field name is kept
+		// for the client's payload shape; the account behind it is revenue.
+		expenseID:  mk("POSDeliveryFee", "revenue"),
 		discountID: mk("POSDiscount", "expense"),
 	}
 
@@ -109,9 +112,13 @@ func TestPOSImportConfirm_RevenueAndCashUpdated(t *testing.T) {
 	}
 }
 
-// TestPOSImportConfirm_ExpenseAccountUpdated confirms expense mappings also
-// increase the expense account balance.
-func TestPOSImportConfirm_ExpenseAccountUpdated(t *testing.T) {
+// TestPOSImportConfirm_DeliveryFeeIsRevenue covers the POS "Biaya Tambahan"
+// column (carried in expense_mappings): it is the delivery fee, which is revenue
+// earned at the sale but excluded from the POS payment breakdown. So it credits
+// the mapped revenue account and debits the delivery-fee receivable, rather than
+// being debited as a cost with no counter-leg — which is how it used to leave
+// the books short by its own value on every import.
+func TestPOSImportConfirm_DeliveryFeeIsRevenue(t *testing.T) {
 	pool := testutil.OpenDB(t)
 	accts := setupPOSAccounts(t, pool)
 	userID := createTestUser(t, pool)
@@ -128,7 +135,7 @@ func TestPOSImportConfirm_ExpenseAccountUpdated(t *testing.T) {
 			"revenue_mappings":  []map[string]any{{"label": "Rev", "account_id": accts.revenueID.String(), "amount": 500000}},
 			"cash_mappings":     []map[string]any{{"label": "Cash", "account_id": accts.cashID.String(), "amount": 480000}},
 			"discount_mappings": []map[string]any{},
-			"expense_mappings":  []map[string]any{{"label": "COGS", "account_id": accts.expenseID.String(), "amount": 200000}},
+			"expense_mappings":  []map[string]any{{"label": "Biaya Tambahan", "account_id": accts.expenseID.String(), "amount": 200000}},
 		}},
 	})
 	if rr.Code != http.StatusCreated {
@@ -141,8 +148,27 @@ func TestPOSImportConfirm_ExpenseAccountUpdated(t *testing.T) {
 	if bal := getBalance(t, pool, accts.cashID); bal != 480000 {
 		t.Errorf("cash balance = %d, want 480000", bal)
 	}
+	// Credited as revenue, not debited as a cost.
 	if bal := getBalance(t, pool, accts.expenseID); bal != 200000 {
-		t.Errorf("expense balance = %d, want 200000", bal)
+		t.Errorf("delivery fee revenue balance = %d, want 200000", bal)
+	}
+
+	// And the matching debit lands in the receivable, so the entry balances on
+	// its own without falling through to the suspense account.
+	// Scoped through pos_imports.source_file, which is unique per run — this
+	// database keeps what the handler commits, so a description filter would
+	// also pick up earlier runs of this same test.
+	var receivable int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COALESCE(SUM(jl.amount), 0) FROM journal_lines jl
+		 JOIN journal_entries je ON je.id = jl.entry_id
+		 JOIN accounts a ON a.id = jl.account_id
+		 JOIN pos_imports p ON p.id = je.source_id
+		 WHERE a.account_number = 10400 AND p.source_file = $1`, filename).Scan(&receivable); err != nil {
+		t.Fatalf("read receivable lines: %v", err)
+	}
+	if receivable != 200000 {
+		t.Errorf("delivery fee receivable = %d, want 200000", receivable)
 	}
 }
 

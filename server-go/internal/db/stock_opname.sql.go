@@ -123,12 +123,15 @@ func (q *Queries) GetStockOpnameItems(ctx context.Context, opnameID pgtype.UUID)
 	return items, nil
 }
 
-const getStockWasteAccountID = `-- name: GetStockWasteAccountID :one
-SELECT id FROM accounts WHERE name = 'Stock Waste' LIMIT 1
+const getInventoryVarianceAccountID = `-- name: GetInventoryVarianceAccountID :one
+SELECT id FROM accounts
+WHERE name IN ('Selisih Persediaan', 'Stock Waste')
+ORDER BY (name = 'Selisih Persediaan') DESC
+LIMIT 1
 `
 
-func (q *Queries) GetStockWasteAccountID(ctx context.Context) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getStockWasteAccountID)
+func (q *Queries) GetInventoryVarianceAccountID(ctx context.Context) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getInventoryVarianceAccountID)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
