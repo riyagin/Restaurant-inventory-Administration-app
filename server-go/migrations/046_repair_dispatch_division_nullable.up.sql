@@ -1,0 +1,34 @@
+-- 046: Repair dispatches.division_id nullability.
+--
+-- Migration 003 already did this:
+--
+--   -- Make dispatches.division_id nullable (dispatch can go to a branch
+--   -- without a specific division)
+--   ALTER TABLE dispatches ALTER COLUMN division_id DROP NOT NULL;
+--
+-- but on the production database the column is still NOT NULL, even though
+-- schema_migrations is well past 003. The migration ledger says it ran; the
+-- schema says otherwise.
+--
+-- The likely path: the database was at some point (re)built from
+-- server/schema.sql, which declares division_id NOT NULL, and the migration
+-- history was stamped rather than replayed. Every other structural change in
+-- the migration set survived that, because they are all
+-- "ADD COLUMN IF NOT EXISTS" and later runs re-applied them harmlessly. 003's
+-- DROP NOT NULL is the only structural change that is invisible to a re-run,
+-- so it is the only one that stayed lost. Verified: all eleven columns the
+-- migrations expect are present and correct; this is the single divergence.
+--
+-- It matters because the Go handler deliberately supports a dispatch with no
+-- division — it passes NULL and falls back to the branch's expense account when
+-- resolving the CoA. Against the production schema that combination is a 500,
+-- not a validation error, so a dispatch to a branch without a division fails
+-- with an opaque message.
+--
+-- Fixing the schema rather than the handler: 003 recorded the intended design in
+-- both its SQL and its comment, and the handler was written to match it.
+-- Production is the outlier.
+--
+-- Idempotent — DROP NOT NULL on an already-nullable column is a no-op.
+
+ALTER TABLE dispatches ALTER COLUMN division_id DROP NOT NULL;

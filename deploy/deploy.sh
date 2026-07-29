@@ -1,25 +1,30 @@
 #!/bin/bash
-# Deploy script — pulls latest code, runs migrations, builds Go binary, reloads PM2
+# Deploy script — pulls latest code, runs migrations, builds the frontend and the
+# Go binary, reloads PM2
 # Usage:
 #   bash /var/www/inventory-app/deploy/deploy.sh          # full deploy
 #   bash /var/www/inventory-app/deploy/deploy.sh --no-pull  # skip git pull (local changes)
 #   bash /var/www/inventory-app/deploy/deploy.sh --no-migrate  # skip migrations
+#   bash /var/www/inventory-app/deploy/deploy.sh --no-client   # skip frontend build (backend-only change)
 
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 APP_DIR="/var/www/inventory-app"
 SERVER_GO_DIR="$APP_DIR/server-go"
+CLIENT_DIR="$APP_DIR/client"
 PM2_APP="inventory-app"
 ENV_FILE="$SERVER_GO_DIR/.env"
 
 # ── Flags ─────────────────────────────────────────────────────────────────────
 SKIP_PULL=false
 SKIP_MIGRATE=false
+SKIP_CLIENT=false
 for arg in "$@"; do
   case "$arg" in
     --no-pull)    SKIP_PULL=true ;;
     --no-migrate) SKIP_MIGRATE=true ;;
+    --no-client)  SKIP_CLIENT=true ;;
   esac
 done
 
@@ -76,7 +81,21 @@ else
   log "Skipping migrations"
 fi
 
-# ── 4. Build Go binary ────────────────────────────────────────────────────────
+# ── 4. Build React frontend ───────────────────────────────────────────────────
+# Runs before the Go build so a failing frontend build aborts the deploy while
+# the old binary is still serving — nothing is swapped until both sides compile.
+if [ "$SKIP_CLIENT" = false ]; then
+  log "Building frontend..."
+  command -v npm &>/dev/null || fail "npm not found in PATH"
+  cd "$CLIENT_DIR"
+  npm ci || npm install
+  npm run build || fail "frontend build failed — client/dist left untouched"
+  ok "Frontend built: $(du -sh dist | cut -f1)"
+else
+  log "Skipping frontend build"
+fi
+
+# ── 5. Build Go binary ────────────────────────────────────────────────────────
 log "Building Go binary..."
 if ! command -v go &>/dev/null; then
   fail "Go not found in PATH"
@@ -85,7 +104,7 @@ cd "$SERVER_GO_DIR"
 go build -o api ./cmd/api
 ok "Binary built: $(du -sh api | cut -f1)"
 
-# ── 5. (Re)start PM2 ──────────────────────────────────────────────────────────
+# ── 6. (Re)start PM2 ──────────────────────────────────────────────────────────
 # Use delete + start (NOT reload): reload reuses PM2's cached launch options, so
 # changes to ecosystem.config.cjs (interpreter, kill_timeout, env) would never
 # take effect. delete + start re-reads the config every deploy.
@@ -105,7 +124,7 @@ pm2 start "$APP_DIR/deploy/ecosystem.config.cjs"
 pm2 save
 ok "PM2 started"
 
-# ── 6. Health check ───────────────────────────────────────────────────────────
+# ── 7. Health check ───────────────────────────────────────────────────────────
 log "Waiting for server to come up..."
 sleep 2
 PORT=$(get_env PORT)

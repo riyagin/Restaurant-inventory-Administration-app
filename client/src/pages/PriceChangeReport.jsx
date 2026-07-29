@@ -124,6 +124,19 @@ function IndexChart({ weeks }) {
   );
 }
 
+// Table columns — every one is sortable. `value` is the sort key extractor;
+// `basketOnly` marks columns that only exist for items with a price comparison.
+const COLUMNS = [
+  { key: 'item_name', label: 'Barang', align: 'left', defaultDir: 'asc', value: (it) => it.item_name },
+  { key: 'unit_name', label: 'Satuan', align: 'left', defaultDir: 'asc', value: (it) => it.unit_name || '' },
+  { key: 'quantity', label: 'Qty Dibeli', align: 'right', defaultDir: 'desc', value: (it) => it.quantity },
+  { key: 'first_price', label: 'Harga Awal', align: 'right', defaultDir: 'desc', value: (it) => it.first_price },
+  { key: 'last_price', label: 'Harga Akhir', align: 'right', defaultDir: 'desc', basketOnly: true, value: (it) => it.last_price },
+  { key: 'change_pct', label: 'Perubahan', align: 'right', defaultDir: 'desc', basketOnly: true, value: (it) => it.change_pct },
+  { key: 'impact', label: 'Dampak Rp', align: 'right', defaultDir: 'desc', basketOnly: true, value: (it) => it.impact },
+  { key: 'spend', label: 'Belanja', align: 'right', defaultDir: 'desc', value: (it) => it.spend },
+];
+
 const PRESETS = [
   { label: '30 Hari', days: 29 },
   { label: '90 Hari', days: 89 },
@@ -138,6 +151,7 @@ export default function PriceChangeReport() {
   const [stockFilter, setStockFilter] = useState('');   // '' | 'true' | 'false'
   const [dirFilter, setDirFilter] = useState('all');    // all | up | down
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState({ key: 'impact', dir: 'desc' });
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -168,13 +182,36 @@ export default function PriceChangeReport() {
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter(it => {
+    const filtered = items.filter(it => {
       if (dirFilter === 'up' && !(it.in_basket && it.change_pct > 0)) return false;
       if (dirFilter === 'down' && !(it.in_basket && it.change_pct < 0)) return false;
       if (q && !`${it.item_name} ${it.item_code}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [items, dirFilter, search]);
+
+    const col = COLUMNS.find(c => c.key === sort.key) || COLUMNS[0];
+    const sign = sort.dir === 'asc' ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      // Items priced in only one week have no last price, change or impact, so
+      // they always sink to the bottom of a comparison-based sort.
+      if (col.basketOnly && a.in_basket !== b.in_basket) return a.in_basket ? -1 : 1;
+      const va = col.value(a);
+      const vb = col.value(b);
+      if (typeof va === 'string' || typeof vb === 'string') {
+        return sign * String(va ?? '').localeCompare(String(vb ?? ''), 'id-ID');
+      }
+      const na = va ?? 0;
+      const nb = vb ?? 0;
+      if (na === nb) return a.item_name.localeCompare(b.item_name, 'id-ID');
+      return sign * (na - nb);
+    });
+  }, [items, dirFilter, search, sort]);
+
+  const toggleSort = (key) => {
+    setSort(s => s.key === key
+      ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+      : { key, dir: COLUMNS.find(c => c.key === key)?.defaultDir || 'desc' });
+  };
 
   const downloadExcel = () => {
     if (!data) return;
@@ -322,14 +359,25 @@ export default function PriceChangeReport() {
         <table>
           <thead>
             <tr>
-              <th>Barang</th>
-              <th>Satuan</th>
-              <th style={{ textAlign: 'right' }}>Qty Dibeli</th>
-              <th style={{ textAlign: 'right' }}>Harga Awal</th>
-              <th style={{ textAlign: 'right' }}>Harga Akhir</th>
-              <th style={{ textAlign: 'right' }}>Perubahan</th>
-              <th style={{ textAlign: 'right' }}>Dampak Rp</th>
-              <th style={{ textAlign: 'right' }}>Belanja</th>
+              {COLUMNS.map(col => {
+                const active = sort.key === col.key;
+                return (
+                  <th
+                    key={col.key}
+                    onClick={() => toggleSort(col.key)}
+                    title={`Urutkan menurut ${col.label}`}
+                    style={{
+                      textAlign: col.align, cursor: 'pointer', userSelect: 'none',
+                      whiteSpace: 'nowrap', color: active ? '#4f46e5' : undefined,
+                    }}
+                  >
+                    {col.label}
+                    <span style={{ marginLeft: '0.3rem', fontSize: '0.7rem', color: active ? '#4f46e5' : '#ccc' }}>
+                      {active ? (sort.dir === 'asc' ? '▲' : '▼') : '⇅'}
+                    </span>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>

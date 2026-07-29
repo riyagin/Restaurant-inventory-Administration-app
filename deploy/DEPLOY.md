@@ -226,11 +226,19 @@ pm2 monit                  # live CPU/memory dashboard
 ## Updating the app
 
 ```bash
+bash /var/www/inventory-app/deploy/deploy.sh
+```
+
+The script pulls, migrates, builds the frontend, builds the Go binary, then
+restarts PM2. Skip individual steps with `--no-pull`, `--no-migrate`, or
+`--no-client` (backend-only change). Equivalent by hand:
+
+```bash
 cd /var/www/inventory-app
 git pull
-cd server && npm install --omit=dev
-npm run migrate          # apply any new migrations before restarting
-cd ../client && npm install && npm run build
+migrate -path server-go/migrations -database "$DATABASE_URL" up
+cd client && npm ci && npm run build
+cd ../server-go && go build -o api ./cmd/api
 pm2 restart inventory-app
 ```
 
