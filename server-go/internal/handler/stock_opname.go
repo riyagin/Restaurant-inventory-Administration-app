@@ -711,12 +711,36 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 			wasteValue = deducted
 			historyValue = -deducted
 		} else {
-			surplusValue := latestItemValue(ctx, qtx, itemID, it.UnitIndex, diff)
+			// A correction that puts stock back is first of all a reversal of what
+			// THIS opname took away — most often an item mistakenly counted to 0,
+			// which deletes its lots and makes it vanish from the warehouse.
+			// Valuing that at the latest purchase price would leave a residue in
+			// Selisih Persediaan, because the write-off and its reversal would use
+			// different costs. So restore at the cost written off, and treat only
+			// the quantity beyond it as a genuine surplus.
+			removedQty, removedValue := opnameNetWaste(ctx, tx, id, itemID)
+			reverseQty := 0.0
+			if removedQty > 0 && removedValue > 0 {
+				reverseQty = math.Min(diff, removedQty)
+			}
+			var reversedValue int64
+			if reverseQty > 0 {
+				reversedValue = int64(math.Round(float64(removedValue) * reverseQty / removedQty))
+			}
+			surplusValue := reversedValue
+			if extra := diff - reverseQty; extra > 0.001 {
+				surplusValue += latestItemValue(ctx, qtx, itemID, it.UnitIndex, extra)
+			}
+
 			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, diff, it.UnitIndex, surplusValue, now); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok opname")
 				return
 			}
 			historyValue = surplusValue
+			// Booking the restoration as negative waste nets this opname's recorded
+			// loss back down, so every report that sums waste_value — and the next
+			// reversal's own arithmetic — sees what is actually still written off.
+			wasteValue = -reversedValue
 			if surplusValue > 0 {
 				if _, err := service.Post(ctx, qtx, service.Entry{
 					Date:        now,
@@ -818,6 +842,24 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 		"id":    id,
 		"items": items,
 	})
+}
+
+// opnameNetWaste reports how much of an item this opname has written off and
+// not yet put back: the net quantity removed and the net rupiah value behind it.
+//
+// Both figures net across the original rows AND every later correction, which is
+// what makes repeated corrections safe — a restoration is booked as a correction
+// row carrying a positive difference and a negative waste_value, so it cancels
+// out of these sums instead of being reversible twice.
+func opnameNetWaste(ctx context.Context, tx pgx.Tx, opnameID, itemID uuid.UUID) (qty float64, value int64) {
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(SUM(-difference), 0)::float8, COALESCE(SUM(waste_value), 0)::bigint
+		FROM stock_opname_items
+		WHERE opname_id = $1 AND item_id = $2`,
+		pgUUID(opnameID), pgUUID(itemID)).Scan(&qty, &value); err != nil {
+		return 0, 0
+	}
+	return qty, value
 }
 
 // latestItemValue returns the total IDR value to assign to `qty` surplus units,

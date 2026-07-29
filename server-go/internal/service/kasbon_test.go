@@ -122,12 +122,29 @@ func TestValidateInstallmentSplit(t *testing.T) {
 		t.Error("duplicate due months should be rejected")
 	}
 
-	// Installment out of the 2-month window.
+	// Installment past the resolution window: 13 months after the June 2026
+	// request month.
 	if err := ValidateInstallmentSplit(1_000_000, req, []InstallmentInput{
 		{DueMonth: mustDate("2026-06-01"), Amount: 500_000},
-		{DueMonth: mustDate("2026-10-01"), Amount: 500_000},
+		{DueMonth: mustDate("2027-07-01"), Amount: 500_000},
 	}); err == nil {
-		t.Error("out-of-window installment should be rejected")
+		t.Errorf("installment more than %d months out should be rejected", MaxRepaymentMonths)
+	}
+
+	// The boundary itself is in window: exactly MaxRepaymentMonths months out.
+	if err := ValidateInstallmentSplit(1_000_000, req, []InstallmentInput{
+		{DueMonth: mustDate("2026-06-01"), Amount: 500_000},
+		{DueMonth: mustDate("2027-06-01"), Amount: 500_000},
+	}); err != nil {
+		t.Errorf("installment exactly %d months out should be accepted, got %v", MaxRepaymentMonths, err)
+	}
+
+	// Installment before the request month.
+	if err := ValidateInstallmentSplit(1_000_000, req, []InstallmentInput{
+		{DueMonth: mustDate("2026-05-01"), Amount: 500_000},
+		{DueMonth: mustDate("2026-07-01"), Amount: 500_000},
+	}); err == nil {
+		t.Error("installment before the request month should be rejected")
 	}
 }
 

@@ -90,6 +90,12 @@ func (h *AccountAdjustmentsHandler) Create(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusBadRequest, "deskripsi diperlukan")
 		return
 	}
+	// service.Post drops zero-amount lines, so a zero adjustment would store a
+	// record claiming money moved with no journal entry standing behind it.
+	if body.Amount == 0 {
+		respondError(w, http.StatusBadRequest, "nominal penyesuaian tidak boleh 0")
+		return
+	}
 
 	accountID, err := parseUUID(body.AccountID)
 	if err != nil {

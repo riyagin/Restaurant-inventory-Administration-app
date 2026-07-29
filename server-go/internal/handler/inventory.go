@@ -26,6 +26,58 @@ const (
 	maxInventoryPageSize     = 200
 )
 
+// Movement labels for manual lot entry. A hand-entered lot is an adjustment, not
+// a purchase: it has no invoice, no vendor and no price behind it. Labelling it
+// 'purchase' (as Create used to) made it indistinguishable from real buying in
+// the per-type flow breakdown on the item detail page. 'manual_in'/'manual_out'
+// are the labels the legacy backend used and the ones already in the data.
+const (
+	manualStockInType     = "manual_in"
+	manualStockOutType    = "manual_out"
+	manualStockReference  = "Penyesuaian manual"
+	manualStockSourceType = "inventory"
+)
+
+// recordManualStockMove writes the stock_history row behind a manual lot change.
+//
+// Every other movement in the system leaves a stock_history row, which is what
+// lets the item history reconstruct on-hand and what the flow reports read.
+// Manual lot edits and deletions used to skip it entirely, so stock could change
+// with no movement to show for it — the quantity simply differed from the sum of
+// its own history. Quantity and value are signed the same way as everywhere
+// else: positive is stock (and value) coming in.
+func recordManualStockMove(
+	ctx context.Context,
+	qtx *db.Queries,
+	itemID, warehouseID uuid.UUID,
+	qtyChange float64,
+	valueChange int64,
+	unitName string,
+	date time.Time,
+) error {
+	if qtyChange == 0 && valueChange == 0 {
+		return nil
+	}
+	moveType := manualStockInType
+	// A pure revaluation leaves quantity alone, so fall back to the value's
+	// direction to decide which way the movement reads.
+	if qtyChange < 0 || (qtyChange == 0 && valueChange < 0) {
+		moveType = manualStockOutType
+	}
+	return service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
+		ItemID:         itemID,
+		WarehouseID:    warehouseID,
+		QuantityChange: qtyChange,
+		UnitName:       unitName,
+		Type:           moveType,
+		Reference:      manualStockReference,
+		Date:           date,
+		Value:          valueChange,
+		SourceID:       itemID,
+		SourceType:     manualStockSourceType,
+	})
+}
+
 // inventoryFilters builds the common filter params shared by the list and count queries.
 func inventoryFilters(q map[string][]string) (warehouseFilter, itemFilter pgtype.UUID, search pgtype.Text, dateFromPg, dateToPg pgtype.Date) {
 	get := func(key string) string {
@@ -243,9 +295,12 @@ func (h *InventoryHandler) Create(w http.ResponseWriter, r *http.Request) {
 		WarehouseID:    warehouseID,
 		QuantityChange: body.Quantity,
 		UnitName:       unitName,
-		Type:           "purchase",
+		Type:           manualStockInType,
+		Reference:      manualStockReference,
 		Date:           date,
 		Value:          body.Value,
+		SourceID:       itemID,
+		SourceType:     manualStockSourceType,
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
 		return
@@ -329,6 +384,20 @@ func (h *InventoryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The lot's stock moved, so the movement log has to say so — the ledger leg
+	// below only covers the value, and a quantity-only edit would otherwise leave
+	// no trace at all.
+	if err := recordManualStockMove(ctx, qtx,
+		uuidFromPg(existing.ItemID), uuidFromPg(existing.WarehouseID),
+		body.Quantity-numericToFloat64(existing.Quantity),
+		body.Value-existing.Value,
+		getUnitName(existing.ItemUnits, existing.UnitIndex),
+		date,
+	); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
+		return
+	}
+
 	accountID, _ := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
 	if delta := body.Value - existing.Value; delta != 0 {
 		if _, err := service.Post(ctx, qtx, service.Entry{
@@ -394,9 +463,22 @@ func (h *InventoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deleting a lot removes real stock; record it as an outbound movement so the
+	// item's history still adds up to what is on hand.
+	deletedAt := time.Now()
+	if err := recordManualStockMove(ctx, qtx,
+		uuidFromPg(existing.ItemID), uuidFromPg(existing.WarehouseID),
+		-numericToFloat64(existing.Quantity), -existing.Value,
+		getUnitName(existing.ItemUnits, existing.UnitIndex),
+		deletedAt,
+	); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mencatat riwayat stok")
+		return
+	}
+
 	accountID, _ := qtx.GetWarehouseInventoryAccountID(ctx, existing.WarehouseID)
 	if _, err := service.Post(ctx, qtx, service.Entry{
-		Date:        time.Now(),
+		Date:        deletedAt,
 		SourceType:  service.SourceInventory,
 		SourceID:    id,
 		Description: "Penghapusan lot manual",

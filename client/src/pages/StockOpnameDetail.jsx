@@ -27,6 +27,31 @@ function groupInventory(inventory) {
   return Array.from(map.values()).sort((a, b) => a.item_name.localeCompare(b.item_name));
 }
 
+// An item counted down to 0 has no inventory lot left, so grouping the
+// warehouse's stock alone silently drops exactly the rows most likely to need
+// correcting — the ones zeroed by mistake. Add them back at system qty 0 so a
+// correction can put the stock (and its value) back.
+function mergeOpnameRows(groups, opnameItems) {
+  const byKey = new Map(groups.map(g => [g.key, g]));
+  for (const it of opnameItems) {
+    const key = `${it.item_id}__${it.unit_index}`;
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      key,
+      item_id: it.item_id,
+      item_name: it.item_name,
+      item_code: it.item_code,
+      unit_name: it.unit_name,
+      unit_index: it.unit_index,
+      totalQty: 0,
+      totalValue: 0,
+      lots: [],
+      depleted: true,
+    });
+  }
+  return Array.from(byKey.values()).sort((a, b) => a.item_name.localeCompare(b.item_name));
+}
+
 function computeGroupWaste(group, actualQty) {
   let waste = 0;
   let remaining = actualQty;
@@ -64,7 +89,7 @@ export default function StockOpnameDetail() {
   const totalWaste = opname.items.reduce((s, it) => s + Number(it.waste_value), 0);
 
   // ── Edit helpers ──
-  const groups = groupInventory(inventory);
+  const groups = mergeOpnameRows(groupInventory(inventory), opname.items);
 
   const startEdit = () => {
     setEditError('');
@@ -168,7 +193,10 @@ export default function StockOpnameDetail() {
           <div className="card-header"><h2>Koreksi Opname</h2></div>
           <p style={{ fontSize: '0.85rem', color: '#888', margin: '0 0 1rem' }}>
             Masukkan jumlah aktual yang benar. Selisih terhadap jumlah sistem saat ini akan dicatat
-            sebagai baris koreksi baru (tidak menimpa catatan asli).
+            sebagai baris koreksi baru (tidak menimpa catatan asli). Barang bertanda
+            <span style={{ margin: '0 0.25rem', padding: '0.05rem 0.35rem', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600, background: '#fdecea', color: '#c0392b' }}>stok 0</span>
+            sudah habis di sistem — mengisi jumlah aktual akan mengembalikan stok beserta nilainya,
+            senilai yang dulu disusutkan oleh opname ini.
           </p>
           {editError && <div className="error-msg" style={{ marginBottom: '1rem' }}>{editError}</div>}
           {groups.length === 0 ? (
@@ -192,7 +220,20 @@ export default function StockOpnameDetail() {
                   const wasteVal = (hasInput && d !== null && d < 0) ? computeGroupWaste(g, Number(actuals[g.key])) : 0;
                   return (
                     <tr key={g.key}>
-                      <td style={{ fontWeight: 500 }}>{g.item_name}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {g.item_name}
+                        {g.depleted && (
+                          <span
+                            title="Stok barang ini habis (0). Isi jumlah aktual untuk mengembalikannya."
+                            style={{
+                              marginLeft: '0.4rem', padding: '0.1rem 0.4rem', borderRadius: '4px',
+                              fontSize: '0.7rem', fontWeight: 600, background: '#fdecea', color: '#c0392b',
+                            }}
+                          >
+                            stok 0
+                          </span>
+                        )}
+                      </td>
                       <td style={{ color: '#555' }}>{g.unit_name}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{g.totalQty.toLocaleString('id-ID')}</td>
                       <td style={{ textAlign: 'center', width: '120px' }}>

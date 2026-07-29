@@ -7,6 +7,13 @@ const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 
+// "Pendapatan Ongkir DO" — the delivery fee the POS reports in its "Biaya
+// Tambahan" column. Charged to the customer, so it is revenue: the import
+// credits this account and debits "Piutang Ongkir DO", because the fee is
+// earned at the sale but excluded from the POS payment breakdown and only
+// reaches a cash account when the delivery platform settles.
+const DELIVERY_FEE_ACCOUNT_NUMBER = 49900;
+
 export default function SalesImport() {
   const [accounts, setAccounts]     = useState([]);
   const [branches, setBranches]     = useState([]);
@@ -57,7 +64,15 @@ export default function SalesImport() {
     branchDivisionDiscountIds.has(a.id)
   );
   const cashAccounts     = accounts.filter(a => a.account_type === 'asset' && !a.is_system && !inventoryAccountIds.has(a.id));
-  const expenseAccounts  = accounts.filter(a => a.account_type === 'expense' && !a.is_system);
+
+  // "Biaya Tambahan" is the delivery fee charged to the customer — revenue, not a
+  // cost — so its account comes from the revenue list, not the expense list.
+  // Division revenue accounts are left in as options because the fee is not tied
+  // to one division and the operator may want to attribute it; discount accounts
+  // are excluded since they are contra-revenue.
+  const deliveryFeeAccounts = accounts.filter(a =>
+    a.account_type === 'revenue' && !allDiscountAccountIds.has(a.id)
+  );
 
   useEffect(() => {
     getAccounts().then(r => setAccounts(r.data));
@@ -136,11 +151,11 @@ export default function SalesImport() {
     finalDiscRows.push(...discRows);
     setDiscMappings(finalDiscRows);
 
-    // Auto-fill biaya tambahan account from the lain-lain division's expense account
-    const lainLainDiv = branchDivs.find(d => d.name.toLowerCase() === 'lain-lain');
-    if (lainLainDiv?.expense_account_id) {
-      setBiayaMappings(ms => ms.map(m => ({ ...m, account_id: lainLainDiv.expense_account_id })));
-    }
+    // The delivery fee account is assigned on parse and does not depend on the
+    // branch. It used to be auto-filled here from the lain-lain division's
+    // *expense* account, which is the wrong side of the ledger: the fee is
+    // revenue, so filling an expense account meant crediting it and driving it
+    // negative.
   };
 
   const handleFileChange = async (file) => {
@@ -173,7 +188,12 @@ export default function SalesImport() {
       const totalDisc  = Math.round(data.totalDisc  || 0);
       const totalBiaya = Math.round(data.totalBiaya || 0);
       setDiscMappings(totalDisc > 0 ? [{ division_id: null, label: 'Diskon', amount: totalDisc, account_id: '' }] : []);
-      const defaultBiayaId = accounts.find(a => a.account_number === '59999')?.id || '';
+      // Auto-assign "Pendapatan Ongkir DO"; the operator can still change it in
+      // the dropdown. Compared with Number() because account_number arrives as a
+      // number — the old `=== '59999'` string comparison never matched, so this
+      // never actually defaulted to anything.
+      const defaultBiayaId =
+        accounts.find(a => Number(a.account_number) === DELIVERY_FEE_ACCOUNT_NUMBER)?.id || '';
       setBiayaMappings(totalBiaya > 0 ? [{ label: 'Biaya Tambahan', amount: totalBiaya, account_id: defaultBiayaId }] : []);
       setBiayaRows(data.biayaRows || []);
       setSkippedRows(data.skippedRows || []);
@@ -203,8 +223,14 @@ export default function SalesImport() {
     return s + (comm > 0 ? comm : 0);
   }, 0);
   // Revenue is net-based (gross - disc - commission), so discount is already embedded.
-  // Balance: net_revenue = cash_received + biaya
-  const balanced = totalRevenue > 0 && totalRevenue === totalCash + totalBiaya;
+  //
+  // Balance: net_revenue = cash_received. "Biaya Tambahan" is deliberately NOT in
+  // this equation. The rule used to be `revenue === cash + biaya`, which treats
+  // the fee as withheld from what the business receives — but the POS excludes it
+  // from Net *and* from the payment breakdown, so it sits outside both sides.
+  // Across the 153 existing imports carrying a fee, that old rule matched exactly
+  // zero of them, so the badge read "tidak seimbang" on every delivery day.
+  const balanced = totalRevenue > 0 && totalRevenue === totalCash;
 
   const updateCash       = (i, field, val) => setCashMappings(ms => ms.map((m, idx) => idx === i ? { ...m, [field]: val } : m));
   const updateRev        = (i, field, val) => setRevMappings(ms => ms.map((m, idx) => idx === i ? { ...m, [field]: val } : m));
@@ -917,9 +943,12 @@ export default function SalesImport() {
             <div className="card" style={{ marginBottom: '1.5rem' }}>
               <div className="card-header" style={{ marginBottom: '1rem' }}>
                 <div>
-                  <h2>5. Biaya Tambahan (Debit Beban)</h2>
+                  <h2>5. Biaya Tambahan / Ongkir (Kredit Pendapatan)</h2>
                   <p style={{ fontSize: '0.82rem', color: '#888', margin: '0.25rem 0 0' }}>
-                    Dari kolom AD file POS. Dicatat ke akun beban divisi lain-lain secara otomatis saat cabang dipilih.
+                    Dari kolom "Biaya Tambahan" file POS — ongkir yang ditagihkan ke pelanggan, jadi dicatat
+                    sebagai <strong>pendapatan</strong>. Akun terisi otomatis ke "Pendapatan Ongkir DO";
+                    ubah di bawah bila perlu. Lawannya didebit ke "Piutang Ongkir DO" karena ongkir belum
+                    masuk ke akun kas mana pun sampai platform melakukan pembayaran.
                   </p>
                 </div>
                 <span style={{ fontWeight: 700, color: '#e67e22', fontSize: '1.1rem' }}>{idr(totalBiaya)}</span>
@@ -931,7 +960,7 @@ export default function SalesImport() {
                   <tr>
                     <th>Keterangan</th>
                     <th style={{ textAlign: 'right' }}>Jumlah</th>
-                    <th>Akun Beban</th>
+                    <th>Akun Pendapatan</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -953,7 +982,7 @@ export default function SalesImport() {
                           required
                         >
                           <option value="">— Pilih akun —</option>
-                          {expenseAccounts.map(a => (
+                          {deliveryFeeAccounts.map(a => (
                             <option key={a.id} value={a.id}>
                               {a.account_number ? `${a.account_number} · ` : ''}{a.name}
                             </option>
@@ -968,8 +997,18 @@ export default function SalesImport() {
               {/* Reference table: individual rows from column C + AD */}
               {biayaRows.length > 0 && (
                 <>
-                  <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '0.5rem' }}>
-                    Referensi per transaksi ({biayaRows.length} baris)
+                  <div style={{ marginBottom: '0.5rem' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                      Rincian ongkir per transaksi ({biayaRows.length} baris)
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '0.15rem' }}>
+                      {(() => {
+                        const acct = deliveryFeeAccounts.find(a => a.id === biayaMappings[0]?.account_id);
+                        return acct
+                          ? <>Seluruh baris di bawah dicatat ke <strong style={{ color: '#1b5e45' }}>{acct.account_number ? `${acct.account_number} · ` : ''}{acct.name}</strong>. Ubah akun di tabel atas bila perlu.</>
+                          : <span style={{ color: '#b45309' }}>Belum ada akun terpilih — pilih akun di tabel atas.</span>;
+                      })()}
+                    </div>
                   </div>
                   <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: '6px' }}>
                     <table style={{ marginBottom: 0 }}>
@@ -1230,7 +1269,7 @@ export default function SalesImport() {
                             )}
                           </div>
                           <div>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Biaya Tambahan (Debit)</div>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#666', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Biaya Tambahan / Ongkir (Kredit)</div>
                             {imp.lines.filter(l => l.line_type === 'expense').map(l => (
                               <div key={l.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.2rem 0', fontSize: '0.85rem', gap: '0.5rem' }}>
                                 <span style={{ flex: 1 }}>{l.label}</span>
