@@ -201,15 +201,21 @@ func (h *InventoryHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "item tidak ditemukan")
+		return
+	}
+
 	// Derive unit name from item if not provided in request
 	unitName := body.UnitName
 	if unitName == "" {
-		item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
-		if err != nil {
-			respondError(w, http.StatusBadRequest, "item tidak ditemukan")
-			return
-		}
 		unitName = getUnitName(item.Units, body.UnitIndex)
+	}
+
+	warehouseName := ""
+	if wh, err := qtx.GetWarehouseByID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil {
+		warehouseName = wh.Name
 	}
 
 	if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, body.Quantity, body.UnitIndex, body.Value, date); err != nil {
@@ -247,12 +253,17 @@ func (h *InventoryHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	userID := middleware.UserIDFromCtx(ctx)
 	username := middleware.UsernameFromCtx(ctx)
+	// FIFOAdd may merge into an existing lot rather than insert one, so there is
+	// no single lot ID to point at — the entity is the item, matching the source
+	// ID the journal entry above uses.
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
-		UserID:      userID,
-		Username:    username,
-		Action:      "CREATE",
-		EntityType:  "Inventory",
-		Description: "Tambah lot inventori",
+		UserID:     userID,
+		Username:   username,
+		Action:     "CREATE",
+		EntityType: "inventory",
+		EntityID:   itemID,
+		Description: fmt.Sprintf("Menambahkan %s %s %q di %s (nilai %s)",
+			formatQty(body.Quantity), unitName, item.Name, warehouseName, formatRupiahShort(body.Value)),
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -336,6 +347,17 @@ func (h *InventoryHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:     middleware.UserIDFromCtx(ctx),
+		Username:   middleware.UsernameFromCtx(ctx),
+		Action:     "UPDATE",
+		EntityType: "inventory",
+		EntityID:   id,
+		Description: fmt.Sprintf("Mengubah lot %q di %s%s",
+			existing.ItemName, existing.WarehouseName,
+			inventoryLotChanges(existing, body.Quantity, body.Value, date)),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -391,11 +413,14 @@ func (h *InventoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(ctx)
 	username := middleware.UsernameFromCtx(ctx)
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
-		UserID:      userID,
-		Username:    username,
-		Action:      "DELETE",
-		EntityType:  "Inventory",
-		Description: "Hapus lot inventori",
+		UserID:     userID,
+		Username:   username,
+		Action:     "DELETE",
+		EntityType: "inventory",
+		EntityID:   id,
+		Description: fmt.Sprintf("Menghapus lot %s %q di %s (nilai %s)",
+			formatQty(numericToFloat64(existing.Quantity)), existing.ItemName,
+			existing.WarehouseName, formatRupiahShort(existing.Value)),
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -404,6 +429,34 @@ func (h *InventoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "lot inventori berhasil dihapus"})
+}
+
+// formatQty renders a stock quantity without trailing zeros, so whole numbers
+// read as "12" rather than "12.000000" in log descriptions.
+func formatQty(q float64) string {
+	return strconv.FormatFloat(q, 'f', -1, 64)
+}
+
+// inventoryLotChanges describes what a lot edit changed, as a trailing clause
+// like ` — jumlah: 10 → 8; nilai: Rp 1.000 → Rp 800`. A manual lot edit moves
+// both stock on hand and the inventory account, so the before/after numbers are
+// the point of the log entry. Returns "" when nothing changed.
+func inventoryLotChanges(before *db.GetInventoryByIDRow, qty float64, value int64, date time.Time) string {
+	var changes []string
+	if oldQty := numericToFloat64(before.Quantity); oldQty != qty {
+		changes = append(changes, fmt.Sprintf("jumlah: %s → %s", formatQty(oldQty), formatQty(qty)))
+	}
+	if before.Value != value {
+		changes = append(changes, fmt.Sprintf("nilai: %s → %s", formatRupiahShort(before.Value), formatRupiahShort(value)))
+	}
+	if !before.Date.Time.Equal(date) {
+		changes = append(changes, fmt.Sprintf("tanggal: %s → %s",
+			before.Date.Time.Format("2006-01-02"), date.Format("2006-01-02")))
+	}
+	if len(changes) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(changes, "; ")
 }
 
 // getUnitName parses item units JSON and returns the unit name at the given index.

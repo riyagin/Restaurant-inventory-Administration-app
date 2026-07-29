@@ -1,19 +1,47 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getItem, createItem, updateItem } from '../api';
 
 const empty = { name: '', code: '', is_stock: true, units: [{ name: '', perPrev: null }] };
 
+const unitKey = (name) => (name || '').trim().toLowerCase();
+
 export default function ItemForm() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [form, setForm] = useState(empty);
+  const [savedUnits, setSavedUnits] = useState(null);
   const [error, setError] = useState('');
   const isEdit = Boolean(id);
 
   useEffect(() => {
-    if (id) getItem(id).then(r => setForm({ ...r.data, is_stock: r.data.is_stock ?? true }));
+    if (id) getItem(id).then(r => {
+      setForm({ ...r.data, is_stock: r.data.is_stock ?? true });
+      setSavedUnits(r.data.units || []);
+    });
   }, [id]);
+
+  // Adding a smaller unit moves the item's base unit down a level, and the
+  // backend restates existing stock into it. Spell out that conversion before
+  // the user saves — the stock figures on every other page will change.
+  const unitNotice = useMemo(() => {
+    if (!isEdit || !savedUnits?.length || !form.is_stock) return '';
+    const oldBase = savedUnits[savedUnits.length - 1];
+    if (!oldBase?.name) return '';
+
+    const idx = form.units.findIndex(u => unitKey(u.name) === unitKey(oldBase.name));
+    if (idx === -1) {
+      if (form.units.length === savedUnits.length) return ''; // a rename, handled positionally
+      return `Satuan "${oldBase.name}" dihapus. Stok yang tersimpan dalam satuan itu tidak bisa dikonversi — kosongkan stoknya dulu.`;
+    }
+
+    let factor = 1;
+    for (let j = idx + 1; j < form.units.length; j++) factor *= Number(form.units[j].perPrev) || 1;
+    if (factor === 1) return '';
+
+    const newBase = form.units[form.units.length - 1]?.name || 'satuan terkecil';
+    return `Satuan terkecil berubah. Stok yang ada akan dikonversi otomatis: 1 ${oldBase.name} = ${factor} ${newBase}. Nilai rupiah stok tidak berubah.`;
+  }, [isEdit, savedUnits, form.units, form.is_stock]);
 
   const setField = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -69,6 +97,7 @@ export default function ItemForm() {
     <div className="card form-card" style={{maxWidth:'620px'}}>
       <h2>{isEdit ? 'Edit Barang' : 'Tambah Barang Baru'}</h2>
       {error && <div className="error-msg">{error}</div>}
+      {unitNotice && <div className="notice-msg">{unitNotice}</div>}
       <form onSubmit={handleSubmit}>
         <div className="form-row">
           <div className="form-group">

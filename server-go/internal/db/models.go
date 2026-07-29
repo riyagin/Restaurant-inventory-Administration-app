@@ -51,24 +51,24 @@ type AttendanceDevice struct {
 }
 
 type AttendanceRecord struct {
-	ID                pgtype.UUID        `json:"id"`
-	EmployeeID        pgtype.UUID        `json:"employee_id"`
-	Date              pgtype.Date        `json:"date"`
-	CheckIn           pgtype.Timestamptz `json:"check_in"`
-	CheckOut          pgtype.Timestamptz `json:"check_out"`
-	CheckInSource     pgtype.Text        `json:"check_in_source"`
-	CheckOutSource    pgtype.Text        `json:"check_out_source"`
-	CheckInPhotoPath  pgtype.Text        `json:"check_in_photo_path"`
-	DeviceID          pgtype.UUID        `json:"device_id"`
-	Status            string             `json:"status"`
-	IsLate            bool               `json:"is_late"`
-	LateMinutes       int32              `json:"late_minutes"`
-	IsEarlyLeave      bool               `json:"is_early_leave"`
-	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
-	IsMissingCheckout bool               `json:"is_missing_checkout"`
-	Note              pgtype.Text        `json:"note"`
-	IsHalfDay         bool               `json:"is_half_day"`
-	HalfDayLostMinutes int32             `json:"half_day_lost_minutes"`
+	ID                 pgtype.UUID        `json:"id"`
+	EmployeeID         pgtype.UUID        `json:"employee_id"`
+	Date               pgtype.Date        `json:"date"`
+	CheckIn            pgtype.Timestamptz `json:"check_in"`
+	CheckOut           pgtype.Timestamptz `json:"check_out"`
+	CheckInSource      pgtype.Text        `json:"check_in_source"`
+	CheckOutSource     pgtype.Text        `json:"check_out_source"`
+	CheckInPhotoPath   pgtype.Text        `json:"check_in_photo_path"`
+	DeviceID           pgtype.UUID        `json:"device_id"`
+	Status             string             `json:"status"`
+	IsLate             bool               `json:"is_late"`
+	LateMinutes        int32              `json:"late_minutes"`
+	IsEarlyLeave       bool               `json:"is_early_leave"`
+	EarlyLeaveMinutes  int32              `json:"early_leave_minutes"`
+	IsMissingCheckout  bool               `json:"is_missing_checkout"`
+	Note               pgtype.Text        `json:"note"`
+	IsHalfDay          bool               `json:"is_half_day"`
+	HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
 	HalfDayType        pgtype.Text        `json:"half_day_type"`
 	IsMissingCheckin   bool               `json:"is_missing_checkin"`
 	IsNoPunch          bool               `json:"is_no_punch"`
@@ -93,12 +93,31 @@ type Dispatch struct {
 }
 
 type DispatchItem struct {
-	ID         pgtype.UUID    `json:"id"`
-	DispatchID pgtype.UUID    `json:"dispatch_id"`
-	ItemID     pgtype.UUID    `json:"item_id"`
-	Quantity   pgtype.Numeric `json:"quantity"`
-	UnitIndex  int32          `json:"unit_index"`
-	UnitName   string         `json:"unit_name"`
+	ID               pgtype.UUID    `json:"id"`
+	DispatchID       pgtype.UUID    `json:"dispatch_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        int32          `json:"unit_index"`
+	UnitName         string         `json:"unit_name"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+}
+
+type DispatchTemplate struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	WarehouseID pgtype.UUID        `json:"warehouse_id"`
+	BranchID    pgtype.UUID        `json:"branch_id"`
+	DivisionID  pgtype.UUID        `json:"division_id"`
+	Notes       pgtype.Text        `json:"notes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type DispatchTemplateItem struct {
+	ID         pgtype.UUID `json:"id"`
+	TemplateID pgtype.UUID `json:"template_id"`
+	ItemID     pgtype.UUID `json:"item_id"`
+	UnitIndex  int32       `json:"unit_index"`
+	SortOrder  int32       `json:"sort_order"`
 }
 
 type Division struct {
@@ -115,6 +134,14 @@ type DivisionCategory struct {
 	ID         pgtype.UUID `json:"id"`
 	DivisionID pgtype.UUID `json:"division_id"`
 	Name       string      `json:"name"`
+}
+
+type ExpenseCategory struct {
+	ID         pgtype.UUID        `json:"id"`
+	DivisionID pgtype.UUID        `json:"division_id"`
+	Name       string             `json:"name"`
+	AccountID  pgtype.UUID        `json:"account_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type Employee struct {
@@ -206,34 +233,36 @@ type Inventory struct {
 }
 
 type Invoice struct {
-	ID              pgtype.UUID        `json:"id"`
-	InvoiceNumber   string             `json:"invoice_number"`
-	Date            pgtype.Date        `json:"date"`
-	DueDate         pgtype.Date        `json:"due_date"`
-	InvoiceType     string             `json:"invoice_type"`
-	PaymentMethod   pgtype.Text        `json:"payment_method"`
-	PaymentStatus   string             `json:"payment_status"`
-	AmountPaid      int64              `json:"amount_paid"`
-	AccountID       pgtype.UUID        `json:"account_id"`
-	WarehouseID     pgtype.UUID        `json:"warehouse_id"`
-	BranchID        pgtype.UUID        `json:"branch_id"`
-	DivisionID      pgtype.UUID        `json:"division_id"`
-	DispatchID      pgtype.UUID        `json:"dispatch_id"`
-	VendorID        pgtype.UUID        `json:"vendor_id"`
-	ReferenceNumber pgtype.Text        `json:"reference_number"`
-	PhotoPath       pgtype.Text        `json:"photo_path"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ID                pgtype.UUID        `json:"id"`
+	InvoiceNumber     string             `json:"invoice_number"`
+	Date              pgtype.Date        `json:"date"`
+	DueDate           pgtype.Date        `json:"due_date"`
+	InvoiceType       string             `json:"invoice_type"`
+	PaymentMethod     pgtype.Text        `json:"payment_method"`
+	PaymentStatus     string             `json:"payment_status"`
+	AmountPaid        int64              `json:"amount_paid"`
+	AccountID         pgtype.UUID        `json:"account_id"`
+	WarehouseID       pgtype.UUID        `json:"warehouse_id"`
+	BranchID          pgtype.UUID        `json:"branch_id"`
+	DivisionID        pgtype.UUID        `json:"division_id"`
+	ExpenseCategoryID pgtype.UUID        `json:"expense_category_id"`
+	DispatchID        pgtype.UUID        `json:"dispatch_id"`
+	VendorID          pgtype.UUID        `json:"vendor_id"`
+	ReferenceNumber   pgtype.Text        `json:"reference_number"`
+	PhotoPath         pgtype.Text        `json:"photo_path"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
 type InvoiceItem struct {
-	ID          pgtype.UUID    `json:"id"`
-	InvoiceID   pgtype.UUID    `json:"invoice_id"`
-	ItemID      pgtype.UUID    `json:"item_id"`
-	VendorID    pgtype.UUID    `json:"vendor_id"`
-	Quantity    pgtype.Numeric `json:"quantity"`
-	UnitIndex   pgtype.Int4    `json:"unit_index"`
-	Price       int64          `json:"price"`
-	Description pgtype.Text    `json:"description"`
+	ID               pgtype.UUID    `json:"id"`
+	InvoiceID        pgtype.UUID    `json:"invoice_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	VendorID         pgtype.UUID    `json:"vendor_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        pgtype.Int4    `json:"unit_index"`
+	Price            int64          `json:"price"`
+	Description      pgtype.Text    `json:"description"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
 }
 
 type InvoiceTemplate struct {

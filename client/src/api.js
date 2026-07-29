@@ -205,6 +205,13 @@ export const getDivisionCategories = (params) => api.get('/division-categories',
 export const createDivisionCategory = (data) => api.post('/division-categories', data);
 export const deleteDivisionCategory = (id) => api.delete(`/division-categories/${id}`);
 
+// Expense categories — subaccounts under a division's operational expense
+// account. Not to be confused with division categories above, which are POS
+// revenue labels.
+export const getExpenseCategories = (params) => api.get('/expense-categories', { params });
+export const createExpenseCategory = (data) => api.post('/expense-categories', data);
+export const deleteExpenseCategory = (id) => api.delete(`/expense-categories/${id}`);
+
 export const getDispatches = () => api.get('/dispatches');
 export const getDispatch = (id) => api.get(`/dispatches/${id}`);
 export const createDispatch = (data) => api.post('/dispatches', data);
@@ -233,6 +240,11 @@ export const getInvoiceTemplates = () => api.get('/invoice-templates');
 export const createInvoiceTemplate = (data) => api.post('/invoice-templates', data);
 export const updateInvoiceTemplate = (id, data) => api.put(`/invoice-templates/${id}`, data);
 export const deleteInvoiceTemplate = (id) => api.delete(`/invoice-templates/${id}`);
+
+export const getDispatchTemplates = () => api.get('/dispatch-templates');
+export const createDispatchTemplate = (data) => api.post('/dispatch-templates', data);
+export const updateDispatchTemplate = (id, data) => api.put(`/dispatch-templates/${id}`, data);
+export const deleteDispatchTemplate = (id) => api.delete(`/dispatch-templates/${id}`);
 
 export const getActivityLog = (params) => api.get('/activity-log', { params });
 export const exportActivityLog = (params) => api.get('/activity-log/export', { params, responseType: 'blob' });

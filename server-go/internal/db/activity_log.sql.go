@@ -15,7 +15,7 @@ const countActivityLog = `-- name: CountActivityLog :one
 SELECT COUNT(*) FROM activity_log
 WHERE ($1 = '' OR entity_type = $1)
   AND ($2 = '' OR action = $2)
-  AND ($3 = '' OR username ILIKE '%' || $3 || '%')
+  AND ($3 = '' OR username ILIKE '%' || $3 || '%' OR description ILIKE '%' || $3 || '%')
   AND ($4::date IS NULL OR created_at::date >= $4)
   AND ($5::date IS NULL OR created_at::date <= $5)
 `
@@ -83,7 +83,7 @@ SELECT
 FROM activity_log al
 WHERE ($1 = '' OR al.entity_type = $1)
   AND ($2 = '' OR al.action = $2)
-  AND ($3 = '' OR al.username ILIKE '%' || $3 || '%')
+  AND ($3 = '' OR al.username ILIKE '%' || $3 || '%' OR al.description ILIKE '%' || $3 || '%')
   AND ($4::date IS NULL OR al.created_at::date >= $4)
   AND ($5::date IS NULL OR al.created_at::date <= $5)
 ORDER BY al.created_at DESC

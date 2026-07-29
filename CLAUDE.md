@@ -202,6 +202,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | InvoiceForm | `/invoices/new`, `/invoices/:id/edit` | No |
 | InvoiceDetail | `/invoices/:id` | No |
 | InvoiceTemplates | `/invoice-templates` | Yes |
+| DispatchTemplates | `/dispatch-templates` | Yes |
 | Vendors | `/vendors` | Yes |
 | VendorHistory | `/vendors/:id/history` | Yes |
 | Warehouses | `/warehouses` | Yes |
@@ -258,7 +259,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 - Base URL loaded from `/config.json` at runtime (allows VPS config without rebuild)
 - Auto-refresh: on 401, queues in-flight requests, refreshes token, replays queue
 - On refresh failure: clears localStorage, redirects to `/login`
-- **67+ exported functions** across 23+ domains (auth, users, items, inventory, warehouses, vendors, accounts, stock-history, stock-opname, invoices, transfers, branches, divisions, division-categories, dispatches, sales, pos-import, recipes, productions, invoice-templates, activity-log, stats, reports, account-adjustments, enumerations, hr-employees, hr-positions, hr-wages, hr-import, attendance, performance, leave, kasbon, payroll, payslip, hr-settings)
+- **67+ exported functions** across 23+ domains (auth, users, items, inventory, warehouses, vendors, accounts, stock-history, stock-opname, invoices, transfers, branches, divisions, division-categories, dispatches, sales, pos-import, recipes, productions, invoice-templates, dispatch-templates, activity-log, stats, reports, account-adjustments, enumerations, hr-employees, hr-positions, hr-wages, hr-import, attendance, performance, leave, kasbon, payroll, payslip, hr-settings)
 
 ### Frontend Conventions
 - All state is local `useState` — no Redux, Zustand, or Context API
@@ -283,7 +284,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `warehouses` | Physical storage locations, linked to an inventory CoA account |
 | `branches` | Business branches, each has revenue + expense accounts |
 | `divisions` | Sub-units of a branch, each has revenue + expense + discount accounts |
-| `division_categories` | Custom expense categories per division |
+| `division_categories` | POS revenue labels per division — matched by name against POS import lines to auto-fill revenue accounts. Despite the name, nothing to do with expense |
+| `expense_categories` | Subaccount breakdown under a division's expense account — name + the child COA account it posts to |
 | `vendors` | Supplier master |
 | `items` | Item master — name, code, units (JSONB array of {name, ratio}), is_stock |
 | `inventory` | Current stock lots per item+warehouse — quantity, unit_index, value (cents) |
@@ -297,6 +299,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `invoice_items` | Line items on an invoice |
 | `invoice_templates` | Reusable invoice skeletons |
 | `invoice_template_items` | Line items on a template |
+| `dispatch_templates` | Reusable dispatch skeletons — default warehouse/branch/division/notes |
+| `dispatch_template_items` | Items on a dispatch template (item + unit only; quantity is never stored) |
 | `recipes` | Production recipes — output item, batch_size |
 | `recipe_ingredients` | Ingredients per recipe |
 | `productions` | Production batches — recipe, warehouse, batches run |
@@ -331,8 +335,12 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 ### Key DB Rules
 - Hard deletes only (no soft delete)
 - `accounts.balance` updated in real time on every financial transaction
-- Accounts payable is split per vendor: each vendor owns a sub-account `Utang Usaha - <name>` (numbers 20101+) under the system parent `Utang Usaha` (20100), linked via `vendors.account_id`. Invoices with no vendor post to `Utang Usaha - Lainnya` (20999). The 20100 parent holds no balance of its own — the COA/report UIs roll a parent up from its children. Resolve the account with `service.VendorPayableAccountID()`, never by looking up 20100 directly
-- Inventory stored at lowest unit (unit_index = 0) — all conversions use `items.units` JSONB ratios
+- Accounts payable is split per vendor: each vendor owns a sub-account `Utang Usaha - <name>` (numbers 20101+) under the system parent `Utang Usaha` (20100), linked via `vendors.account_id`. Invoices with no vendor post to `Utang Usaha - Lainnya` (20999). The 20100 parent holds no balance of its own. Resolve the account with `service.VendorPayableAccountID()`, never by looking up 20100 directly
+- `items.units` runs **largest → smallest**, so the base unit is the **last** entry (`unit_index = len-1`), not index 0. `perPrev` on entry i says how many of unit i fit in one unit i-1
+- Inventory is stored at the base unit, and **nothing in the deduction path converts units** — `service.FIFODeduct` compares the requested quantity directly against `inventory.quantity`. Every lot of an item must therefore share one `unit_index`. Changing an item's units rescales its lots in the same transaction (`handler.rescaleInventoryForUnits`); dropping a unit that stock is held in is rejected outright
+- Purchase invoice lines and dispatch lines are **entered in any unit and converted to the base unit** before touching inventory. The rate is `handler.resolveLineConversion()`: the item's own `perPrev` chain, unless the line carries a one-off `conversion_factor` override (a supplier's dus holding 20 where the catalogue says 24). The override is stored on `invoice_items.conversion_factor` / `dispatch_items.conversion_factor` — **never** written back to `items.units` — and every reversal (invoice edit/delete, dispatch edit/cancel) must unwind at the *stored* factor, not today's catalogue figure. `stock_history` for these paths records base-unit quantities
+- A parent account's reported total is **its own balance plus its children's**, not the children alone (`totalOf` in Accounts.jsx, `effectiveBalance` in FinancialReport.jsx). Pure grouping accounts carry zero so they are unaffected, but a division expense account holds both: dispatch usage debits the parent directly, purchases debit its expense-category children. Summing only children silently drops the dispatch spending
+- Operational expense is split by `expense_categories`: each row is a named child account under a division's `expense_account_id`, created together with its account in one transaction (`handler/expense_categories.go`). An expense invoice's `expense_category_id` routes the debit there; blank posts to the division parent as before. `invoiceExpenseAccountID` resolves category → division → branch, and edit/delete reversals must pass the **stored** category so the credit lands on the account that was debited. A category whose account has journal lines cannot be deleted
 - FIFO lot consumption: always deduct from oldest `inventory` rows first
 - Currency: BigInt cents throughout; never use NUMERIC/FLOAT for money
 - Closing a payroll period does NOT write the ledger inline: it queues a `payroll_postings` row in the same transaction, and `service.PayrollPoster` writes one balanced journal entry per period in the background (`Beban Gaji - <cabang>` debited net + kasbon per branch, Kas credited net, Piutang Karyawan credited the kasbon repayments). The queue row is the durability guarantee — a restart mid-post is retried by the startup/5-min sweep, capped at `MaxPostingAttempts`. Never post payroll to the ledger from the frontend, and never re-add a manual "process to accounting" step
@@ -366,13 +374,17 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Invoice Templates** (4): CRUD /api/invoice-templates
 
+**Dispatch Templates** (5): GET list, GET /:id, POST, PUT /:id, DELETE /:id — /api/dispatch-templates
+
 **Dispatches** (3): GET list, GET /:id, POST /api/dispatches
 
 **Branches** (4): CRUD /api/branches
 
 **Divisions** (4): CRUD /api/divisions
 
-**Division Categories** (3): GET, POST, DELETE /:id — /api/division-categories
+**Division Categories** (3): GET, POST, DELETE /:id — /api/division-categories (POS revenue labels)
+
+**Expense Categories** (3): GET, POST, DELETE /:id — /api/expense-categories (division expense subaccounts)
 
 **Recipes** (5): CRUD /api/recipes + GET /:id detail
 

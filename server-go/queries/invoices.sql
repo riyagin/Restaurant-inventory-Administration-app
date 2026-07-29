@@ -32,19 +32,21 @@ SELECT
     i.warehouse_id, w.name AS warehouse_name,
     i.branch_id, b.name AS branch_name,
     i.division_id, d.name AS division_name,
+    i.expense_category_id, ec.name AS expense_category_name,
     i.dispatch_id
 FROM invoices i
 LEFT JOIN vendors v ON v.id = i.vendor_id
 LEFT JOIN warehouses w ON w.id = i.warehouse_id
 LEFT JOIN branches b ON b.id = i.branch_id
 LEFT JOIN divisions d ON d.id = i.division_id
+LEFT JOIN expense_categories ec ON ec.id = i.expense_category_id
 WHERE i.id = $1;
 
 -- name: GetInvoiceWithTotal :one
 SELECT
     i.id, i.invoice_number, i.invoice_type, i.payment_status,
     i.amount_paid, i.account_id, i.warehouse_id, i.branch_id, i.division_id, i.dispatch_id,
-    i.vendor_id,
+    i.expense_category_id, i.vendor_id,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount
 FROM invoices i
 LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
@@ -54,7 +56,7 @@ GROUP BY i.id;
 -- name: GetInvoiceItems :many
 SELECT
     ii.id, ii.invoice_id, ii.item_id, ii.vendor_id,
-    ii.quantity, ii.unit_index, ii.price, ii.description,
+    ii.quantity, ii.unit_index, ii.price, ii.description, ii.conversion_factor,
     it.name AS item_name, it.units AS item_units,
     v.name AS vendor_name
 FROM invoice_items ii
@@ -70,23 +72,24 @@ SELECT 'INV-' || LPAD(nextval('invoice_seq')::text, 5, '0') AS invoice_number;
 INSERT INTO invoices (
     id, invoice_number, date, due_date, invoice_type, payment_method,
     payment_status, amount_paid, account_id, warehouse_id, branch_id,
-    division_id, vendor_id, reference_number
+    division_id, vendor_id, reference_number, expense_category_id
 )
 VALUES (
-    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12
+    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13
 )
 RETURNING id, invoice_number, date, due_date, invoice_type, payment_status, created_at;
 
 -- name: CreateInvoiceItem :one
-INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description, conversion_factor)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, COALESCE($8, 1))
 RETURNING id;
 
 -- name: UpdateInvoice :one
 UPDATE invoices
 SET date = $1, due_date = $2, payment_method = $3, account_id = $4,
-    vendor_id = $5, reference_number = $6, warehouse_id = $7, branch_id = $8, division_id = $9
-WHERE id = $10
+    vendor_id = $5, reference_number = $6, warehouse_id = $7, branch_id = $8, division_id = $9,
+    expense_category_id = $10
+WHERE id = $11
 RETURNING id;
 
 -- name: DeleteInvoiceItems :exec

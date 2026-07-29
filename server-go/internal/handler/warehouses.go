@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 type WarehousesHandler struct {
@@ -81,6 +84,17 @@ func (h *WarehousesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Logged inside the transaction so the entry cannot outlive a rolled-back
+	// warehouse (creating one also creates its inventory account).
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "warehouse",
+		EntityID:    warehouse.ID.Bytes,
+		Description: fmt.Sprintf("Menambahkan gudang %q dengan akun %q", warehouse.Name, accountName),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -114,6 +128,12 @@ func (h *WarehousesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	before, err := h.queries.GetWarehouseByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "gudang tidak ditemukan")
+		return
+	}
+
 	warehouse, err := h.queries.UpdateWarehouse(r.Context(), &db.UpdateWarehouseParams{
 		Name: body.Name,
 		ID:   pgtype.UUID{Bytes: id, Valid: true},
@@ -122,6 +142,10 @@ func (h *WarehousesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui gudang")
 		return
 	}
+
+	logMutation(r, h.queries, "UPDATE", "warehouse", id,
+		fmt.Sprintf("Mengubah nama gudang %q → %q", before.Name, warehouse.Name))
+
 	respondJSON(w, http.StatusOK, warehouse)
 }
 
@@ -132,9 +156,19 @@ func (h *WarehousesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, err := h.queries.GetWarehouseByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "gudang tidak ditemukan")
+		return
+	}
+
 	if err := h.queries.DeleteWarehouse(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusConflict, "gagal menghapus gudang: "+err.Error())
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "warehouse", id,
+		fmt.Sprintf("Menghapus gudang %q", existing.Name))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "gudang berhasil dihapus"})
 }

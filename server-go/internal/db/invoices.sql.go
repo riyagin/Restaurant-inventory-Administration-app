@@ -15,27 +15,28 @@ const createInvoice = `-- name: CreateInvoice :one
 INSERT INTO invoices (
     id, invoice_number, date, due_date, invoice_type, payment_method,
     payment_status, amount_paid, account_id, warehouse_id, branch_id,
-    division_id, vendor_id, reference_number
+    division_id, vendor_id, reference_number, expense_category_id
 )
 VALUES (
-    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12
+    gen_random_uuid(), $1, $2, $3, $4, $5, $6, 0, $7, $8, $9, $10, $11, $12, $13
 )
 RETURNING id, invoice_number, date, due_date, invoice_type, payment_status, created_at
 `
 
 type CreateInvoiceParams struct {
-	InvoiceNumber   string      `json:"invoice_number"`
-	Date            pgtype.Date `json:"date"`
-	DueDate         pgtype.Date `json:"due_date"`
-	InvoiceType     string      `json:"invoice_type"`
-	PaymentMethod   pgtype.Text `json:"payment_method"`
-	PaymentStatus   string      `json:"payment_status"`
-	AccountID       pgtype.UUID `json:"account_id"`
-	WarehouseID     pgtype.UUID `json:"warehouse_id"`
-	BranchID        pgtype.UUID `json:"branch_id"`
-	DivisionID      pgtype.UUID `json:"division_id"`
-	VendorID        pgtype.UUID `json:"vendor_id"`
-	ReferenceNumber pgtype.Text `json:"reference_number"`
+	InvoiceNumber     string      `json:"invoice_number"`
+	Date              pgtype.Date `json:"date"`
+	DueDate           pgtype.Date `json:"due_date"`
+	InvoiceType       string      `json:"invoice_type"`
+	PaymentMethod     pgtype.Text `json:"payment_method"`
+	PaymentStatus     string      `json:"payment_status"`
+	AccountID         pgtype.UUID `json:"account_id"`
+	WarehouseID       pgtype.UUID `json:"warehouse_id"`
+	BranchID          pgtype.UUID `json:"branch_id"`
+	DivisionID        pgtype.UUID `json:"division_id"`
+	VendorID          pgtype.UUID `json:"vendor_id"`
+	ReferenceNumber   pgtype.Text `json:"reference_number"`
+	ExpenseCategoryID pgtype.UUID `json:"expense_category_id"`
 }
 
 type CreateInvoiceRow struct {
@@ -62,6 +63,7 @@ func (q *Queries) CreateInvoice(ctx context.Context, arg *CreateInvoiceParams) (
 		arg.DivisionID,
 		arg.VendorID,
 		arg.ReferenceNumber,
+		arg.ExpenseCategoryID,
 	)
 	var i CreateInvoiceRow
 	err := row.Scan(
@@ -77,19 +79,20 @@ func (q *Queries) CreateInvoice(ctx context.Context, arg *CreateInvoiceParams) (
 }
 
 const createInvoiceItem = `-- name: CreateInvoiceItem :one
-INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description, conversion_factor)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, COALESCE($8, 1))
 RETURNING id
 `
 
 type CreateInvoiceItemParams struct {
-	InvoiceID   pgtype.UUID    `json:"invoice_id"`
-	ItemID      pgtype.UUID    `json:"item_id"`
-	VendorID    pgtype.UUID    `json:"vendor_id"`
-	Quantity    pgtype.Numeric `json:"quantity"`
-	UnitIndex   pgtype.Int4    `json:"unit_index"`
-	Price       int64          `json:"price"`
-	Description pgtype.Text    `json:"description"`
+	InvoiceID        pgtype.UUID    `json:"invoice_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	VendorID         pgtype.UUID    `json:"vendor_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        pgtype.Int4    `json:"unit_index"`
+	Price            int64          `json:"price"`
+	Description      pgtype.Text    `json:"description"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
 }
 
 func (q *Queries) CreateInvoiceItem(ctx context.Context, arg *CreateInvoiceItemParams) (pgtype.UUID, error) {
@@ -101,6 +104,7 @@ func (q *Queries) CreateInvoiceItem(ctx context.Context, arg *CreateInvoiceItemP
 		arg.UnitIndex,
 		arg.Price,
 		arg.Description,
+		arg.ConversionFactor,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -134,37 +138,41 @@ SELECT
     i.warehouse_id, w.name AS warehouse_name,
     i.branch_id, b.name AS branch_name,
     i.division_id, d.name AS division_name,
+    i.expense_category_id, ec.name AS expense_category_name,
     i.dispatch_id
 FROM invoices i
 LEFT JOIN vendors v ON v.id = i.vendor_id
 LEFT JOIN warehouses w ON w.id = i.warehouse_id
 LEFT JOIN branches b ON b.id = i.branch_id
 LEFT JOIN divisions d ON d.id = i.division_id
+LEFT JOIN expense_categories ec ON ec.id = i.expense_category_id
 WHERE i.id = $1
 `
 
 type GetInvoiceByIDRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	InvoiceNumber   string             `json:"invoice_number"`
-	Date            pgtype.Date        `json:"date"`
-	DueDate         pgtype.Date        `json:"due_date"`
-	InvoiceType     string             `json:"invoice_type"`
-	PaymentMethod   pgtype.Text        `json:"payment_method"`
-	PaymentStatus   string             `json:"payment_status"`
-	AmountPaid      int64              `json:"amount_paid"`
-	ReferenceNumber pgtype.Text        `json:"reference_number"`
-	PhotoPath       pgtype.Text        `json:"photo_path"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	AccountID       pgtype.UUID        `json:"account_id"`
-	VendorID        pgtype.UUID        `json:"vendor_id"`
-	VendorName      pgtype.Text        `json:"vendor_name"`
-	WarehouseID     pgtype.UUID        `json:"warehouse_id"`
-	WarehouseName   pgtype.Text        `json:"warehouse_name"`
-	BranchID        pgtype.UUID        `json:"branch_id"`
-	BranchName      pgtype.Text        `json:"branch_name"`
-	DivisionID      pgtype.UUID        `json:"division_id"`
-	DivisionName    pgtype.Text        `json:"division_name"`
-	DispatchID      pgtype.UUID        `json:"dispatch_id"`
+	ID                  pgtype.UUID        `json:"id"`
+	InvoiceNumber       string             `json:"invoice_number"`
+	Date                pgtype.Date        `json:"date"`
+	DueDate             pgtype.Date        `json:"due_date"`
+	InvoiceType         string             `json:"invoice_type"`
+	PaymentMethod       pgtype.Text        `json:"payment_method"`
+	PaymentStatus       string             `json:"payment_status"`
+	AmountPaid          int64              `json:"amount_paid"`
+	ReferenceNumber     pgtype.Text        `json:"reference_number"`
+	PhotoPath           pgtype.Text        `json:"photo_path"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	AccountID           pgtype.UUID        `json:"account_id"`
+	VendorID            pgtype.UUID        `json:"vendor_id"`
+	VendorName          pgtype.Text        `json:"vendor_name"`
+	WarehouseID         pgtype.UUID        `json:"warehouse_id"`
+	WarehouseName       pgtype.Text        `json:"warehouse_name"`
+	BranchID            pgtype.UUID        `json:"branch_id"`
+	BranchName          pgtype.Text        `json:"branch_name"`
+	DivisionID          pgtype.UUID        `json:"division_id"`
+	DivisionName        pgtype.Text        `json:"division_name"`
+	ExpenseCategoryID   pgtype.UUID        `json:"expense_category_id"`
+	ExpenseCategoryName pgtype.Text        `json:"expense_category_name"`
+	DispatchID          pgtype.UUID        `json:"dispatch_id"`
 }
 
 func (q *Queries) GetInvoiceByID(ctx context.Context, id pgtype.UUID) (*GetInvoiceByIDRow, error) {
@@ -191,6 +199,8 @@ func (q *Queries) GetInvoiceByID(ctx context.Context, id pgtype.UUID) (*GetInvoi
 		&i.BranchName,
 		&i.DivisionID,
 		&i.DivisionName,
+		&i.ExpenseCategoryID,
+		&i.ExpenseCategoryName,
 		&i.DispatchID,
 	)
 	return &i, err
@@ -199,7 +209,7 @@ func (q *Queries) GetInvoiceByID(ctx context.Context, id pgtype.UUID) (*GetInvoi
 const getInvoiceItems = `-- name: GetInvoiceItems :many
 SELECT
     ii.id, ii.invoice_id, ii.item_id, ii.vendor_id,
-    ii.quantity, ii.unit_index, ii.price, ii.description,
+    ii.quantity, ii.unit_index, ii.price, ii.description, ii.conversion_factor,
     it.name AS item_name, it.units AS item_units,
     v.name AS vendor_name
 FROM invoice_items ii
@@ -210,17 +220,18 @@ ORDER BY ii.id
 `
 
 type GetInvoiceItemsRow struct {
-	ID          pgtype.UUID    `json:"id"`
-	InvoiceID   pgtype.UUID    `json:"invoice_id"`
-	ItemID      pgtype.UUID    `json:"item_id"`
-	VendorID    pgtype.UUID    `json:"vendor_id"`
-	Quantity    pgtype.Numeric `json:"quantity"`
-	UnitIndex   pgtype.Int4    `json:"unit_index"`
-	Price       int64          `json:"price"`
-	Description pgtype.Text    `json:"description"`
-	ItemName    pgtype.Text    `json:"item_name"`
-	ItemUnits   []byte         `json:"item_units"`
-	VendorName  pgtype.Text    `json:"vendor_name"`
+	ID               pgtype.UUID    `json:"id"`
+	InvoiceID        pgtype.UUID    `json:"invoice_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	VendorID         pgtype.UUID    `json:"vendor_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        pgtype.Int4    `json:"unit_index"`
+	Price            int64          `json:"price"`
+	Description      pgtype.Text    `json:"description"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+	ItemName         pgtype.Text    `json:"item_name"`
+	ItemUnits        []byte         `json:"item_units"`
+	VendorName       pgtype.Text    `json:"vendor_name"`
 }
 
 func (q *Queries) GetInvoiceItems(ctx context.Context, invoiceID pgtype.UUID) ([]*GetInvoiceItemsRow, error) {
@@ -241,6 +252,7 @@ func (q *Queries) GetInvoiceItems(ctx context.Context, invoiceID pgtype.UUID) ([
 			&i.UnitIndex,
 			&i.Price,
 			&i.Description,
+			&i.ConversionFactor,
 			&i.ItemName,
 			&i.ItemUnits,
 			&i.VendorName,
@@ -259,7 +271,7 @@ const getInvoiceWithTotal = `-- name: GetInvoiceWithTotal :one
 SELECT
     i.id, i.invoice_number, i.invoice_type, i.payment_status,
     i.amount_paid, i.account_id, i.warehouse_id, i.branch_id, i.division_id, i.dispatch_id,
-    i.vendor_id,
+    i.expense_category_id, i.vendor_id,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount
 FROM invoices i
 LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
@@ -268,18 +280,19 @@ GROUP BY i.id
 `
 
 type GetInvoiceWithTotalRow struct {
-	ID            pgtype.UUID `json:"id"`
-	InvoiceNumber string      `json:"invoice_number"`
-	InvoiceType   string      `json:"invoice_type"`
-	PaymentStatus string      `json:"payment_status"`
-	AmountPaid    int64       `json:"amount_paid"`
-	AccountID     pgtype.UUID `json:"account_id"`
-	WarehouseID   pgtype.UUID `json:"warehouse_id"`
-	BranchID      pgtype.UUID `json:"branch_id"`
-	DivisionID    pgtype.UUID `json:"division_id"`
-	DispatchID    pgtype.UUID `json:"dispatch_id"`
-	VendorID      pgtype.UUID `json:"vendor_id"`
-	TotalAmount   int64       `json:"total_amount"`
+	ID                pgtype.UUID `json:"id"`
+	InvoiceNumber     string      `json:"invoice_number"`
+	InvoiceType       string      `json:"invoice_type"`
+	PaymentStatus     string      `json:"payment_status"`
+	AmountPaid        int64       `json:"amount_paid"`
+	AccountID         pgtype.UUID `json:"account_id"`
+	WarehouseID       pgtype.UUID `json:"warehouse_id"`
+	BranchID          pgtype.UUID `json:"branch_id"`
+	DivisionID        pgtype.UUID `json:"division_id"`
+	DispatchID        pgtype.UUID `json:"dispatch_id"`
+	ExpenseCategoryID pgtype.UUID `json:"expense_category_id"`
+	VendorID          pgtype.UUID `json:"vendor_id"`
+	TotalAmount       int64       `json:"total_amount"`
 }
 
 func (q *Queries) GetInvoiceWithTotal(ctx context.Context, id pgtype.UUID) (*GetInvoiceWithTotalRow, error) {
@@ -296,6 +309,7 @@ func (q *Queries) GetInvoiceWithTotal(ctx context.Context, id pgtype.UUID) (*Get
 		&i.BranchID,
 		&i.DivisionID,
 		&i.DispatchID,
+		&i.ExpenseCategoryID,
 		&i.VendorID,
 		&i.TotalAmount,
 	)
@@ -436,22 +450,24 @@ func (q *Queries) SetInvoiceDispatchID(ctx context.Context, arg *SetInvoiceDispa
 const updateInvoice = `-- name: UpdateInvoice :one
 UPDATE invoices
 SET date = $1, due_date = $2, payment_method = $3, account_id = $4,
-    vendor_id = $5, reference_number = $6, warehouse_id = $7, branch_id = $8, division_id = $9
-WHERE id = $10
+    vendor_id = $5, reference_number = $6, warehouse_id = $7, branch_id = $8, division_id = $9,
+    expense_category_id = $10
+WHERE id = $11
 RETURNING id
 `
 
 type UpdateInvoiceParams struct {
-	Date            pgtype.Date `json:"date"`
-	DueDate         pgtype.Date `json:"due_date"`
-	PaymentMethod   pgtype.Text `json:"payment_method"`
-	AccountID       pgtype.UUID `json:"account_id"`
-	VendorID        pgtype.UUID `json:"vendor_id"`
-	ReferenceNumber pgtype.Text `json:"reference_number"`
-	WarehouseID     pgtype.UUID `json:"warehouse_id"`
-	BranchID        pgtype.UUID `json:"branch_id"`
-	DivisionID      pgtype.UUID `json:"division_id"`
-	ID              pgtype.UUID `json:"id"`
+	Date              pgtype.Date `json:"date"`
+	DueDate           pgtype.Date `json:"due_date"`
+	PaymentMethod     pgtype.Text `json:"payment_method"`
+	AccountID         pgtype.UUID `json:"account_id"`
+	VendorID          pgtype.UUID `json:"vendor_id"`
+	ReferenceNumber   pgtype.Text `json:"reference_number"`
+	WarehouseID       pgtype.UUID `json:"warehouse_id"`
+	BranchID          pgtype.UUID `json:"branch_id"`
+	DivisionID        pgtype.UUID `json:"division_id"`
+	ExpenseCategoryID pgtype.UUID `json:"expense_category_id"`
+	ID                pgtype.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateInvoice(ctx context.Context, arg *UpdateInvoiceParams) (pgtype.UUID, error) {
@@ -465,6 +481,7 @@ func (q *Queries) UpdateInvoice(ctx context.Context, arg *UpdateInvoiceParams) (
 		arg.WarehouseID,
 		arg.BranchID,
 		arg.DivisionID,
+		arg.ExpenseCategoryID,
 		arg.ID,
 	)
 	var id pgtype.UUID

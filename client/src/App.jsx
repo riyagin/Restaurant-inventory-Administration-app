@@ -39,6 +39,7 @@ import FinancialReport from './pages/FinancialReport';
 import FinancialStatement from './pages/FinancialStatement';
 import AccountAdjustments from './pages/AccountAdjustments';
 import InvoiceTemplates from './pages/InvoiceTemplates';
+import DispatchTemplates from './pages/DispatchTemplates';
 import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
 import Profile from './pages/Profile';
@@ -239,7 +240,7 @@ function Nav() {
           {menuLink('/reports/usage-trend', 'Perubahan Pemakaian')}
         </NavDropdown>
 
-        <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
+        <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates', '/dispatch-templates']}>
           {menuLink('/items', 'Barang')}
           {menuLink('/warehouses', 'Gudang')}
           {menuLink('/vendors', 'Vendor')}
@@ -247,6 +248,7 @@ function Nav() {
           <div className="nav-dropdown-divider" />
           {menuLink('/branches', 'Cabang & Divisi')}
           {menuLink('/invoice-templates', 'Template Invoice')}
+          {menuLink('/dispatch-templates', 'Template Pengiriman')}
           {menuLink('/account-adjustments', 'Jurnal Manual')}
           <div className="nav-dropdown-divider" />
           {menuLink('/users', 'Pengguna')}
@@ -318,13 +320,14 @@ function Nav() {
             <Link to="/reports/usage-trend" className={isActive('/reports/usage-trend') ? 'active' : ''}>Perubahan Pemakaian</Link>
           </MobileSection>
 
-          <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates']}>
+          <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates', '/dispatch-templates']}>
             <Link to="/items" className={isActive('/items') ? 'active' : ''}>Barang</Link>
             <Link to="/warehouses" className={isActive('/warehouses') ? 'active' : ''}>Gudang</Link>
             <Link to="/vendors" className={isActive('/vendors') ? 'active' : ''}>Vendor</Link>
             <Link to="/accounts" className={isActive('/accounts') ? 'active' : ''}>Akun</Link>
             <Link to="/branches" className={isActive('/branches') ? 'active' : ''}>Cabang & Divisi</Link>
             <Link to="/invoice-templates" className={isActive('/invoice-templates') ? 'active' : ''}>Template Invoice</Link>
+            <Link to="/dispatch-templates" className={isActive('/dispatch-templates') ? 'active' : ''}>Template Pengiriman</Link>
             <Link to="/account-adjustments" className={isActive('/account-adjustments') ? 'active' : ''}>Jurnal Manual</Link>
             <Link to="/users" className={isActive('/users') ? 'active' : ''}>Pengguna</Link>
             <Link to="/activity" className={isActive('/activity') ? 'active' : ''}>Log Aktivitas</Link>
@@ -409,6 +412,7 @@ export default function App() {
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="/branches" element={<Branches />} />
                 <Route path="/invoice-templates" element={<InvoiceTemplates />} />
+                <Route path="/dispatch-templates" element={<DispatchTemplates />} />
                 <Route path="/users" element={<Users />} />
                 <Route path="/activity" element={<ActivityLog />} />
                 <Route path="/profile" element={<Profile />} />

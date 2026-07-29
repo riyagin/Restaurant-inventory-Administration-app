@@ -6,13 +6,87 @@ const ACTION_STYLE = {
   update:   { background: '#e8f0fe', color: '#4f8ef7' },
   delete:   { background: '#fdecea', color: '#e74c3c' },
   transfer: { background: '#fef9e7', color: '#e67e22' },
+  // Server lifecycle events, written by the backend with no user behind them.
+  start:    { background: '#eef2f7', color: '#4a5568' },
+  stop:     { background: '#eef2f7', color: '#4a5568' },
 };
 
+// Keys are the lower_snake_case entity_type values the backend writes (see
+// service.NormalizeLogEntityType). Anything missing here falls back to the raw
+// value, so a new entity type still renders — just untranslated.
 const ENTITY_LABEL = {
-  invoice:   'Invoice',
-  inventory: 'Inventaris',
-  item:      'Barang',
-  transfer:  'Transfer',
+  // Master data
+  item:              'Barang',
+  vendor:            'Vendor',
+  warehouse:         'Gudang',
+  branch:            'Cabang',
+  division:          'Divisi',
+  division_category: 'Kategori Divisi',
+  account:           'Akun',
+  user:              'Pengguna',
+  enumeration:       'Enumerasi',
+  recipe:            'Resep',
+  // Stock
+  inventory:      'Inventaris',
+  stock_transfer: 'Transfer Stok',
+  stock_opname:   'Stok Opname',
+  dispatch:       'Pengeluaran',
+  production:     'Produksi',
+  // Finance
+  invoice:            'Invoice',
+  invoice_template:   'Template Invoice',
+  sale:               'Penjualan',
+  pos_import:         'Import POS',
+  account_adjustment: 'Penyesuaian Akun',
+  account_transfer:   'Transfer Akun',
+  capital_injection:  'Setoran Modal',
+  // HR
+  employee:                 'Karyawan',
+  hr_employee:              'Karyawan',
+  hr_position:              'Jabatan',
+  hr_import:                'Import HR',
+  hr_settings:              'Pengaturan HR',
+  employee_face:            'Data Wajah',
+  wage_component:           'Komponen Upah',
+  wage_structure:           'Struktur Upah',
+  hr_attendance:            'Kehadiran',
+  hr_attendance_correction: 'Koreksi Kehadiran',
+  attendance_device:        'Perangkat Absensi',
+  fingerprint_import:       'Import Fingerprint',
+  work_schedule:            'Jadwal Kerja',
+  public_holiday:           'Hari Libur',
+  performance_policy:       'Kebijakan Kinerja',
+  performance_violation:    'Pelanggaran Kinerja',
+  leave_type:               'Jenis Cuti',
+  leave_request:            'Pengajuan Cuti',
+  leave_balance:            'Saldo Cuti',
+  overtime_request:         'Lembur',
+  kasbon:                   'Kasbon',
+  payroll_period:           'Periode Payroll',
+  payroll_line:             'Baris Payroll',
+  thr_run:                  'THR',
+  thr_line:                 'Baris THR',
+  // System
+  system: 'Sistem',
+};
+
+// Dropdown grouping. Kept separate from ENTITY_LABEL so the badge lookup stays a
+// flat map while the filter can present the list in sections.
+const ENTITY_GROUPS = [
+  ['Data Master', ['item', 'vendor', 'warehouse', 'branch', 'division', 'division_category', 'account', 'user', 'enumeration', 'recipe']],
+  ['Stok',        ['inventory', 'stock_transfer', 'stock_opname', 'dispatch', 'production']],
+  ['Keuangan',    ['invoice', 'invoice_template', 'sale', 'pos_import', 'account_adjustment', 'account_transfer', 'capital_injection']],
+  ['Kepegawaian', ['hr_employee', 'hr_position', 'wage_component', 'wage_structure', 'hr_attendance', 'hr_attendance_correction', 'attendance_device', 'employee_face', 'fingerprint_import', 'work_schedule', 'public_holiday', 'performance_policy', 'performance_violation', 'leave_type', 'leave_request', 'leave_balance', 'overtime_request', 'kasbon', 'payroll_period', 'payroll_line', 'thr_run', 'thr_line', 'hr_import', 'hr_settings']],
+  ['Sistem',      ['system']],
+];
+
+const ACTION_LABEL = {
+  create:   'Buat',
+  update:   'Perbarui',
+  delete:   'Hapus',
+  transfer: 'Transfer',
+  start:    'Mulai',
+  stop:     'Berhenti',
 };
 
 const PAGE_SIZE = 50;
@@ -137,10 +211,13 @@ export default function ActivityLog() {
             />
             <select value={entityType} onChange={setFilter(setEntityType)}>
               <option value="all">Semua Tipe</option>
-              <option value="invoice">Invoice</option>
-              <option value="inventory">Inventory</option>
-              <option value="item">Item</option>
-              <option value="transfer">Transfer</option>
+              {ENTITY_GROUPS.map(([groupLabel, types]) => (
+                <optgroup key={groupLabel} label={groupLabel}>
+                  {types.map(t => (
+                    <option key={t} value={t}>{ENTITY_LABEL[t] ?? t}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
             <select value={action} onChange={setFilter(setAction)}>
               <option value="all">Semua Aksi</option>
@@ -148,6 +225,8 @@ export default function ActivityLog() {
               <option value="update">Perbarui</option>
               <option value="delete">Hapus</option>
               <option value="transfer">Transfer</option>
+              <option value="start">Mulai</option>
+              <option value="stop">Berhenti</option>
             </select>
             <input type="date" value={dateFrom} onChange={setFilter(setDateFrom)} title="Dari tanggal" />
             <input type="date" value={dateTo}   onChange={setFilter(setDateTo)}   title="Sampai tanggal" />
@@ -181,7 +260,7 @@ export default function ActivityLog() {
                     display: 'inline-block', padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600,
                     ...(ACTION_STYLE[log.action] ?? { background: '#eee', color: '#555' }),
                   }}>
-                    {log.action}
+                    {ACTION_LABEL[log.action] ?? log.action}
                   </span>
                 </td>
                 <td>

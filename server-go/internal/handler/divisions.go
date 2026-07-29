@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 type DivisionsHandler struct {
@@ -150,6 +153,17 @@ func (h *DivisionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inside the transaction: a division also brings revenue, expense and
+	// discount accounts into existence.
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "division",
+		EntityID:    newDiv.ID.Bytes,
+		Description: fmt.Sprintf("Menambahkan divisi %q di cabang %q beserta akun pendapatan, beban dan diskonnya", body.Name, branch.Name),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -178,6 +192,12 @@ func (h *DivisionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	before, err := h.queries.GetDivisionByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "divisi tidak ditemukan")
+		return
+	}
+
 	division, err := h.queries.UpdateDivision(r.Context(), &db.UpdateDivisionParams{
 		Name: body.Name,
 		ID:   pgtype.UUID{Bytes: id, Valid: true},
@@ -191,6 +211,10 @@ func (h *DivisionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui divisi")
 		return
 	}
+
+	logMutation(r, h.queries, "UPDATE", "division", id,
+		fmt.Sprintf("Mengubah nama divisi %q → %q", before.Name, division.Name))
+
 	respondJSON(w, http.StatusOK, division)
 }
 
@@ -201,10 +225,20 @@ func (h *DivisionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, err := h.queries.GetDivisionByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "divisi tidak ditemukan")
+		return
+	}
+
 	if err := h.queries.DeleteDivision(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus divisi")
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "division", id,
+		fmt.Sprintf("Menghapus divisi %q", existing.Name))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "divisi berhasil dihapus"})
 }
 
@@ -264,6 +298,10 @@ func (h *DivisionsHandler) CreateCategory(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusInternalServerError, "gagal membuat kategori")
 		return
 	}
+
+	logMutation(r, h.queries, "CREATE", "division_category", category.ID.Bytes,
+		fmt.Sprintf("Menambahkan kategori biaya %q", category.Name))
+
 	respondJSON(w, http.StatusCreated, category)
 }
 
@@ -274,9 +312,29 @@ func (h *DivisionsHandler) DeleteCategory(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// There is no single-category lookup query, and the name is gone once the row
+	// is deleted. The category table is small, so resolve the label from the full
+	// list rather than logging a bare UUID.
+	name := ""
+	if all, err := h.queries.ListDivisionCategories(r.Context(), pgtype.UUID{}); err == nil {
+		for _, c := range all {
+			if c.ID.Bytes == id {
+				name = c.Name
+				break
+			}
+		}
+	}
+
 	if err := h.queries.DeleteDivisionCategory(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus kategori")
 		return
 	}
+
+	desc := "Menghapus kategori biaya"
+	if name != "" {
+		desc = fmt.Sprintf("Menghapus kategori biaya %q", name)
+	}
+	logMutation(r, h.queries, "DELETE", "division_category", id, desc)
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "kategori berhasil dihapus"})
 }

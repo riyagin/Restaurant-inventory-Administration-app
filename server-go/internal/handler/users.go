@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -77,6 +78,10 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal membuat pengguna")
 		return
 	}
+
+	logMutation(r, h.queries, "CREATE", "user", user.ID.Bytes,
+		fmt.Sprintf("Menambahkan pengguna %q dengan role %s", body.Username, body.Role))
+
 	respondJSON(w, http.StatusCreated, user)
 }
 
@@ -107,6 +112,12 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	before, err := h.queries.GetUserByID(r.Context(), pgID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "pengguna tidak ditemukan")
+		return
+	}
+
 	user, err := h.queries.UpdateUser(r.Context(), &db.UpdateUserParams{
 		Username: body.Username,
 		Role:     body.Role,
@@ -115,6 +126,16 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui pengguna")
 		return
+	}
+
+	// A role change grants or revokes access, and a password reset takes over an
+	// account — both need to be attributable. The password itself is never logged.
+	var changes []string
+	if before.Username != body.Username {
+		changes = append(changes, fmt.Sprintf("username: %q → %q", before.Username, body.Username))
+	}
+	if before.Role != body.Role {
+		changes = append(changes, fmt.Sprintf("role: %s → %s", before.Role, body.Role))
 	}
 
 	if body.Password != "" {
@@ -130,7 +151,11 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui password")
 			return
 		}
+		changes = append(changes, "password direset")
 	}
+
+	logMutation(r, h.queries, "UPDATE", "user", id,
+		fmt.Sprintf("Mengubah pengguna %q%s", before.Username, changeClause(changes)))
 
 	respondJSON(w, http.StatusOK, user)
 }
@@ -148,9 +173,19 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, err := h.queries.GetUserByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "pengguna tidak ditemukan")
+		return
+	}
+
 	if err := h.queries.DeleteUser(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus pengguna")
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "user", id,
+		fmt.Sprintf("Menghapus pengguna %q (role %s)", existing.Username, existing.Role))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "pengguna berhasil dihapus"})
 }

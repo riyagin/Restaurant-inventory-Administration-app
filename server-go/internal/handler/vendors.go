@@ -74,6 +74,15 @@ func (h *VendorsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	vendor.AccountID = pgtype.UUID{Bytes: acctID, Valid: true}
 
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "vendor",
+		EntityID:    vendor.ID.Bytes,
+		Description: fmt.Sprintf("Menambahkan vendor %q beserta akun hutangnya", vendor.Name),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan vendor")
 		return
@@ -110,6 +119,12 @@ func (h *VendorsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
+	before, err := qtx.GetVendorByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "vendor tidak ditemukan")
+		return
+	}
+
 	vendor, err := qtx.UpdateVendor(ctx, &db.UpdateVendorParams{
 		Name: body.Name,
 		ID:   pgtype.UUID{Bytes: id, Valid: true},
@@ -128,6 +143,17 @@ func (h *VendorsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	} else if acctID, err := service.CreateVendorPayableAccount(ctx, qtx, id, vendor.Name); err == nil {
 		vendor.AccountID = pgtype.UUID{Bytes: acctID, Valid: true}
 	}
+
+	// A rename also relabels the vendor's payable sub-account, so record both
+	// names rather than just the new one.
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "vendor",
+		EntityID:    id,
+		Description: fmt.Sprintf("Mengubah nama vendor %q → %q", before.Name, vendor.Name),
+	})
 
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan perubahan")
@@ -215,6 +241,15 @@ func (h *VendorsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "DELETE",
+		EntityType:  "vendor",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menghapus vendor %q", vendor.Name),
+	})
 
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan perubahan")

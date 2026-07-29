@@ -475,7 +475,16 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var wasteValue int64
+		// Two different numbers, tracked separately on purpose:
+		//   wasteValue   — a magnitude, for stock_opname_items.waste_value and
+		//                  the waste journal; zero on a surplus.
+		//   historyValue — signed like quantity_change (positive = stock in,
+		//                  negative = stock out), for stock_history.value.
+		// Every other movement type already follows the signed convention, and
+		// the flow reports bucket on it (`value > 0` → masuk, `< 0` → keluar).
+		// Writing the waste magnitude here made a shrinkage count as inbound
+		// value, and leaving a surplus at 0 hid the added value entirely.
+		var wasteValue, historyValue int64
 		if diff < 0 {
 			// Loss: FIFO deduct
 			deducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, math.Abs(diff))
@@ -485,6 +494,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			wasteValue = deducted
+			historyValue = -deducted
 		} else {
 			// Surplus: add stock at latest known price (prorated for qty)
 			surplusValue := latestItemValue(ctx, qtx, itemID, it.UnitIndex, diff)
@@ -493,6 +503,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			wasteValue = 0
+			historyValue = surplusValue
 			if surplusValue > 0 {
 				if _, err := service.Post(ctx, qtx, service.Entry{
 					Date:        today,
@@ -533,7 +544,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Type:           "opname",
 			Reference:      "Stok Opname",
 			Date:           today,
-			Value:          wasteValue,
+			Value:          historyValue,
 			SourceID:       opname.ID.Bytes,
 			SourceType:     "opname",
 		}); err != nil {
@@ -688,7 +699,8 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var wasteValue int64
+		// Same split as Create — see the comment there.
+		var wasteValue, historyValue int64
 		if diff < 0 {
 			deducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, math.Abs(diff))
 			if err != nil {
@@ -697,12 +709,14 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			wasteValue = deducted
+			historyValue = -deducted
 		} else {
 			surplusValue := latestItemValue(ctx, qtx, itemID, it.UnitIndex, diff)
 			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, diff, it.UnitIndex, surplusValue, now); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok opname")
 				return
 			}
+			historyValue = surplusValue
 			if surplusValue > 0 {
 				if _, err := service.Post(ctx, qtx, service.Entry{
 					Date:        now,
@@ -744,7 +758,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 			Type:           "opname",
 			Reference:      "Koreksi Stok Opname",
 			Date:           now,
-			Value:          wasteValue,
+			Value:          historyValue,
 			SourceID:       id,
 			SourceType:     "opname",
 		}); err != nil {
@@ -838,32 +852,5 @@ func latestItemValue(ctx context.Context, qtx *db.Queries, itemID uuid.UUID, uni
 	return int64(math.Round(pricePerBase * qty))
 }
 
-// baseUnitFactor returns how many base units make up one unit at idx — the
-// product of every perPrev below it. The base unit is the last entry in the
-// array, so the factor for the base unit itself is 1.
-//
-// Example: [{dus}, {kaleng, perPrev: 24}] → factor(0) = 24, factor(1) = 1.
-//
-// Returns 1 when the units cannot be read, which leaves the caller's price
-// unchanged rather than scaling it by a guess.
-func baseUnitFactor(unitsJSON []byte, idx int32) float64 {
-	var units []struct {
-		Name    string   `json:"name"`
-		PerPrev *float64 `json:"perPrev"`
-	}
-	if err := json.Unmarshal(unitsJSON, &units); err != nil {
-		return 1
-	}
-	if idx < 0 || int(idx) >= len(units) {
-		return 1
-	}
-
-	factor := 1.0
-	for i := int(idx) + 1; i < len(units); i++ {
-		if units[i].PerPrev == nil || *units[i].PerPrev <= 0 {
-			continue
-		}
-		factor *= *units[i].PerPrev
-	}
-	return factor
-}
+// baseUnitFactor now lives in item_units.go, alongside the unit-rescale logic
+// that shares its interpretation of the units array.

@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -9,16 +11,75 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
+// logItem records an item mutation on the activity log. Item edits change how
+// every downstream purchase and stock movement is priced and converted, so they
+// need the same audit trail as the transactions themselves.
+func (h *ItemsHandler) logItem(r *http.Request, action string, id [16]byte, description string) {
+	ctx := r.Context()
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      action,
+		EntityType:  "item",
+		EntityID:    id,
+		Description: description,
+	})
+}
+
+// itemLabel renders an item as `"Nama" (KODE)`, or just `"Nama"` when it has no code.
+func itemLabel(name, code string) string {
+	if strings.TrimSpace(code) == "" {
+		return fmt.Sprintf("%q", name)
+	}
+	return fmt.Sprintf("%q (%s)", name, code)
+}
+
+// itemChangeSummary describes what an update changed, as a trailing clause like
+// ` — nama: "A" → "B"; satuan diubah`. Returns "" when nothing changed, so the
+// log entry degrades to a plain "Mengubah item …" rather than a dangling dash.
+func itemChangeSummary(before, after *db.Item) string {
+	var changes []string
+	if before.Name != after.Name {
+		changes = append(changes, fmt.Sprintf("nama: %q → %q", before.Name, after.Name))
+	}
+	if before.Code != after.Code {
+		changes = append(changes, fmt.Sprintf("kode: %q → %q", before.Code, after.Code))
+	}
+	if before.IsStock != after.IsStock {
+		changes = append(changes, fmt.Sprintf("tipe: %s → %s", stockLabel(before.IsStock), stockLabel(after.IsStock)))
+	}
+	// Compare the raw JSONB: a ratio change reprices existing stock, so it is
+	// worth flagging even though the units themselves are too verbose to inline.
+	if !bytes.Equal(before.Units, after.Units) {
+		changes = append(changes, "satuan diubah")
+	}
+	if len(changes) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(changes, "; ")
+}
+
+func stockLabel(isStock bool) string {
+	if isStock {
+		return "barang stok"
+	}
+	return "non-stok"
+}
+
 type ItemsHandler struct {
+	pool    *pgxpool.Pool
 	queries *db.Queries
 }
 
-func NewItemsHandler(queries *db.Queries) *ItemsHandler {
-	return &ItemsHandler{queries: queries}
+func NewItemsHandler(pool *pgxpool.Pool, queries *db.Queries) *ItemsHandler {
+	return &ItemsHandler{pool: pool, queries: queries}
 }
 
 type itemResponse struct {
@@ -120,10 +181,15 @@ func (h *ItemsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal membuat item")
 		return
 	}
+
+	h.logItem(r, "CREATE", item.ID.Bytes,
+		fmt.Sprintf("Menambahkan item %s", itemLabel(item.Name, item.Code)))
+
 	respondJSON(w, http.StatusCreated, itemToResponse(item))
 }
 
 func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "ID tidak valid")
@@ -149,7 +215,48 @@ func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		body.Units = json.RawMessage("[]")
 	}
 
-	item, err := h.queries.UpdateItem(r.Context(), &db.UpdateItemParams{
+	// Read the row first so the log can name what actually changed. A unit-ratio
+	// edit silently reprices existing stock, so "diubah" alone is not enough to
+	// audit from.
+	before, err := h.queries.GetItemByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "item tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil item")
+		return
+	}
+
+	// A units edit and the inventory it restates have to land together: a lot
+	// left at the old index is read as the wrong unit by every later deduction.
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.queries.WithTx(tx)
+
+	rescaled := 0
+	if !bytes.Equal(before.Units, []byte(body.Units)) {
+		oldUnits, errOld := parseUnitDefs(before.Units)
+		newUnits, errNew := parseUnitDefs([]byte(body.Units))
+		if errOld != nil || errNew != nil {
+			respondError(w, http.StatusBadRequest, "format satuan tidak valid")
+			return
+		}
+		if len(newUnits) > 0 && len(oldUnits) > 0 {
+			rescaled, err = rescaleInventoryForUnits(ctx, tx, id, oldUnits, newUnits)
+			if err != nil {
+				respondError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("gagal menyesuaikan stok ke satuan baru: %v", err))
+				return
+			}
+		}
+	}
+
+	item, err := qtx.UpdateItem(ctx, &db.UpdateItemParams{
 		Name:    body.Name,
 		Code:    body.Code,
 		Units:   []byte(body.Units),
@@ -160,6 +267,20 @@ func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui item")
 		return
 	}
+
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan perubahan")
+		return
+	}
+
+	summary := itemChangeSummary(before, item)
+	if rescaled > 0 {
+		summary += fmt.Sprintf("; %d lot stok dikonversi ke satuan %s",
+			rescaled, baseUnitName([]byte(body.Units)))
+	}
+	h.logItem(r, "UPDATE", item.ID.Bytes,
+		fmt.Sprintf("Mengubah item %s%s", itemLabel(before.Name, before.Code), summary))
+
 	respondJSON(w, http.StatusOK, itemToResponse(item))
 }
 
@@ -170,10 +291,26 @@ func (h *ItemsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read before deleting: once the row is gone its name and code cannot be
+	// recovered for the log entry.
+	existing, err := h.queries.GetItemByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "item tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil item")
+		return
+	}
+
 	if err := h.queries.DeleteItem(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus item")
 		return
 	}
+
+	h.logItem(r, "DELETE", id,
+		fmt.Sprintf("Menghapus item %s", itemLabel(existing.Name, existing.Code)))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "item berhasil dihapus"})
 }
 

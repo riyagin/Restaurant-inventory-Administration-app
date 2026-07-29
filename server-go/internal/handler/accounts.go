@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -73,6 +74,10 @@ func (h *AccountsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal membuat akun")
 		return
 	}
+
+	logMutation(r, h.queries, "CREATE", "account", account.ID.Bytes,
+		fmt.Sprintf("Menambahkan akun %q (%s)", body.Name, body.AccountType))
+
 	respondJSON(w, http.StatusCreated, account)
 }
 
@@ -132,6 +137,18 @@ func (h *AccountsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui akun")
 		return
 	}
+
+	var changes []string
+	if existing.Name != body.Name {
+		changes = append(changes, fmt.Sprintf("nama: %q → %q", existing.Name, body.Name))
+	}
+	if existing.AccountType != body.AccountType {
+		// Retyping an account moves it between sections of the financial report.
+		changes = append(changes, fmt.Sprintf("tipe: %s → %s", existing.AccountType, body.AccountType))
+	}
+	logMutation(r, h.queries, "UPDATE", "account", id,
+		fmt.Sprintf("Mengubah akun %q%s", existing.Name, changeClause(changes)))
+
 	respondJSON(w, http.StatusOK, account)
 }
 
@@ -157,6 +174,11 @@ func (h *AccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus akun")
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "account", id,
+		fmt.Sprintf("Menghapus akun %q (%s, saldo %s)",
+			existing.Name, existing.AccountType, formatRupiahShort(existing.Balance)))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "akun berhasil dihapus"})
 }
 

@@ -497,6 +497,18 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Device-key authenticated, so there is no JWT user to attribute this to —
+	// the device name stands in as the actor. Enrolling a face changes who the
+	// terminal will accept as this employee, which is worth an audit trail.
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		Username:   "perangkat: " + dev.Name,
+		Action:     "UPDATE",
+		EntityType: "employee_face",
+		EntityID:   emp.ID.Bytes,
+		Description: fmt.Sprintf("Menyimpan data wajah karyawan %s (%s) dari perangkat %s",
+			emp.FullName, req.EmployeeCode, dev.Name),
+	})
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"success":       true,
 		"message":       "wajah tersimpan",

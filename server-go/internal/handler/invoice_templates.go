@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 type InvoiceTemplatesHandler struct {
@@ -240,6 +243,15 @@ func (h *InvoiceTemplatesHandler) Create(w http.ResponseWriter, r *http.Request)
 		createdItems = append(createdItems, ti)
 	}
 
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "invoice_template",
+		EntityID:    tmpl.ID.Bytes,
+		Description: fmt.Sprintf("Menambahkan template invoice %q (%d item)", tmpl.Name, len(createdItems)),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -349,6 +361,17 @@ func (h *InvoiceTemplatesHandler) Update(w http.ResponseWriter, r *http.Request)
 		updatedItems = append(updatedItems, ti)
 	}
 
+	// An update replaces the template's whole item list, so the item count is the
+	// most useful thing to record alongside the name.
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "invoice_template",
+		EntityID:    id,
+		Description: fmt.Sprintf("Mengubah template invoice %q (%d item)", tmpl.Name, len(updatedItems)),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -372,9 +395,19 @@ func (h *InvoiceTemplatesHandler) Delete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	existing, err := h.queries.GetInvoiceTemplateByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "template tidak ditemukan")
+		return
+	}
+
 	if err := h.queries.DeleteInvoiceTemplate(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus template")
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "invoice_template", id,
+		fmt.Sprintf("Menghapus template invoice %q", existing.Name))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "template berhasil dihapus"})
 }

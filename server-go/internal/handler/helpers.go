@@ -5,10 +5,44 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
+
+// logMutation records a mutation on the activity log, attributed to the caller
+// on the request context.
+//
+// Master-data handlers (items, vendors, warehouses, branches, divisions, users,
+// invoice templates, accounts) all need the same four lines around every write;
+// this collapses them to one call. Handlers that mutate inside a transaction
+// should call service.LogActivity with their qtx directly instead, so the log
+// row commits or rolls back with the change it describes.
+func logMutation(r *http.Request, q *db.Queries, action, entityType string, entityID uuid.UUID, description string) {
+	ctx := r.Context()
+	_ = service.LogActivity(ctx, q, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      action,
+		EntityType:  entityType,
+		EntityID:    entityID,
+		Description: description,
+	})
+}
+
+// changeClause renders a list of field changes as a trailing ` — a; b` clause,
+// or "" when nothing changed (so the caller's sentence stays well-formed).
+func changeClause(changes []string) string {
+	if len(changes) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(changes, "; ")
+}
 
 func respondJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

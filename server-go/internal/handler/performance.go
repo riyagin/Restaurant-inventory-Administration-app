@@ -587,6 +587,17 @@ func (h *PerformanceHandler) ResetAutoViolations(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// A range reset wipes violations for every employee at once and feeds
+	// straight into monthly scores, so it needs an audit trail naming the range.
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:     middleware.UserIDFromCtx(ctx),
+		Username:   middleware.UsernameFromCtx(ctx),
+		Action:     "DELETE",
+		EntityType: "performance_violation",
+		Description: fmt.Sprintf("Mereset pelanggaran otomatis periode %s s/d %s",
+			from.Format("2006-01-02"), to.Format("2006-01-02")),
+	})
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "pelanggaran otomatis berhasil direset"})
 }
 

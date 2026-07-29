@@ -46,11 +46,16 @@ export default function Accounts() {
 
   const toggle = (id) => setCollapsed(s => ({ ...s, [id]: !s[id] }));
 
-  // Recursive balance: leaf node's own balance, parent = sum of children
+  // Recursive balance: an account's own postings plus everything beneath it.
+  //
+  // The parent's own balance counts. Grouping accounts (Utang Usaha 20100, the
+  // type roots) hold zero by design so nothing changes for them, but a division
+  // expense account holds real direct postings — dispatch usage lands there,
+  // while purchases land on its category children. Counting only the children
+  // would make that dispatch spending vanish from the COA.
   const totalOf = (a) => {
     const children = accounts.filter(c => c.parent_id === a.id);
-    if (!children.length) return Number(a.balance);
-    return children.reduce((s, c) => s + totalOf(c), 0);
+    return children.reduce((s, c) => s + totalOf(c), Number(a.balance));
   };
 
   const sectionTotal = (type) =>

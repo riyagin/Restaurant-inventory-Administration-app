@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +24,30 @@ import (
 	appmiddleware "inventory-app/server-go/internal/middleware"
 	"inventory-app/server-go/internal/service"
 )
+
+// formatUptime renders a duration in Indonesian, coarsest unit first (e.g.
+// "2 jam 5 menit"). Seconds are only shown for uptimes under a minute, where
+// they are the only meaningful figure.
+func formatUptime(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d detik", int(d.Seconds()))
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+
+	parts := make([]string, 0, 3)
+	if days > 0 {
+		parts = append(parts, fmt.Sprintf("%d hari", days))
+	}
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%d jam", hours))
+	}
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%d menit", minutes))
+	}
+	return strings.Join(parts, " ")
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -50,6 +75,23 @@ func main() {
 	log.Println("migrations up to date")
 
 	queries := db.New(pool)
+
+	// Record the restart in the activity log. Logged here — after the pool and
+	// migrations are up, before the listener starts — so the entry exists even if
+	// binding the port then fails.
+	//
+	// A crash (SIGKILL, OOM, power loss) cannot write its own "stop" row, so a
+	// start with no preceding stop is itself the signal that the process died
+	// rather than being shut down. Uses its own context: this must not be tied to
+	// the signal context that shutdown cancels.
+	startedAt := time.Now()
+	logCtx, logCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := service.LogSystemEvent(logCtx, queries, service.ActionServerStart,
+		fmt.Sprintf("Server dijalankan pada port %s", cfg.Port)); err != nil {
+		// Never fatal: an audit row is not worth refusing to serve traffic over.
+		log.Printf("activity log: failed to record server start: %v", err)
+	}
+	logCancel()
 
 	// Token cleanup goroutine
 	go func() {
@@ -102,11 +144,12 @@ func main() {
 	usersHandler := handler.NewUsersHandler(queries)
 	warehousesHandler := handler.NewWarehousesHandler(pool, queries)
 	vendorsHandler := handler.NewVendorsHandler(pool, queries)
-	itemsHandler := handler.NewItemsHandler(queries)
+	itemsHandler := handler.NewItemsHandler(pool, queries)
 	accountsHandler := handler.NewAccountsHandler(pool, queries)
 	templatesHandler := handler.NewInvoiceTemplatesHandler(pool, queries)
 	branchesHandler := handler.NewBranchesHandler(pool, queries)
 	divisionsHandler := handler.NewDivisionsHandler(pool, queries)
+	expenseCategoriesHandler := handler.NewExpenseCategoriesHandler(pool, queries)
 	inventoryHandler := handler.NewInventoryHandler(pool, queries)
 	stockHistoryHandler := handler.NewStockHistoryHandler(queries)
 	stockTransfersHandler := handler.NewStockTransfersHandler(pool, queries)
@@ -114,6 +157,7 @@ func main() {
 	invoicesHandler := handler.NewInvoicesHandler(pool, queries)
 	invoicesHandler.SetUploadsDir(cfg.UploadsDir)
 	dispatchesHandler := handler.NewDispatchesHandler(pool, queries)
+	dispatchTemplatesHandler := handler.NewDispatchTemplatesHandler(pool, queries)
 	enumerationsHandler := handler.NewEnumerationsHandler(pool, queries)
 	recipesHandler := handler.NewRecipesHandler(pool, queries)
 	productionsHandler := handler.NewProductionsHandler(pool, queries)
@@ -256,6 +300,13 @@ func main() {
 		r.Post("/api/division-categories", divisionsHandler.CreateCategory)
 		r.Delete("/api/division-categories/{id}", divisionsHandler.DeleteCategory)
 
+		// Expense categories — the subaccount level under a division's expense
+		// account. Distinct from division-categories above, which are the POS
+		// import's revenue labels.
+		r.Get("/api/expense-categories", expenseCategoriesHandler.List)
+		r.Post("/api/expense-categories", expenseCategoriesHandler.Create)
+		r.Delete("/api/expense-categories/{id}", expenseCategoriesHandler.Delete)
+
 		// Inventory — all authenticated
 		r.Get("/api/inventory", inventoryHandler.List)
 		r.Get("/api/inventory/count", inventoryHandler.Count)
@@ -300,6 +351,13 @@ func main() {
 		r.Post("/api/dispatches", dispatchesHandler.Create)
 		r.Put("/api/dispatches/{id}", dispatchesHandler.Update)
 		r.Delete("/api/dispatches/{id}", dispatchesHandler.Delete)
+
+		// Dispatch Templates — all authenticated
+		r.Get("/api/dispatch-templates", dispatchTemplatesHandler.List)
+		r.Get("/api/dispatch-templates/{id}", dispatchTemplatesHandler.Get)
+		r.Post("/api/dispatch-templates", dispatchTemplatesHandler.Create)
+		r.Put("/api/dispatch-templates/{id}", dispatchTemplatesHandler.Update)
+		r.Delete("/api/dispatch-templates/{id}", dispatchTemplatesHandler.Delete)
 
 		// Enumerations — all authenticated
 		r.Get("/api/enumerations", enumerationsHandler.List)
@@ -591,5 +649,17 @@ func main() {
 	if err := server.Shutdown(shutCtx); err != nil {
 		log.Printf("server forced to shutdown: %v", err)
 	}
+
+	// Fresh context, not ctx: the signal context is already cancelled by now, so
+	// reusing it would abort this write immediately. Written after Shutdown
+	// returns so the recorded uptime covers the whole serving period, and while
+	// the pool is still open (it is closed by the deferred pool.Close above).
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := service.LogSystemEvent(stopCtx, queries, service.ActionServerStop,
+		fmt.Sprintf("Server dihentikan setelah berjalan %s", formatUptime(time.Since(startedAt)))); err != nil {
+		log.Printf("activity log: failed to record server stop: %v", err)
+	}
+	stopCancel()
+
 	log.Println("server stopped")
 }

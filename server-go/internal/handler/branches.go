@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"inventory-app/server-go/internal/db"
+	"inventory-app/server-go/internal/middleware"
+	"inventory-app/server-go/internal/service"
 )
 
 type BranchesHandler struct {
@@ -124,6 +127,17 @@ func (h *BranchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inside the transaction: creating a branch also creates its revenue and
+	// expense accounts, and the log entry should share their fate.
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "CREATE",
+		EntityType:  "branch",
+		EntityID:    newBranch.ID.Bytes,
+		Description: fmt.Sprintf("Menambahkan cabang %q beserta akun pendapatan dan bebannya", body.Name),
+	})
+
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
 		return
@@ -152,6 +166,12 @@ func (h *BranchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	before, err := h.queries.GetBranchByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusNotFound, "cabang tidak ditemukan")
+		return
+	}
+
 	branch, err := h.queries.UpdateBranch(r.Context(), &db.UpdateBranchParams{
 		Name: body.Name,
 		ID:   pgtype.UUID{Bytes: id, Valid: true},
@@ -165,6 +185,10 @@ func (h *BranchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui cabang")
 		return
 	}
+
+	logMutation(r, h.queries, "UPDATE", "branch", id,
+		fmt.Sprintf("Mengubah nama cabang %q → %q", before.Name, branch.Name))
+
 	respondJSON(w, http.StatusOK, branch)
 }
 
@@ -188,9 +212,19 @@ func (h *BranchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, err := h.queries.GetBranchByID(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "cabang tidak ditemukan")
+		return
+	}
+
 	if err := h.queries.DeleteBranch(ctx, pgID); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus cabang")
 		return
 	}
+
+	logMutation(r, h.queries, "DELETE", "branch", id,
+		fmt.Sprintf("Menghapus cabang %q", existing.Name))
+
 	respondJSON(w, http.StatusOK, map[string]string{"message": "cabang berhasil dihapus"})
 }

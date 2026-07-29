@@ -3,7 +3,11 @@ import {
   getBranches, createBranch, updateBranch, deleteBranch,
   getDivisions, createDivision, updateDivision, deleteDivision,
   getDivisionCategories, createDivisionCategory, deleteDivisionCategory,
+  getExpenseCategories, createExpenseCategory, deleteExpenseCategory,
 } from '../api';
+
+const idr = (v) =>
+  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
 function AccountBadge({ number, name }) {
   if (!number) return <span style={{ color: '#ccc', fontSize: '0.8rem' }}>—</span>;
@@ -70,6 +74,89 @@ function DivisionCategories({ division }) {
               value={newName}
               onChange={e => setNewName(e.target.value)}
               placeholder="Nama kategori..."
+              required
+              style={{ flex: 1, padding: '0.25rem 0.5rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
+            />
+            <button type="submit" className="btn btn-primary btn-sm" style={{ fontSize: '0.78rem' }}>+ Tambah</button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ExpenseCategories — the subaccount breakdown under a division's expense
+// account. Each chip is a real COA account, so it shows its number and balance;
+// a category that has been used cannot be removed (the server refuses) and its
+// ✕ is hidden rather than left to fail.
+function ExpenseCategories({ division }) {
+  const [cats, setCats] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [err, setErr] = useState('');
+
+  const load = () => getExpenseCategories({ division_id: division.id }).then(r => setCats(r.data));
+
+  useEffect(() => { if (open) load(); }, [open]);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    setErr('');
+    try {
+      await createExpenseCategory({ division_id: division.id, name: newName });
+      setNewName('');
+      load();
+    } catch (err) { setErr(err.response?.data?.error || 'Terjadi kesalahan'); }
+  };
+
+  const handleDelete = async (id) => {
+    setErr('');
+    try {
+      await deleteExpenseCategory(id);
+      load();
+    } catch (err) { setErr(err.response?.data?.error || 'Tidak bisa dihapus'); }
+  };
+
+  return (
+    <div style={{ marginTop: '0.5rem' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{ background: 'none', border: 'none', color: '#e67e22', fontSize: '0.78rem', cursor: 'pointer', padding: '0.1rem 0', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+      >
+        <span style={{ fontSize: '0.7rem' }}>{open ? '▼' : '▶'}</span> Kategori Beban ({cats.length || '…'})
+      </button>
+      {open && (
+        <div style={{ marginTop: '0.4rem', paddingLeft: '0.75rem', borderLeft: '2px solid #fdebd8' }}>
+          <div style={{ fontSize: '0.72rem', color: '#999', marginBottom: '0.4rem' }}>
+            Setiap kategori menjadi sub-akun di bawah akun beban divisi ini. Faktur beban
+            yang memilih kategori akan masuk ke sub-akunnya.
+          </div>
+          {err && <div style={{ color: '#e74c3c', fontSize: '0.78rem', marginBottom: '0.3rem' }}>{err}</div>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginBottom: '0.4rem' }}>
+            {cats.map(c => (
+              <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', background: '#fdf3e8', color: '#a35b12', borderRadius: '4px', padding: '0.15rem 0.5rem', fontSize: '0.78rem', fontWeight: 500 }}>
+                <span style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#c97a2b' }}>{c.account_number}</span>
+                {c.name}
+                {Number(c.account_balance) !== 0 && (
+                  <span style={{ color: '#8a6d3b', fontSize: '0.72rem' }}>· {idr(Number(c.account_balance))}</span>
+                )}
+                {Number(c.account_balance) === 0 && (
+                  <button
+                    onClick={() => handleDelete(c.id)}
+                    style={{ background: 'none', border: 'none', color: '#b98a5a', cursor: 'pointer', fontSize: '0.7rem', padding: 0, lineHeight: 1 }}
+                    title="Hapus"
+                  >✕</button>
+                )}
+              </span>
+            ))}
+            {cats.length === 0 && <span style={{ color: '#bbb', fontSize: '0.78rem' }}>Belum ada kategori beban</span>}
+          </div>
+          <form onSubmit={handleAdd} style={{ display: 'flex', gap: '0.3rem' }}>
+            <input
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              placeholder="mis. Listrik, Sewa, ATK..."
               required
               style={{ flex: 1, padding: '0.25rem 0.5rem', border: '1px solid #ddd', borderRadius: '4px', fontSize: '0.8rem' }}
             />
@@ -303,6 +390,7 @@ export default function Branches() {
                           <div>
                             <div style={{ fontWeight: 500 }}>{d.name}</div>
                             <DivisionCategories division={d} />
+                            <ExpenseCategories division={d} />
                           </div>
                         )}
                       </td>

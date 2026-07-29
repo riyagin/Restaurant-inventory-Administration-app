@@ -9,7 +9,10 @@ SELECT
 FROM activity_log al
 WHERE ($1 = '' OR al.entity_type = $1)
   AND ($2 = '' OR al.action = $2)
-  AND ($3 = '' OR al.username ILIKE '%' || $3 || '%')
+  -- Search covers the description too, not just the user: the descriptions name
+  -- the item / vendor / employee that changed, which is how the log is actually
+  -- searched (the UI placeholder has always promised "pengguna / deskripsi").
+  AND ($3 = '' OR al.username ILIKE '%' || $3 || '%' OR al.description ILIKE '%' || $3 || '%')
   AND ($4::date IS NULL OR al.created_at::date >= $4)
   AND ($5::date IS NULL OR al.created_at::date <= $5)
 ORDER BY al.created_at DESC
@@ -19,7 +22,7 @@ LIMIT $6 OFFSET $7;
 SELECT COUNT(*) FROM activity_log
 WHERE ($1 = '' OR entity_type = $1)
   AND ($2 = '' OR action = $2)
-  AND ($3 = '' OR username ILIKE '%' || $3 || '%')
+  AND ($3 = '' OR username ILIKE '%' || $3 || '%' OR description ILIKE '%' || $3 || '%')
   AND ($4::date IS NULL OR created_at::date >= $4)
   AND ($5::date IS NULL OR created_at::date <= $5);
 

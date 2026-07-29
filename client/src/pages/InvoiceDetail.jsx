@@ -149,6 +149,10 @@ export default function InvoiceDetail() {
                 <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Divisi</div>
                 <div style={{ fontWeight: 500 }}>{invoice.division_name ?? '—'}</div>
               </div>
+              <div>
+                <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Kategori Beban</div>
+                <div style={{ fontWeight: 500 }}>{invoice.expense_category_name ?? '—'}</div>
+              </div>
             </>
           )}
           <div>

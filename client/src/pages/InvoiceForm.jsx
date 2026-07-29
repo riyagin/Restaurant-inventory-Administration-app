@@ -1,17 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates } from '../api';
+import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates, getExpenseCategories } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
+import UnitConversion from '../components/UnitConversion';
+import { isBaseUnit } from '../units';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
 const today = new Date().toISOString().split('T')[0];
 
-const emptyPurchaseRow = () => ({ item_id: '', quantity: '', unit_index: '0', price: '' });
+// conversion_factor is a one-off unit→base rate for this invoice only; blank
+// means "use the item's own units".
+const emptyPurchaseRow = () => ({ item_id: '', quantity: '', unit_index: '0', price: '', conversion_factor: '' });
 const emptyExpenseRow  = () => ({ item_id: '', description: '', quantity: '', unit_index: '0', price: '', useDescription: false });
 
-const emptyHeader = { date: today, due_date: '', warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', vendor_id: '', reference_number: '' };
+const emptyHeader = { date: today, due_date: '', warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', expense_category_id: '', vendor_id: '', reference_number: '' };
 
 export default function InvoiceForm() {
   const { id } = useParams();
@@ -29,6 +33,7 @@ export default function InvoiceForm() {
   const [accounts, setAccounts] = useState([]);
   const [branches, setBranches] = useState([]);
   const [divisions, setDivisions] = useState([]);
+  const [expenseCategories, setExpenseCategories] = useState([]);
   const [lastPrices, setLastPrices] = useState({});  // key: `${item_id}:${unit_index}` → price
   const [templates, setTemplates] = useState([]);
   const [photoFile, setPhotoFile] = useState(null);
@@ -51,6 +56,7 @@ export default function InvoiceForm() {
         setInvoiceType(type);
         setExistingPhoto(inv.photo_path ?? null);
         if (inv.branch_id) getDivisions({ branch_id: inv.branch_id }).then(r => setDivisions(r.data));
+        if (inv.division_id) getExpenseCategories({ division_id: inv.division_id }).then(r => setExpenseCategories(r.data));
         setHeader({
           date: inv.date?.split('T')[0] ?? today,
           due_date: inv.due_date?.split('T')[0] ?? '',
@@ -59,6 +65,7 @@ export default function InvoiceForm() {
           account_id: inv.account_id ?? '',
           branch_id: inv.branch_id ?? '',
           division_id: inv.division_id ?? '',
+          expense_category_id: inv.expense_category_id ?? '',
           vendor_id: inv.vendor_id ?? '',
           reference_number: inv.reference_number ?? '',
         });
@@ -84,6 +91,9 @@ export default function InvoiceForm() {
             quantity: String(i.quantity),
             unit_index: String(i.unit_index),
             price: String(i.price),
+            // Reopen at the rate the line was booked at, not today's catalogue
+            // figure — that is what the stock movement being edited used.
+            conversion_factor: i.conversion_factor != null ? String(i.conversion_factor) : '',
           })));
         }
       });
@@ -133,6 +143,7 @@ export default function InvoiceForm() {
         quantity: '',
         unit_index: String(ti.unit_index ?? 0),
         price: '',
+        conversion_factor: '',
       }));
       setRows(newRows);
       const vid = tpl.vendor_id ?? '';
@@ -146,14 +157,22 @@ export default function InvoiceForm() {
     const val = e.target.value;
     setHeader(h => {
       const updated = { ...h, [field]: val };
-      if (field === 'branch_id') updated.division_id = '';
+      // A category belongs to one division, so it cannot survive either select
+      // changing above it.
+      if (field === 'branch_id') { updated.division_id = ''; updated.expense_category_id = ''; }
+      if (field === 'division_id') updated.expense_category_id = '';
       if (field === 'payment_status' && val === 'paid') updated.due_date = h.date;
       if (field === 'date' && h.payment_status === 'paid') updated.due_date = val;
       return updated;
     });
     if (field === 'branch_id') {
       setDivisions([]);
+      setExpenseCategories([]);
       if (val) getDivisions({ branch_id: val }).then(r => setDivisions(r.data));
+    }
+    if (field === 'division_id') {
+      setExpenseCategories([]);
+      if (val) getExpenseCategories({ division_id: val }).then(r => setExpenseCategories(r.data));
     }
     if (field === 'vendor_id') {
       // Clear price cache so last-price re-fetches with the new vendor
@@ -188,10 +207,13 @@ export default function InvoiceForm() {
         const selected = items.find(it => it.id === val);
         updated.unit_index = selected ? String(selected.units.length - 1) : '0';
         updated.price = '';
+        updated.conversion_factor = '';
         if (val) fetchLastPrice(val, updated.unit_index, index, header.vendor_id);
       }
       if (field === 'unit_index' && r.item_id) {
         updated.price = '';
+        // The old rate described the old unit; it means nothing for the new one.
+        updated.conversion_factor = '';
         fetchLastPrice(r.item_id, val, index, header.vendor_id);
       }
       return updated;
@@ -275,6 +297,7 @@ export default function InvoiceForm() {
       warehouse_id: invoiceType === 'purchase' ? header.warehouse_id : undefined,
       branch_id:   invoiceType === 'expense' ? header.branch_id   || null : undefined,
       division_id: invoiceType === 'expense' ? header.division_id || null : undefined,
+      expense_category_id: invoiceType === 'expense' ? header.expense_category_id || null : undefined,
       vendor_id:   header.vendor_id || null,
       reference_number: header.reference_number || null,
       due_date: header.payment_status === 'paid' ? header.date : (header.due_date || null),
@@ -282,7 +305,15 @@ export default function InvoiceForm() {
         ? rows.map(r => r.useDescription
             ? { description: r.description.trim(), quantity: Number(r.quantity), price: Number(r.price) }
             : { item_id: r.item_id, unit_index: Number(r.unit_index), quantity: Number(r.quantity), price: Number(r.price) })
-        : rows.map(r => ({ item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index), price: Number(r.price), vendor_id: header.vendor_id || null })),
+        : rows.map(r => ({
+            item_id: r.item_id,
+            quantity: Number(r.quantity),
+            unit_index: Number(r.unit_index),
+            price: Number(r.price),
+            vendor_id: header.vendor_id || null,
+            // Omitted (0) tells the backend to use the item's own units.
+            conversion_factor: Number(r.conversion_factor) > 0 ? Number(r.conversion_factor) : 0,
+          })),
     };
 
     setSaving(true);
@@ -435,6 +466,21 @@ export default function InvoiceForm() {
                   {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
               </div>
+              {/* Optional. Left blank, the expense posts to the division's
+                  account as it always has; picking a category routes it to that
+                  category's sub-akun instead. Only shown once a division with
+                  categories is selected — an empty dropdown would just be noise. */}
+              {expenseCategories.length > 0 && (
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label>Kategori Beban <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+                  <select value={header.expense_category_id} onChange={setHeaderField('expense_category_id')}>
+                    <option value="">— Tanpa kategori —</option>
+                    {expenseCategories.map(c => (
+                      <option key={c.id} value={c.id}>{c.account_number} · {c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -571,8 +617,12 @@ export default function InvoiceForm() {
                     {rows.length > 1 && <button type="button" onClick={() => removeRow(i)} className="btn btn-danger btn-sm">✕</button>}
                   </td>
                 </tr>
-              ) : (
-                <tr key={i}>
+              ) : (() => {
+                const purchaseItem = items.find(it => it.id === row.item_id);
+                const showConversion = purchaseItem && !isBaseUnit(purchaseItem.units, row.unit_index);
+                return (
+                <Fragment key={i}>
+                <tr>
                   <td style={{ minWidth: '180px' }}>
                     <select value={row.item_id} onChange={setPurchaseRow(i, 'item_id')} required style={{ width: '100%' }}>
                       <option value="">Pilih item...</option>
@@ -613,7 +663,23 @@ export default function InvoiceForm() {
                   <td style={{ minWidth: '120px', textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{idr(rowTotal(row))}</td>
                   <td>{rows.length > 1 && <button type="button" onClick={() => removeRow(i)} className="btn btn-danger btn-sm">✕</button>}</td>
                 </tr>
-              ))}
+                {showConversion && (
+                  <tr>
+                    <td colSpan={6} style={{ paddingTop: 0 }}>
+                      <UnitConversion
+                        units={purchaseItem.units}
+                        unitIndex={row.unit_index}
+                        quantity={row.quantity}
+                        factor={row.conversion_factor}
+                        onFactorChange={(v) => setRows(rs => rs.map((r, ri) => ri === i ? { ...r, conversion_factor: v } : r))}
+                        verb="masuk stok"
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })())}
             </tbody>
           </table>
         </div>

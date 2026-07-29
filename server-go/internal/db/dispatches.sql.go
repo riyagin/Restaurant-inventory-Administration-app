@@ -60,7 +60,7 @@ func (q *Queries) GetDispatchByID(ctx context.Context, id pgtype.UUID) (*GetDisp
 
 const getDispatchItems = `-- name: GetDispatchItems :many
 SELECT
-    di.id, di.dispatch_id, di.item_id, di.quantity, di.unit_index, di.unit_name,
+    di.id, di.dispatch_id, di.item_id, di.quantity, di.unit_index, di.unit_name, di.conversion_factor,
     i.name AS item_name, i.code AS item_code, i.units AS item_units
 FROM dispatch_items di
 JOIN items i ON i.id = di.item_id
@@ -69,15 +69,16 @@ ORDER BY i.name
 `
 
 type GetDispatchItemsRow struct {
-	ID         pgtype.UUID    `json:"id"`
-	DispatchID pgtype.UUID    `json:"dispatch_id"`
-	ItemID     pgtype.UUID    `json:"item_id"`
-	Quantity   pgtype.Numeric `json:"quantity"`
-	UnitIndex  int32          `json:"unit_index"`
-	UnitName   string         `json:"unit_name"`
-	ItemName   string         `json:"item_name"`
-	ItemCode   pgtype.Text    `json:"item_code"`
-	ItemUnits  []byte         `json:"item_units"`
+	ID               pgtype.UUID    `json:"id"`
+	DispatchID       pgtype.UUID    `json:"dispatch_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        int32          `json:"unit_index"`
+	UnitName         string         `json:"unit_name"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+	ItemName         string         `json:"item_name"`
+	ItemCode         pgtype.Text    `json:"item_code"`
+	ItemUnits        []byte         `json:"item_units"`
 }
 
 func (q *Queries) GetDispatchItems(ctx context.Context, dispatchID pgtype.UUID) ([]*GetDispatchItemsRow, error) {
@@ -96,6 +97,7 @@ func (q *Queries) GetDispatchItems(ctx context.Context, dispatchID pgtype.UUID) 
 			&i.Quantity,
 			&i.UnitIndex,
 			&i.UnitName,
+			&i.ConversionFactor,
 			&i.ItemName,
 			&i.ItemCode,
 			&i.ItemUnits,
@@ -143,16 +145,17 @@ func (q *Queries) InsertDispatch(ctx context.Context, arg *InsertDispatchParams)
 }
 
 const insertDispatchItem = `-- name: InsertDispatchItem :exec
-INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name, conversion_factor)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, COALESCE($6, 1))
 `
 
 type InsertDispatchItemParams struct {
-	DispatchID pgtype.UUID    `json:"dispatch_id"`
-	ItemID     pgtype.UUID    `json:"item_id"`
-	Quantity   pgtype.Numeric `json:"quantity"`
-	UnitIndex  int32          `json:"unit_index"`
-	UnitName   string         `json:"unit_name"`
+	DispatchID       pgtype.UUID    `json:"dispatch_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        int32          `json:"unit_index"`
+	UnitName         string         `json:"unit_name"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
 }
 
 func (q *Queries) InsertDispatchItem(ctx context.Context, arg *InsertDispatchItemParams) error {
@@ -162,6 +165,7 @@ func (q *Queries) InsertDispatchItem(ctx context.Context, arg *InsertDispatchIte
 		arg.Quantity,
 		arg.UnitIndex,
 		arg.UnitName,
+		arg.ConversionFactor,
 	)
 	return err
 }

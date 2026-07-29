@@ -61,18 +61,26 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 
-	status   := q.Get("status")
-	invType  := q.Get("type")
-	search   := q.Get("search")
+	status := q.Get("status")
+	invType := q.Get("type")
+	search := q.Get("search")
 	dateFrom := q.Get("date_from")
-	dateTo   := q.Get("date_to")
+	dateTo := q.Get("date_to")
 	branchID := q.Get("branch_id")
-	divName  := q.Get("division_name")
+	divName := q.Get("division_name")
 	vendorID := q.Get("vendor_id")
 
 	pageNum, pageSize := 1, 25
-	if p := q.Get("page");  p != "" { if v, err := strconv.Atoi(p); err == nil && v > 0 { pageNum = v } }
-	if l := q.Get("limit"); l != "" { if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 { pageSize = v } }
+	if p := q.Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			pageNum = v
+		}
+	}
+	if l := q.Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+			pageSize = v
+		}
+	}
 
 	var args []any
 	var conds []string
@@ -244,28 +252,37 @@ func (h *InvoicesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// invoiceItemInput is one line of a Create/Update payload.
+//
+// ConversionFactor is optional and only meaningful on a purchase line entered in
+// a unit above the item's base one: it overrides, for this invoice alone, how
+// many base units the chosen unit holds. Zero means "use the item's own units".
+type invoiceItemInput struct {
+	ItemID           string  `json:"item_id"`
+	VendorID         string  `json:"vendor_id"`
+	Quantity         float64 `json:"quantity"`
+	UnitIndex        int32   `json:"unit_index"`
+	Price            int64   `json:"price"`
+	Description      string  `json:"description"`
+	ConversionFactor float64 `json:"conversion_factor"`
+}
+
 // Create — POST /api/invoices
 func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Date            string `json:"date"`
-		DueDate         string `json:"due_date"`
-		InvoiceType     string `json:"invoice_type"`
-		PaymentStatus   string `json:"payment_status"`
-		PaymentMethod   string `json:"payment_method"`
-		AccountID       string `json:"account_id"`
-		WarehouseID     string `json:"warehouse_id"`
-		BranchID        string `json:"branch_id"`
-		DivisionID      string `json:"division_id"`
-		VendorID        string `json:"vendor_id"`
-		ReferenceNumber string `json:"reference_number"`
-		Items           []struct {
-			ItemID      string  `json:"item_id"`
-			VendorID    string  `json:"vendor_id"`
-			Quantity    float64 `json:"quantity"`
-			UnitIndex   int32   `json:"unit_index"`
-			Price       int64   `json:"price"`
-			Description string  `json:"description"`
-		} `json:"items"`
+		Date              string             `json:"date"`
+		DueDate           string             `json:"due_date"`
+		InvoiceType       string             `json:"invoice_type"`
+		PaymentStatus     string             `json:"payment_status"`
+		PaymentMethod     string             `json:"payment_method"`
+		AccountID         string             `json:"account_id"`
+		WarehouseID       string             `json:"warehouse_id"`
+		BranchID          string             `json:"branch_id"`
+		DivisionID        string             `json:"division_id"`
+		VendorID          string             `json:"vendor_id"`
+		ReferenceNumber   string             `json:"reference_number"`
+		ExpenseCategoryID string             `json:"expense_category_id"`
+		Items             []invoiceItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -290,6 +307,18 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Only expense invoices carry a category; a purchase debits inventory, where
+	// the concept has no meaning. Silently dropping it rather than erroring keeps
+	// a stale value on a form that switched type from being a hard failure.
+	categoryID := uuid.Nil
+	if invoiceType == "expense" {
+		categoryID, err = resolveExpenseCategory(ctx, h.queries, body.ExpenseCategoryID, divisionID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	invoiceDate, dueDate, err := parseInvoiceDates(body.Date, body.DueDate)
@@ -317,18 +346,19 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Create invoice header (always unpaid, amount_paid = 0)
 	invoice, err := qtx.CreateInvoice(ctx, &db.CreateInvoiceParams{
-		InvoiceNumber:   invoiceNumber,
-		Date:            pgtype.Date{Time: invoiceDate, Valid: true},
-		DueDate:         dueDate,
-		InvoiceType:     invoiceType,
-		PaymentMethod:   pgtype.Text{String: body.PaymentMethod, Valid: body.PaymentMethod != ""},
-		PaymentStatus:   "unpaid",
-		AccountID:       pgtype.UUID{},
-		WarehouseID:     pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil},
-		BranchID:        pgtype.UUID{Bytes: branchID, Valid: branchID != uuid.Nil},
-		DivisionID:      pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
-		VendorID:        pgtype.UUID{Bytes: vendorID, Valid: vendorID != uuid.Nil},
-		ReferenceNumber: pgtype.Text{String: body.ReferenceNumber, Valid: body.ReferenceNumber != ""},
+		InvoiceNumber:     invoiceNumber,
+		Date:              pgtype.Date{Time: invoiceDate, Valid: true},
+		DueDate:           dueDate,
+		InvoiceType:       invoiceType,
+		PaymentMethod:     pgtype.Text{String: body.PaymentMethod, Valid: body.PaymentMethod != ""},
+		PaymentStatus:     "unpaid",
+		AccountID:         pgtype.UUID{},
+		WarehouseID:       pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil},
+		BranchID:          pgtype.UUID{Bytes: branchID, Valid: branchID != uuid.Nil},
+		DivisionID:        pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
+		VendorID:          pgtype.UUID{Bytes: vendorID, Valid: vendorID != uuid.Nil},
+		ReferenceNumber:   pgtype.Text{String: body.ReferenceNumber, Valid: body.ReferenceNumber != ""},
+		ExpenseCategoryID: pgtype.UUID{Bytes: categoryID, Valid: categoryID != uuid.Nil},
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal membuat faktur")
@@ -363,27 +393,39 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		lineValue := int64(float64(it.Price) * it.Quantity)
 		grandTotal += lineValue
 
-		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
-			InvoiceID:   invoice.ID,
-			ItemID:      pgtype.UUID{Bytes: itemID, Valid: hasItemID},
-			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
-			Quantity:    floatToNumeric(it.Quantity),
-			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
-			Price:       it.Price,
-			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},
-		}); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menyimpan item faktur")
-			return
-		}
-
-		if invoiceType == "purchase" && hasItemID {
+		// A purchase line is entered in whatever unit the goods arrive in, but
+		// inventory is kept in the item's base unit — resolve the conversion
+		// before the line is written so the factor is stored alongside it.
+		isStockLine := invoiceType == "purchase" && hasItemID
+		conv := lineConversion{Factor: 1, BaseIndex: it.UnitIndex}
+		if isStockLine {
 			item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 			if err != nil {
 				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))
 				return
 			}
-			unitName := getUnitName(item.Units, it.UnitIndex)
+			conv, err = resolveLineConversion(item.Units, it.UnitIndex, it.ConversionFactor)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
+		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
+			InvoiceID:        invoice.ID,
+			ItemID:           pgtype.UUID{Bytes: itemID, Valid: hasItemID},
+			VendorID:         pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
+			Quantity:         floatToNumeric(it.Quantity),
+			UnitIndex:        pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
+			Price:            it.Price,
+			Description:      pgtype.Text{String: it.Description, Valid: it.Description != ""},
+			ConversionFactor: floatToNumeric(conv.Factor),
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan item faktur")
+			return
+		}
+
+		if isStockLine {
 			vendorName := ""
 			if itemVendorID != uuid.Nil {
 				if v, err := h.queries.GetVendorByID(ctx, pgtype.UUID{Bytes: itemVendorID, Valid: true}); err == nil {
@@ -391,7 +433,8 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, it.Quantity, it.UnitIndex, lineValue, invoiceDate); err != nil {
+			baseQty := conv.BaseQty(it.Quantity)
+			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, baseQty, conv.BaseIndex, lineValue, invoiceDate); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok")
 				return
 			}
@@ -399,8 +442,8 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 				ItemID:         itemID,
 				WarehouseID:    warehouseID,
-				QuantityChange: it.Quantity,
-				UnitName:       unitName,
+				QuantityChange: baseQty,
+				UnitName:       conv.BaseUnitName,
 				Vendor:         vendorName,
 				Type:           "invoice",
 				Reference:      invoiceNumber,
@@ -425,7 +468,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			debitAcctID = invAcctID.Bytes
 		}
 	} else {
-		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, categoryID, divisionID, branchID); err == nil {
 			debitAcctID = expAcctID
 		}
 	}
@@ -532,23 +575,17 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Date            string `json:"date"`
-		DueDate         string `json:"due_date"`
-		PaymentMethod   string `json:"payment_method"`
-		AccountID       string `json:"account_id"`
-		WarehouseID     string `json:"warehouse_id"`
-		BranchID        string `json:"branch_id"`
-		DivisionID      string `json:"division_id"`
-		VendorID        string `json:"vendor_id"`
-		ReferenceNumber string `json:"reference_number"`
-		Items           []struct {
-			ItemID      string  `json:"item_id"`
-			VendorID    string  `json:"vendor_id"`
-			Quantity    float64 `json:"quantity"`
-			UnitIndex   int32   `json:"unit_index"`
-			Price       int64   `json:"price"`
-			Description string  `json:"description"`
-		} `json:"items"`
+		Date              string             `json:"date"`
+		DueDate           string             `json:"due_date"`
+		PaymentMethod     string             `json:"payment_method"`
+		AccountID         string             `json:"account_id"`
+		WarehouseID       string             `json:"warehouse_id"`
+		BranchID          string             `json:"branch_id"`
+		DivisionID        string             `json:"division_id"`
+		VendorID          string             `json:"vendor_id"`
+		ReferenceNumber   string             `json:"reference_number"`
+		ExpenseCategoryID string             `json:"expense_category_id"`
+		Items             []invoiceItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -588,6 +625,16 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	newCategoryID := uuid.Nil
+	if old.InvoiceType == "expense" {
+		newCategoryID, err = resolveExpenseCategory(ctx, h.queries, body.ExpenseCategoryID, divisionID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	accountID := uuid.Nil
 	if body.AccountID != "" {
 		aid, err := parseUUID(body.AccountID)
@@ -616,6 +663,13 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	oldWarehouseID := old.WarehouseID.Bytes
 	oldBranchID := old.BranchID.Bytes
 	oldDivisionID := old.DivisionID.Bytes
+	// The category as stored, not as submitted — the reversal has to credit the
+	// account the original entry debited even when the edit moves the invoice to
+	// a different category.
+	oldCategoryID := uuid.Nil
+	if old.ExpenseCategoryID.Valid {
+		oldCategoryID = old.ExpenseCategoryID.Bytes
+	}
 
 	// 2. Reverse the old posting. Only unpaid invoices reach here (paid ones are
 	// rejected above), so there is no settlement entry to unwind — just the
@@ -626,7 +680,10 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			if !it.ItemID.Valid {
 				continue
 			}
-			qty := numericToFloat64(it.Quantity)
+			// Deduct what the line actually put into inventory: its quantity in
+			// the base unit, at the factor it was booked with — the item's
+			// catalogue units may have moved on since.
+			qty := numericToFloat64(it.Quantity) * storedConversionFactor(it.ConversionFactor)
 			if _, err := service.FIFODeduct(ctx, qtx, it.ItemID.Bytes, oldWarehouseID, qty); err != nil {
 				if strings.Contains(err.Error(), "stok tidak mencukupi") {
 					respondError(w, http.StatusUnprocessableEntity,
@@ -648,7 +705,7 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			oldDebitAcctID = oldInvAcctID.Bytes
 		}
 	} else if old.InvoiceType == "expense" {
-		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, oldDivisionID, oldBranchID); err == nil {
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, oldCategoryID, oldDivisionID, oldBranchID); err == nil {
 			oldDebitAcctID = expAcctID
 		}
 	}
@@ -687,16 +744,17 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Update invoice header
 	if _, err := qtx.UpdateInvoice(ctx, &db.UpdateInvoiceParams{
-		Date:            pgtype.Date{Time: invoiceDate, Valid: true},
-		DueDate:         dueDate,
-		PaymentMethod:   pgtype.Text{String: body.PaymentMethod, Valid: body.PaymentMethod != ""},
-		AccountID:       pgtype.UUID{Bytes: accountID, Valid: accountID != uuid.Nil},
-		VendorID:        pgtype.UUID{Bytes: vendorID, Valid: vendorID != uuid.Nil},
-		ReferenceNumber: pgtype.Text{String: body.ReferenceNumber, Valid: body.ReferenceNumber != ""},
-		WarehouseID:     pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil},
-		BranchID:        pgtype.UUID{Bytes: branchID, Valid: branchID != uuid.Nil},
-		DivisionID:      pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
-		ID:              invoiceUUID,
+		Date:              pgtype.Date{Time: invoiceDate, Valid: true},
+		DueDate:           dueDate,
+		PaymentMethod:     pgtype.Text{String: body.PaymentMethod, Valid: body.PaymentMethod != ""},
+		AccountID:         pgtype.UUID{Bytes: accountID, Valid: accountID != uuid.Nil},
+		VendorID:          pgtype.UUID{Bytes: vendorID, Valid: vendorID != uuid.Nil},
+		ReferenceNumber:   pgtype.Text{String: body.ReferenceNumber, Valid: body.ReferenceNumber != ""},
+		WarehouseID:       pgtype.UUID{Bytes: warehouseID, Valid: warehouseID != uuid.Nil},
+		BranchID:          pgtype.UUID{Bytes: branchID, Valid: branchID != uuid.Nil},
+		DivisionID:        pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
+		ExpenseCategoryID: pgtype.UUID{Bytes: newCategoryID, Valid: newCategoryID != uuid.Nil},
+		ID:                invoiceUUID,
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui faktur")
 		return
@@ -728,27 +786,36 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		lineValue := int64(float64(it.Price) * it.Quantity)
 		grandTotal += lineValue
 
-		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
-			InvoiceID:   invoiceUUID,
-			ItemID:      pgtype.UUID{Bytes: itemID, Valid: hasItemID},
-			VendorID:    pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
-			Quantity:    floatToNumeric(it.Quantity),
-			UnitIndex:   pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
-			Price:       it.Price,
-			Description: pgtype.Text{String: it.Description, Valid: it.Description != ""},
-		}); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menyimpan item baru")
-			return
-		}
-
-		if old.InvoiceType == "purchase" && hasItemID {
+		isStockLine := old.InvoiceType == "purchase" && hasItemID
+		conv := lineConversion{Factor: 1, BaseIndex: it.UnitIndex}
+		if isStockLine {
 			item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 			if err != nil {
 				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))
 				return
 			}
-			unitName := getUnitName(item.Units, it.UnitIndex)
+			conv, err = resolveLineConversion(item.Units, it.UnitIndex, it.ConversionFactor)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 
+		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
+			InvoiceID:        invoiceUUID,
+			ItemID:           pgtype.UUID{Bytes: itemID, Valid: hasItemID},
+			VendorID:         pgtype.UUID{Bytes: itemVendorID, Valid: itemVendorID != uuid.Nil},
+			Quantity:         floatToNumeric(it.Quantity),
+			UnitIndex:        pgtype.Int4{Int32: it.UnitIndex, Valid: hasItemID},
+			Price:            it.Price,
+			Description:      pgtype.Text{String: it.Description, Valid: it.Description != ""},
+			ConversionFactor: floatToNumeric(conv.Factor),
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan item baru")
+			return
+		}
+
+		if isStockLine {
 			vendorName := ""
 			if itemVendorID != uuid.Nil {
 				if v, err := h.queries.GetVendorByID(ctx, pgtype.UUID{Bytes: itemVendorID, Valid: true}); err == nil {
@@ -756,7 +823,8 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, it.Quantity, it.UnitIndex, lineValue, invoiceDate); err != nil {
+			baseQty := conv.BaseQty(it.Quantity)
+			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, baseQty, conv.BaseIndex, lineValue, invoiceDate); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menambah stok baru")
 				return
 			}
@@ -764,8 +832,8 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 				ItemID:         itemID,
 				WarehouseID:    warehouseID,
-				QuantityChange: it.Quantity,
-				UnitName:       unitName,
+				QuantityChange: baseQty,
+				UnitName:       conv.BaseUnitName,
 				Vendor:         vendorName,
 				Type:           "invoice",
 				Reference:      old.InvoiceNumber,
@@ -787,7 +855,7 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			newDebitAcctID = newInvAcctID.Bytes
 		}
 	} else {
-		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, newCategoryID, divisionID, branchID); err == nil {
 			newDebitAcctID = expAcctID
 		}
 	}
@@ -870,6 +938,10 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	warehouseID := inv.WarehouseID.Bytes
 	branchID := inv.BranchID.Bytes
 	divisionID := inv.DivisionID.Bytes
+	categoryID := uuid.Nil
+	if inv.ExpenseCategoryID.Valid {
+		categoryID = inv.ExpenseCategoryID.Bytes
+	}
 
 	// Reverse inventory lots + the account that was originally debited
 	var debitAcctID uuid.UUID
@@ -878,7 +950,7 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			if !it.ItemID.Valid {
 				continue
 			}
-			qty := numericToFloat64(it.Quantity)
+			qty := numericToFloat64(it.Quantity) * storedConversionFactor(it.ConversionFactor)
 			if _, err := service.FIFODeduct(ctx, qtx, it.ItemID.Bytes, warehouseID, qty); err != nil {
 				if strings.Contains(err.Error(), "stok tidak mencukupi") {
 					respondError(w, http.StatusUnprocessableEntity,
@@ -900,7 +972,7 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			debitAcctID = invAcctID.Bytes
 		}
 	} else if inv.InvoiceType == "expense" {
-		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID); err == nil {
+		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, categoryID, divisionID, branchID); err == nil {
 			debitAcctID = expAcctID
 		}
 	}
@@ -1098,8 +1170,22 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// invoiceExpenseAccountID returns the expense account for a division (priority) or branch.
-func invoiceExpenseAccountID(ctx context.Context, qtx *db.Queries, divisionID, branchID uuid.UUID) (uuid.UUID, error) {
+// invoiceExpenseAccountID resolves where an expense invoice is debited, most
+// specific first: its category subaccount, else the division account, else the
+// branch account.
+//
+// The category leg matters on the reversal paths as much as on the posting
+// path — an edit or delete must credit back the same child that was debited, or
+// the parent rolls up correctly while both children carry a permanent phantom
+// balance. Callers therefore pass the category the invoice was *stored* with,
+// not the one currently on the form.
+func invoiceExpenseAccountID(ctx context.Context, qtx *db.Queries, categoryID, divisionID, branchID uuid.UUID) (uuid.UUID, error) {
+	if categoryID != uuid.Nil {
+		cat, err := qtx.GetExpenseCategoryByID(ctx, pgtype.UUID{Bytes: categoryID, Valid: true})
+		if err == nil && cat.AccountID.Valid {
+			return cat.AccountID.Bytes, nil
+		}
+	}
 	if divisionID != uuid.Nil {
 		aid, err := qtx.GetDivisionExpenseAccountID(ctx, pgtype.UUID{Bytes: divisionID, Valid: true})
 		if err == nil && aid.Valid {
@@ -1113,6 +1199,31 @@ func invoiceExpenseAccountID(ctx context.Context, qtx *db.Queries, divisionID, b
 		}
 	}
 	return uuid.Nil, nil
+}
+
+// resolveExpenseCategory validates the category an expense invoice was tagged
+// with and returns it, or uuid.Nil when none was given.
+//
+// The division check is the point: a category's account hangs under one specific
+// division's expense parent, so accepting a category from another division would
+// debit that division's books while the invoice claims to belong to this one —
+// the two would disagree forever, and nothing downstream would flag it.
+func resolveExpenseCategory(ctx context.Context, q *db.Queries, raw string, divisionID uuid.UUID) (uuid.UUID, error) {
+	if strings.TrimSpace(raw) == "" {
+		return uuid.Nil, nil
+	}
+	categoryID, err := parseUUID(raw)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("expense_category_id tidak valid")
+	}
+	cat, err := q.GetExpenseCategoryByID(ctx, pgtype.UUID{Bytes: categoryID, Valid: true})
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("kategori beban tidak ditemukan")
+	}
+	if divisionID == uuid.Nil || cat.DivisionID.Bytes != divisionID {
+		return uuid.Nil, fmt.Errorf("kategori beban %q bukan milik divisi yang dipilih", cat.Name)
+	}
+	return categoryID, nil
 }
 
 // parseInvoiceUUIDs parses the four optional UUID strings; returns an error if any is malformed.

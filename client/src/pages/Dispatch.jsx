@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, getDispatches, createDispatch, updateDispatch, deleteDispatch } from '../api';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, getDispatches, createDispatch, updateDispatch, deleteDispatch, getDispatchTemplates } from '../api';
 
-const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0' });
+import UnitConversion from '../components/UnitConversion';
+import { baseUnitIndex, effectiveFactor, formatQty, isBaseUnit } from '../units';
+
+// conversion_factor is a one-off unit→base rate for this dispatch only; blank
+// means "use the item's own units".
+const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0', conversion_factor: '' });
 const today = () => new Date().toISOString().slice(0, 10);
 const emptyHeader = { warehouse_id: '', branch_id: '', division_id: '', notes: '', dispatch_date: today() };
 
@@ -12,25 +17,28 @@ export default function Dispatch() {
   const [branches, setBranches] = useState([]);
   const [divisions, setDivisions] = useState([]);
   const [srcInventory, setSrcInventory] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [header, setHeader] = useState(emptyHeader);
   const [rows, setRows] = useState([emptyRow()]);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  // When populating the form for an edit, suppress the warehouse/branch effects
-  // that would otherwise wipe the rows and selected division.
+  // When populating the form from an existing dispatch or a template, suppress
+  // the warehouse/branch effects that would otherwise wipe the rows and the
+  // selected division.
   const loadingEditRef = useRef(false);
 
   const isEditing = !!editingId;
   const loadDispatches = () => getDispatches().then(r => setDispatches(r.data));
 
   useEffect(() => {
-    Promise.all([getItems(), getWarehouses(), getBranches(), getDispatches()]).then(([i, w, b, d]) => {
+    Promise.all([getItems(), getWarehouses(), getBranches(), getDispatches(), getDispatchTemplates()]).then(([i, w, b, d, t]) => {
       setAllItems(i.data);
       setWarehouses(w.data);
       setBranches(b.data);
       setDispatches(d.data);
+      setTemplates(t.data);
     });
   }, []);
 
@@ -46,19 +54,29 @@ export default function Dispatch() {
     if (!header.branch_id) { setDivisions([]); return; }
     getDivisions({ branch_id: header.branch_id }).then(r => setDivisions(r.data));
     if (!loadingEditRef.current) setHeader(h => ({ ...h, division_id: '' }));
-    // Both effects fire on an edit-load; clear the guard in this (later) one.
-    loadingEditRef.current = false;
   }, [header.branch_id]);
+
+  // The guard only has to survive the render that populates the form. Clearing
+  // it here — after every render, and after the two effects above have run —
+  // keeps it from sticking when a load leaves the warehouse or branch unchanged.
+  useEffect(() => { loadingEditRef.current = false; });
 
   // Show items available in the warehouse, plus any already on the edited rows.
   const availableItems = allItems.filter(it =>
     srcInventory.some(inv => inv.item_id === it.id) || rows.some(r => r.item_id === it.id)
   );
 
-  const getItemStock = (item_id, unit_index) => {
-    return srcInventory
-      .filter(inv => inv.item_id === item_id && String(inv.unit_index) === String(unit_index))
+  // Every lot is denominated in the item's base unit, so availability is summed
+  // there and then divided back into whichever unit the row is entered in.
+  const getBaseStock = (item_id) =>
+    srcInventory
+      .filter(inv => inv.item_id === item_id)
       .reduce((sum, inv) => sum + Number(inv.quantity), 0);
+
+  const getItemStock = (item_id, unit_index, factor) => {
+    const item = allItems.find(it => it.id === item_id);
+    const f = item ? effectiveFactor(item.units, unit_index, factor) : 1;
+    return f > 0 ? getBaseStock(item_id) / f : 0;
   };
 
   const setHeaderField = (field) => (e) => setHeader(h => ({ ...h, [field]: e.target.value }));
@@ -69,11 +87,16 @@ export default function Dispatch() {
       if (i !== index) return r;
       const updated = { ...r, [field]: val };
       if (field === 'item_id') {
-        const stockRec = srcInventory.find(inv => inv.item_id === val);
-        updated.unit_index = stockRec ? String(stockRec.unit_index) : '0';
+        const item = allItems.find(it => it.id === val);
+        updated.unit_index = item ? String(baseUnitIndex(item.units)) : '0';
         updated.quantity = '';
+        updated.conversion_factor = '';
       }
-      if (field === 'unit_index') updated.quantity = '';
+      if (field === 'unit_index') {
+        updated.quantity = '';
+        // The old rate described the old unit; it means nothing for the new one.
+        updated.conversion_factor = '';
+      }
       return updated;
     }));
   };
@@ -88,6 +111,25 @@ export default function Dispatch() {
     setSrcInventory([]);
     setDivisions([]);
     setError('');
+  };
+
+  // Fill a fresh dispatch from a saved template. Quantities stay empty — they
+  // are the one thing a template deliberately does not carry.
+  const applyTemplate = (tpl) => {
+    setError('');
+    setEditingId(null);
+    loadingEditRef.current = true;
+    setHeader(h => ({
+      ...h,
+      warehouse_id: tpl.warehouse_id ?? h.warehouse_id,
+      branch_id: tpl.branch_id ?? '',
+      division_id: tpl.division_id ?? '',
+      notes: tpl.notes ?? '',
+      dispatch_date: h.dispatch_date || today(),
+    }));
+    setRows(tpl.items?.length
+      ? tpl.items.map(it => ({ item_id: it.item_id, quantity: '', unit_index: String(it.unit_index ?? 0), conversion_factor: '' }))
+      : [emptyRow()]);
   };
 
   const startEdit = (d) => {
@@ -109,6 +151,9 @@ export default function Dispatch() {
       item_id: it.item_id,
       quantity: String(Number(it.quantity)),
       unit_index: String(it.unit_index),
+      // Reopen at the rate the line was booked at, not today's catalogue figure
+      // — that is what the stock movement being edited used.
+      conversion_factor: it.conversion_factor != null ? String(it.conversion_factor) : '',
     })));
     // Ensure the division dropdown is populated for the target branch.
     if (d.branch_id) getDivisions({ branch_id: d.branch_id }).then(r => setDivisions(r.data));
@@ -140,11 +185,11 @@ export default function Dispatch() {
       // available figure understates what can be dispatched; let the backend
       // enforce real availability via FIFO.
       if (!isEditing) {
-        const available = getItemStock(row.item_id, row.unit_index);
+        const available = getItemStock(row.item_id, row.unit_index, row.conversion_factor);
         if (Number(row.quantity) > available) {
           const item = allItems.find(it => it.id === row.item_id);
           const unitName = item?.units[Number(row.unit_index)]?.name ?? '';
-          setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${available.toLocaleString('id-ID')} ${unitName})`);
+          setError(`Baris ${i + 1}: stok "${item?.name}" tidak cukup (tersedia: ${formatQty(available)} ${unitName})`);
           return;
         }
       }
@@ -160,7 +205,14 @@ export default function Dispatch() {
         items: rows.map(r => {
           const item = allItems.find(it => it.id === r.item_id);
           const unitName = item?.units[Number(r.unit_index)]?.name ?? '';
-          return { item_id: r.item_id, quantity: Number(r.quantity), unit_index: Number(r.unit_index), unit_name: unitName };
+          return {
+            item_id: r.item_id,
+            quantity: Number(r.quantity),
+            unit_index: Number(r.unit_index),
+            unit_name: unitName,
+            // Omitted (0) tells the backend to use the item's own units.
+            conversion_factor: Number(r.conversion_factor) > 0 ? Number(r.conversion_factor) : 0,
+          };
         }),
       };
       if (isEditing) {
@@ -193,6 +245,24 @@ export default function Dispatch() {
             <button type="button" onClick={resetForm} className="btn btn-secondary btn-sm">Batal Edit</button>
           )}
         </div>
+        {!isEditing && templates.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <span style={{ fontSize: '0.85rem', color: '#888', fontWeight: 500 }}>Template:</span>
+            {templates.map(tpl => (
+              <button
+                key={tpl.id}
+                type="button"
+                onClick={() => applyTemplate(tpl)}
+                style={{
+                  padding: '0.4rem 1rem', borderRadius: '6px', fontWeight: 600, fontSize: '0.88rem', cursor: 'pointer',
+                  border: '2px solid #e0e0e0', background: '#f9f9f9', color: '#666',
+                }}
+              >
+                {tpl.name}
+              </button>
+            ))}
+          </div>
+        )}
         {error && <div className="error-msg">{error}</div>}
         <form onSubmit={handleSubmit}>
           <div className="form-row" style={{ marginBottom: '1rem' }}>
@@ -243,15 +313,16 @@ export default function Dispatch() {
               <tbody>
                 {rows.map((row, i) => {
                   const selectedItem = allItems.find(it => it.id === row.item_id);
-                  const available = row.item_id ? getItemStock(row.item_id, row.unit_index) : null;
-                  const stockedUnits = selectedItem
-                    ? selectedItem.units.map((u, ui) => ({ ...u, ui })).filter(u =>
-                        srcInventory.some(inv => inv.item_id === row.item_id && inv.unit_index === u.ui) ||
-                        String(u.ui) === String(row.unit_index)
-                      )
+                  const available = row.item_id ? getItemStock(row.item_id, row.unit_index, row.conversion_factor) : null;
+                  // Stock is held only in the base unit, so the item's whole unit
+                  // list is offered and the chosen one is converted down on save.
+                  const selectableUnits = selectedItem
+                    ? selectedItem.units.map((u, ui) => ({ ...u, ui }))
                     : [];
+                  const showConversion = selectedItem && !isBaseUnit(selectedItem.units, row.unit_index);
                   return (
-                    <tr key={i}>
+                    <Fragment key={i}>
+                    <tr>
                       <td style={{ minWidth: '220px' }}>
                         <select value={row.item_id} onChange={setRow(i, 'item_id')} style={{ width: '100%' }} disabled={!header.warehouse_id}>
                           <option value="">{header.warehouse_id ? 'Select item...' : 'Select warehouse first'}</option>
@@ -260,8 +331,8 @@ export default function Dispatch() {
                       </td>
                       <td style={{ minWidth: '130px' }}>
                         <select value={row.unit_index} onChange={setRow(i, 'unit_index')} disabled={!selectedItem} style={{ width: '100%' }}>
-                          {stockedUnits.length > 0
-                            ? stockedUnits.map(u => <option key={u.ui} value={String(u.ui)}>{u.name}</option>)
+                          {selectableUnits.length > 0
+                            ? selectableUnits.map(u => <option key={u.ui} value={String(u.ui)}>{u.name}</option>)
                             : <option value="0">—</option>}
                         </select>
                       </td>
@@ -274,7 +345,7 @@ export default function Dispatch() {
                         />
                         {available !== null && (
                           <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '2px' }}>
-                            Tersedia: {available.toLocaleString('id-ID')}
+                            Tersedia: {formatQty(available)}
                           </div>
                         )}
                       </td>
@@ -284,6 +355,21 @@ export default function Dispatch() {
                         )}
                       </td>
                     </tr>
+                    {showConversion && (
+                      <tr>
+                        <td colSpan={4} style={{ paddingTop: 0 }}>
+                          <UnitConversion
+                            units={selectedItem.units}
+                            unitIndex={row.unit_index}
+                            quantity={row.quantity}
+                            factor={row.conversion_factor}
+                            onFactorChange={(v) => setRows(rs => rs.map((r, ri) => ri === i ? { ...r, conversion_factor: v } : r))}
+                            verb="keluar dari stok"
+                          />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>

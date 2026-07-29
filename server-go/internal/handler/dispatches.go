@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -68,12 +69,15 @@ func (h *DispatchesHandler) List(w http.ResponseWriter, r *http.Request) {
 		Quantity   pgtype.Numeric `json:"quantity"`
 		UnitIndex  int32          `json:"unit_index"`
 		UnitName   string         `json:"unit_name"`
-		ItemName   string         `json:"item_name"`
-		ItemCode   pgtype.Text    `json:"item_code"`
+		// The unit→base factor this line was booked at, so an edit re-opens with
+		// the same one-off conversion the operator entered.
+		ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+		ItemName         string         `json:"item_name"`
+		ItemCode         pgtype.Text    `json:"item_code"`
 	}
 	itemRows, err := h.pool.Query(ctx, `
 		SELECT di.id, di.dispatch_id, di.item_id, di.quantity, di.unit_index, di.unit_name,
-		       i.name AS item_name, i.code AS item_code
+		       di.conversion_factor, i.name AS item_name, i.code AS item_code
 		FROM dispatch_items di
 		JOIN items i ON i.id = di.item_id
 		ORDER BY i.name
@@ -88,7 +92,7 @@ func (h *DispatchesHandler) List(w http.ResponseWriter, r *http.Request) {
 	for itemRows.Next() {
 		var it listItem
 		if err := itemRows.Scan(&it.ID, &it.DispatchID, &it.ItemID, &it.Quantity,
-			&it.UnitIndex, &it.UnitName, &it.ItemName, &it.ItemCode); err != nil {
+			&it.UnitIndex, &it.UnitName, &it.ConversionFactor, &it.ItemName, &it.ItemCode); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca item pengiriman")
 			return
 		}
@@ -171,17 +175,12 @@ func (h *DispatchesHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Create — POST /api/dispatches
 func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		BranchID     string `json:"branch_id"`
-		DivisionID   string `json:"division_id"`
-		WarehouseID  string `json:"warehouse_id"`
-		Notes        string `json:"notes"`
-		DispatchDate string `json:"dispatch_date"`
-		Items        []struct {
-			ItemID    string  `json:"item_id"`
-			Quantity  float64 `json:"quantity"`
-			UnitIndex int32   `json:"unit_index"`
-			UnitName  string  `json:"unit_name"`
-		} `json:"items"`
+		BranchID     string              `json:"branch_id"`
+		DivisionID   string              `json:"division_id"`
+		WarehouseID  string              `json:"warehouse_id"`
+		Notes        string              `json:"notes"`
+		DispatchDate string              `json:"dispatch_date"`
+		Items        []dispatchItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -247,10 +246,10 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Insert dispatch header
 	dispatched, err := qtx.InsertDispatch(ctx, &db.InsertDispatchParams{
-		BranchID:    pgtype.UUID{Bytes: branchID, Valid: true},
-		DivisionID:  pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
-		WarehouseID: pgtype.UUID{Bytes: warehouseID, Valid: true},
-		Notes:       pgtype.Text{String: body.Notes, Valid: body.Notes != ""},
+		BranchID:     pgtype.UUID{Bytes: branchID, Valid: true},
+		DivisionID:   pgtype.UUID{Bytes: divisionID, Valid: divisionID != uuid.Nil},
+		WarehouseID:  pgtype.UUID{Bytes: warehouseID, Valid: true},
+		Notes:        pgtype.Text{String: body.Notes, Valid: body.Notes != ""},
 		DispatchedBy: pgtype.UUID{Bytes: userID, Valid: userID != uuid.Nil},
 	})
 	if err != nil {
@@ -273,10 +272,11 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Process each item: FIFO deduct, insert dispatch item, insert stock history
 	type itemResult struct {
-		itemID       uuid.UUID
-		quantity     float64
-		unitIndex    int32
-		unitName     string
+		itemID        uuid.UUID
+		quantity      float64
+		unitIndex     int32
+		unitName      string
+		factor        float64
 		valueDeducted int64
 	}
 	results := make([]itemResult, 0, len(body.Items))
@@ -289,7 +289,16 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, it.Quantity)
+		// The line is entered in the unit the goods leave in (2 dus); stock is
+		// held in the item's base unit, so deduct the converted quantity.
+		conv, err := dispatchLineConversion(ctx, qtx, itemID, it)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		baseQty := conv.BaseQty(it.Quantity)
+
+		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, baseQty)
 		if err != nil {
 			if strings.Contains(err.Error(), "stok tidak mencukupi") {
 				respondError(w, http.StatusUnprocessableEntity, err.Error())
@@ -300,11 +309,12 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := qtx.InsertDispatchItem(ctx, &db.InsertDispatchItemParams{
-			DispatchID: pgtype.UUID{Bytes: dispatchID, Valid: true},
-			ItemID:     pgtype.UUID{Bytes: itemID, Valid: true},
-			Quantity:   floatToNumeric(it.Quantity),
-			UnitIndex:  it.UnitIndex,
-			UnitName:   it.UnitName,
+			DispatchID:       pgtype.UUID{Bytes: dispatchID, Valid: true},
+			ItemID:           pgtype.UUID{Bytes: itemID, Valid: true},
+			Quantity:         floatToNumeric(it.Quantity),
+			UnitIndex:        it.UnitIndex,
+			UnitName:         it.UnitName,
+			ConversionFactor: floatToNumeric(conv.Factor),
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan item pengiriman")
 			return
@@ -313,8 +323,8 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 			ItemID:         itemID,
 			WarehouseID:    warehouseID,
-			QuantityChange: -it.Quantity,
-			UnitName:       it.UnitName,
+			QuantityChange: -baseQty,
+			UnitName:       conv.BaseUnitName,
 			Type:           "dispatch",
 			Date:           effectiveDate,
 			Value:          -valueDeducted,
@@ -326,10 +336,11 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		results = append(results, itemResult{
-			itemID:       itemID,
-			quantity:     it.Quantity,
-			unitIndex:    it.UnitIndex,
-			unitName:     it.UnitName,
+			itemID:        itemID,
+			quantity:      it.Quantity,
+			unitIndex:     it.UnitIndex,
+			unitName:      it.UnitName,
+			factor:        conv.Factor,
 			valueDeducted: valueDeducted,
 		})
 		totalDispatchValue += valueDeducted
@@ -337,7 +348,11 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Post to the journal: Dr branch/division expense, Cr warehouse inventory.
 	// Stock consumed by a dispatch becomes expense at its FIFO value.
-	expAcctID, err := invoiceExpenseAccountID(ctx, qtx, divisionID, branchID)
+	//
+	// No expense category (uuid.Nil): categories split *purchased* operational
+	// expense, and a dispatch is stock the business already owns being consumed.
+	// It debits the division parent directly, alongside the categorised children.
+	expAcctID, err := invoiceExpenseAccountID(ctx, qtx, uuid.Nil, divisionID, branchID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun beban")
 		return
@@ -399,11 +414,12 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			unitPrice = int64(float64(res.valueDeducted) / res.quantity)
 		}
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
-			InvoiceID: invoice.ID,
-			ItemID:    pgtype.UUID{Bytes: res.itemID, Valid: true},
-			Quantity:  floatToNumeric(res.quantity),
-			UnitIndex: pgtype.Int4{Int32: res.unitIndex, Valid: true},
-			Price:     unitPrice,
+			InvoiceID:        invoice.ID,
+			ItemID:           pgtype.UUID{Bytes: res.itemID, Valid: true},
+			Quantity:         floatToNumeric(res.quantity),
+			UnitIndex:        pgtype.Int4{Int32: res.unitIndex, Valid: true},
+			Price:            unitPrice,
+			ConversionFactor: floatToNumeric(res.factor),
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan item faktur")
 			return
@@ -443,11 +459,25 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 // dispatchItemInput mirrors the item payload used by Create/Update.
+//
+// ConversionFactor is optional: it overrides, for this dispatch alone, how many
+// base units the chosen unit holds. Zero means "use the item's own units".
 type dispatchItemInput struct {
-	ItemID    string  `json:"item_id"`
-	Quantity  float64 `json:"quantity"`
-	UnitIndex int32   `json:"unit_index"`
-	UnitName  string  `json:"unit_name"`
+	ItemID           string  `json:"item_id"`
+	Quantity         float64 `json:"quantity"`
+	UnitIndex        int32   `json:"unit_index"`
+	UnitName         string  `json:"unit_name"`
+	ConversionFactor float64 `json:"conversion_factor"`
+}
+
+// dispatchLineConversion resolves a dispatch line's unit→base conversion from
+// the item's catalogue units plus any one-off override on the line.
+func dispatchLineConversion(ctx context.Context, qtx *db.Queries, itemID uuid.UUID, in dispatchItemInput) (lineConversion, error) {
+	item, err := qtx.GetItemByID(ctx, pgUUID(itemID))
+	if err != nil {
+		return lineConversion{}, fmt.Errorf("item tidak ditemukan: %s", in.ItemID)
+	}
+	return resolveLineConversion(item.Units, in.UnitIndex, in.ConversionFactor)
 }
 
 // itemKey uniquely identifies a dispatched line by item + unit so a quantity
@@ -534,30 +564,27 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		newEntryDate, hasNewEntryDate = t, true
 	}
 
-	// Build the desired new state keyed by item+unit.
+	// lineState is one item+unit combination of the dispatch. quantity is what the
+	// operator typed; baseQty is that restated in the item's base unit, which is
+	// the only figure inventory can be compared or moved against. The two are
+	// tracked separately because merged rows may each carry their own one-off
+	// conversion factor.
 	type lineState struct {
 		itemID    uuid.UUID
 		quantity  float64
+		baseQty   float64
 		unitIndex int32
 		unitName  string
+		baseIndex int32
+		baseName  string
 	}
-	newByKey := map[string]*lineState{}
-	for _, it := range body.Items {
-		itemID, err := parseUUID(it.ItemID)
-		if err != nil {
-			respondError(w, http.StatusBadRequest, fmt.Sprintf("item_id tidak valid: %s", it.ItemID))
-			return
+	// storedFactor keeps quantity × factor == baseQty exactly, even when two
+	// merged rows were entered at different factors.
+	storedFactor := func(l *lineState) float64 {
+		if l.quantity == 0 {
+			return 1
 		}
-		if it.Quantity <= 0 {
-			respondError(w, http.StatusBadRequest, "jumlah harus lebih dari 0")
-			return
-		}
-		key := itemKey(itemID, it.UnitIndex)
-		if ex, ok := newByKey[key]; ok {
-			ex.quantity += it.Quantity
-		} else {
-			newByKey[key] = &lineState{itemID: itemID, quantity: it.Quantity, unitIndex: it.UnitIndex, unitName: it.UnitName}
-		}
+		return l.baseQty / l.quantity
 	}
 
 	userID := middleware.UserIDFromCtx(ctx)
@@ -570,6 +597,36 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
+
+	// Build the desired new state keyed by item+unit.
+	newByKey := map[string]*lineState{}
+	for _, it := range body.Items {
+		itemID, err := parseUUID(it.ItemID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("item_id tidak valid: %s", it.ItemID))
+			return
+		}
+		if it.Quantity <= 0 {
+			respondError(w, http.StatusBadRequest, "jumlah harus lebih dari 0")
+			return
+		}
+		conv, err := dispatchLineConversion(ctx, qtx, itemID, it)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		key := itemKey(itemID, it.UnitIndex)
+		if ex, ok := newByKey[key]; ok {
+			ex.quantity += it.Quantity
+			ex.baseQty += conv.BaseQty(it.Quantity)
+		} else {
+			newByKey[key] = &lineState{
+				itemID: itemID, quantity: it.Quantity, baseQty: conv.BaseQty(it.Quantity),
+				unitIndex: it.UnitIndex, unitName: it.UnitName,
+				baseIndex: conv.BaseIndex, baseName: conv.BaseUnitName,
+			}
+		}
+	}
 
 	// Load current dispatch header.
 	var curBranch, curDivision, curWarehouse pgtype.UUID
@@ -603,23 +660,34 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	oldByKey := map[string]*lineState{}
 	{
 		rows, err := tx.Query(ctx,
-			`SELECT item_id, quantity, unit_index, unit_name FROM dispatch_items WHERE dispatch_id = $1`, pgUUID(id))
+			`SELECT di.item_id, di.quantity, di.unit_index, di.unit_name, di.conversion_factor, i.units
+			 FROM dispatch_items di JOIN items i ON i.id = di.item_id
+			 WHERE di.dispatch_id = $1`, pgUUID(id))
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengambil item pengiriman")
 			return
 		}
 		for rows.Next() {
 			var itemID pgtype.UUID
-			var qty pgtype.Numeric
+			var qty, factor pgtype.Numeric
 			var unitIndex int32
 			var unitName string
-			if err := rows.Scan(&itemID, &qty, &unitIndex, &unitName); err != nil {
+			var unitsJSON []byte
+			if err := rows.Scan(&itemID, &qty, &unitIndex, &unitName, &factor, &unitsJSON); err != nil {
 				rows.Close()
 				respondError(w, http.StatusInternalServerError, "gagal membaca item pengiriman")
 				return
 			}
+			// The stored factor, not the item's current units: the line has to be
+			// unwound at the rate it was booked at.
+			f := storedConversionFactor(factor)
+			enteredQty := numericToFloat64(qty)
 			key := itemKey(itemID.Bytes, unitIndex)
-			oldByKey[key] = &lineState{itemID: itemID.Bytes, quantity: numericToFloat64(qty), unitIndex: unitIndex, unitName: unitName}
+			oldByKey[key] = &lineState{
+				itemID: itemID.Bytes, quantity: enteredQty, baseQty: enteredQty * f,
+				unitIndex: unitIndex, unitName: unitName,
+				baseIndex: baseUnitIndex(unitsJSON, unitIndex), baseName: baseUnitName(unitsJSON),
+			}
 		}
 		rows.Close()
 	}
@@ -629,6 +697,8 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	_ = tx.QueryRow(ctx,
 		`SELECT id FROM invoices WHERE dispatch_id = $1 ORDER BY created_at LIMIT 1`, pgUUID(id)).Scan(&invID)
 
+	// qty is summed in base units so the derived unit cost is per base unit —
+	// the denomination every return below is expressed in.
 	type costRec struct {
 		qty   float64
 		value int64
@@ -637,7 +707,7 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var currentBookedValue int64
 	if invID.Valid {
 		rows, err := tx.Query(ctx,
-			`SELECT item_id, COALESCE(SUM(quantity),0), COALESCE(SUM(quantity*price),0)::bigint
+			`SELECT item_id, COALESCE(SUM(quantity * conversion_factor),0), COALESCE(SUM(quantity*price),0)::bigint
 			 FROM invoice_items WHERE invoice_id = $1 GROUP BY item_id`, invID)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengambil nilai faktur")
@@ -669,19 +739,24 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		keys[k] = struct{}{}
 	}
 
+	// Differences are taken in base units: the entered unit is only a label, and
+	// a line whose one-off factor changed moves stock even when its typed
+	// quantity did not. Correction lines are likewise booked in the base unit
+	// (factor 1), so the auto-invoice stays a faithful running total.
 	for key := range keys {
 		var itemID uuid.UUID
-		var unitIndex int32
-		var unitName string
+		var baseIndex int32
+		var baseName string
 		oldQty, newQty := 0.0, 0.0
 		if o, ok := oldByKey[key]; ok {
-			oldQty = o.quantity
-			itemID, unitIndex, unitName = o.itemID, o.unitIndex, o.unitName
+			oldQty = o.baseQty
+			itemID, baseIndex, baseName = o.itemID, o.baseIndex, o.baseName
 		}
 		if n, ok := newByKey[key]; ok {
-			newQty = n.quantity
-			itemID, unitIndex, unitName = n.itemID, n.unitIndex, n.unitName
+			newQty = n.baseQty
+			itemID, baseIndex, baseName = n.itemID, n.baseIndex, n.baseName
 		}
+		unitIndex, unitName := baseIndex, baseName
 
 		switch {
 		case newQty > oldQty+dispatchEpsilon:
@@ -759,8 +834,8 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// Move account balances. If the branch/division changed, relocate the whole
 	// booked expense to the new expense account, then apply the net item delta.
-	oldExpAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuidFromPg(curDivision), uuidFromPg(curBranch))
-	newExpAcct, _ := invoiceExpenseAccountID(ctx, qtx, newDivisionID, newBranchID)
+	oldExpAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuid.Nil, uuidFromPg(curDivision), uuidFromPg(curBranch))
+	newExpAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuid.Nil, newDivisionID, newBranchID)
 	invAcct, _ := qtx.GetWarehouseInventoryAccountID(ctx, curWarehouse)
 
 	// Relocating the booked expense between branches/divisions moves value
@@ -825,11 +900,12 @@ func (h *DispatchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, n := range newByKey {
 		if err := qtx.InsertDispatchItem(ctx, &db.InsertDispatchItemParams{
-			DispatchID: pgUUID(id),
-			ItemID:     pgUUID(n.itemID),
-			Quantity:   floatToNumeric(n.quantity),
-			UnitIndex:  n.unitIndex,
-			UnitName:   n.unitName,
+			DispatchID:       pgUUID(id),
+			ItemID:           pgUUID(n.itemID),
+			Quantity:         floatToNumeric(n.quantity),
+			UnitIndex:        n.unitIndex,
+			UnitName:         n.unitName,
+			ConversionFactor: floatToNumeric(storedFactor(n)),
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan item pengiriman")
 			return
@@ -919,12 +995,15 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	whID := warehouseID.Bytes
 
-	// Unit + name per item, so returned lots keep the dispatched unit.
+	// Returned lots are denominated in the item's base unit, whatever unit the
+	// dispatch was entered in — that is the only unit inventory holds.
 	unitByItem := map[uuid.UUID]int32{}
 	nameByItem := map[uuid.UUID]string{}
 	{
 		rows, err := tx.Query(ctx,
-			`SELECT item_id, unit_index, unit_name FROM dispatch_items WHERE dispatch_id = $1`, pgUUID(id))
+			`SELECT di.item_id, di.unit_index, i.units
+			 FROM dispatch_items di JOIN items i ON i.id = di.item_id
+			 WHERE di.dispatch_id = $1`, pgUUID(id))
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengambil item pengiriman")
 			return
@@ -932,15 +1011,15 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var itemID pgtype.UUID
 			var unitIndex int32
-			var unitName string
-			if err := rows.Scan(&itemID, &unitIndex, &unitName); err != nil {
+			var unitsJSON []byte
+			if err := rows.Scan(&itemID, &unitIndex, &unitsJSON); err != nil {
 				rows.Close()
 				respondError(w, http.StatusInternalServerError, "gagal membaca item pengiriman")
 				return
 			}
 			if _, ok := unitByItem[itemID.Bytes]; !ok {
-				unitByItem[itemID.Bytes] = unitIndex
-				nameByItem[itemID.Bytes] = unitName
+				unitByItem[itemID.Bytes] = baseUnitIndex(unitsJSON, unitIndex)
+				nameByItem[itemID.Bytes] = baseUnitName(unitsJSON)
 			}
 		}
 		rows.Close()
@@ -959,7 +1038,7 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	var totalBooked int64
 	if invID.Valid {
 		rows, err := tx.Query(ctx,
-			`SELECT item_id, COALESCE(SUM(quantity),0), COALESCE(SUM(quantity*price),0)::bigint
+			`SELECT item_id, COALESCE(SUM(quantity * conversion_factor),0), COALESCE(SUM(quantity*price),0)::bigint
 			 FROM invoice_items WHERE invoice_id = $1 GROUP BY item_id`, invID)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengambil nilai faktur")
@@ -1014,17 +1093,18 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			quantity  pgtype.Numeric
 			unitIndex pgtype.Int4
 			price     int64
+			factor    pgtype.Numeric
 		}
 		var lines []invLine
 		rows, err := tx.Query(ctx,
-			`SELECT item_id, quantity, unit_index, price FROM invoice_items WHERE invoice_id = $1`, invID)
+			`SELECT item_id, quantity, unit_index, price, conversion_factor FROM invoice_items WHERE invoice_id = $1`, invID)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengambil item faktur")
 			return
 		}
 		for rows.Next() {
 			var l invLine
-			if err := rows.Scan(&l.itemID, &l.quantity, &l.unitIndex, &l.price); err != nil {
+			if err := rows.Scan(&l.itemID, &l.quantity, &l.unitIndex, &l.price, &l.factor); err != nil {
 				rows.Close()
 				respondError(w, http.StatusInternalServerError, "gagal membaca item faktur")
 				return
@@ -1036,12 +1116,13 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		for _, l := range lines {
 			negQty := floatToNumeric(-numericToFloat64(l.quantity))
 			if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
-				InvoiceID:   invID,
-				ItemID:      l.itemID,
-				Quantity:    negQty,
-				UnitIndex:   l.unitIndex,
-				Price:       l.price,
-				Description: pgtype.Text{String: "Pembatalan pengiriman", Valid: true},
+				InvoiceID:        invID,
+				ItemID:           l.itemID,
+				Quantity:         negQty,
+				UnitIndex:        l.unitIndex,
+				Price:            l.price,
+				Description:      pgtype.Text{String: "Pembatalan pengiriman", Valid: true},
+				ConversionFactor: floatToNumeric(storedConversionFactor(l.factor)),
 			}); err != nil {
 				respondError(w, http.StatusInternalServerError, "gagal menyimpan pembatalan faktur")
 				return
@@ -1050,7 +1131,7 @@ func (h *DispatchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Reverse the dispatch posting: stock comes back, expense unwinds.
-	expAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuidFromPg(divisionID), uuidFromPg(branchID))
+	expAcct, _ := invoiceExpenseAccountID(ctx, qtx, uuid.Nil, uuidFromPg(divisionID), uuidFromPg(branchID))
 	invAcct, _ := qtx.GetWarehouseInventoryAccountID(ctx, warehouseID)
 	var invAcctIDValue uuid.UUID
 	if invAcct.Valid {
@@ -1105,4 +1186,3 @@ func uuidFromPg(p pgtype.UUID) uuid.UUID {
 	}
 	return p.Bytes
 }
-

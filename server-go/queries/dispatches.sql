@@ -32,7 +32,7 @@ WHERE d.id = $1;
 
 -- name: GetDispatchItems :many
 SELECT
-    di.id, di.dispatch_id, di.item_id, di.quantity, di.unit_index, di.unit_name,
+    di.id, di.dispatch_id, di.item_id, di.quantity, di.unit_index, di.unit_name, di.conversion_factor,
     i.name AS item_name, i.code AS item_code, i.units AS item_units
 FROM dispatch_items di
 JOIN items i ON i.id = di.item_id
@@ -45,5 +45,5 @@ VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
 RETURNING id, dispatched_at;
 
 -- name: InsertDispatchItem :exec
-INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5);
+INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name, conversion_factor)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, COALESCE($6, 1));

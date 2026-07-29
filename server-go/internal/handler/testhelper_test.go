@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -60,6 +62,39 @@ func postJSON(t *testing.T, h http.HandlerFunc, ctx context.Context, body any) *
 	rr := httptest.NewRecorder()
 	h(rr, req)
 	return rr
+}
+
+// callWithID invokes h with method, body, and {id} bound on the chi route
+// context — the shape every handler that reads chi.URLParam(r, "id") expects.
+// A nil body sends no payload, for GET and DELETE.
+func callWithID(t *testing.T, h http.HandlerFunc, ctx context.Context, method, id string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader io.Reader = http.NoBody
+	if body != nil {
+		bs, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		reader = bytes.NewReader(bs)
+	}
+	req := httptest.NewRequest(method, "/", reader)
+	req.Header.Set("Content-Type", "application/json")
+
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	h(rr, req)
+	return rr
+}
+
+// decodeJSON unmarshals a recorder body into out, failing the test on error.
+func decodeJSON(t *testing.T, rr *httptest.ResponseRecorder, out any) {
+	t.Helper()
+	if err := json.Unmarshal(rr.Body.Bytes(), out); err != nil {
+		t.Fatalf("unmarshal response %q: %v", rr.Body.String(), err)
+	}
 }
 
 // getBalance reads the current balance of one account.
