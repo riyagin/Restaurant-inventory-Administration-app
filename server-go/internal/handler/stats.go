@@ -255,9 +255,14 @@ func (h *StatsHandler) StockFlow(w http.ResponseWriter, r *http.Request) {
 		  GROUP BY sh.date
 		) su ON su.date = days.day
 		LEFT JOIN (
+		  -- dispatch_id IS NULL is load-bearing: every dispatch auto-creates a
+		  -- mirror expense invoice (handler.CreateDispatch), which is the same
+		  -- consumption the su subquery above already values from stock_history.
+		  -- Without this filter every dispatch is counted twice in spend.
 		  SELECT inv.date, SUM(ii.quantity * ii.price)::BIGINT AS expense_total
 		  FROM invoices inv JOIN invoice_items ii ON ii.invoice_id = inv.id
-		  WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
+		  WHERE inv.invoice_type = 'expense' AND inv.dispatch_id IS NULL
+		    AND inv.date BETWEEN $1 AND $2
 		  ` + branchExpense + `
 		  GROUP BY inv.date
 		) ei ON ei.date = days.day

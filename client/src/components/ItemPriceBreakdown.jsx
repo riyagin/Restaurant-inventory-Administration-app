@@ -15,6 +15,23 @@ const monthLabel = (m) => {
 const dash = <span style={{ color: '#ccc' }}>—</span>;
 const unitKey = (r) => (r.unit_index ?? 0) + '|' + (r.unit_name ?? '—');
 
+// Local YYYY-MM-DD. toISOString() would shift to UTC and hand back yesterday
+// for anyone east of Greenwich, which is everyone using this app.
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+const monthsAgo = (n) => { const d = new Date(); d.setMonth(d.getMonth() - n); return iso(d); };
+
+// Purchases are sparse for most items, so the window has to be easy to widen —
+// the default only shows a month and is often empty.
+const PRESETS = [
+  { key: '30d', label: '30 Hari', from: () => daysAgo(30) },
+  { key: '90d', label: '90 Hari', from: () => daysAgo(90) },
+  { key: '6m',  label: '6 Bulan', from: () => monthsAgo(6) },
+  { key: '1y',  label: '1 Tahun', from: () => monthsAgo(12) },
+  { key: 'all', label: 'Semua',   from: () => '' },
+];
+const DEFAULT_PRESET = '30d';
+
 const avgPrice = (r) => {
   const qty = Number(r.total_quantity ?? 0);
   return qty > 0 ? Number(r.total_spend ?? 0) / qty : null;
@@ -69,15 +86,27 @@ export default function ItemPriceBreakdown({ itemId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
   const [unit, setUnit]       = useState('');
+  const [preset, setPreset]   = useState(DEFAULT_PRESET);
+  const [from, setFrom]       = useState(() => daysAgo(30));
+  const [to, setTo]           = useState('');
 
   useEffect(() => {
     setLoading(true);
     setError('');
-    getItemPriceHistory(itemId)
+    const params = {};
+    if (from) params.from = from;
+    if (to)   params.to   = to;
+    getItemPriceHistory(itemId, params)
       .then((r) => setData(r.data))
       .catch((err) => setError(err.response?.data?.error || 'Gagal memuat riwayat harga.'))
       .finally(() => setLoading(false));
-  }, [itemId]);
+  }, [itemId, from, to]);
+
+  const applyPreset = (p) => {
+    setPreset(p.key);
+    setFrom(p.from());
+    setTo('');
+  };
 
   const byUnit = data?.by_unit ?? [];
 
@@ -116,12 +145,76 @@ export default function ItemPriceBreakdown({ itemId }) {
     return withPrice.reduce((best, v) => (Number(v.last_price) < Number(best.last_price) ? v : best));
   }, [vendors]);
 
-  if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat riwayat harga…</div>;
-  if (error)   return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>{error}</div>;
-  if (!summary) {
-    return <div className="card" style={{ padding: '2rem', color: '#999', textAlign: 'center' }}>Belum ada pembelian tercatat untuk barang ini.</div>;
-  }
+  // Extent of the item's price data over all time, independent of the window —
+  // this is what tells you whether widening the range would find anything.
+  const extent      = data?.range ?? null;
+  const extentCount = Number(extent?.purchase_count ?? 0);
 
+  const rangePicker = (
+    <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+      <span style={{ fontSize: '0.8rem', color: '#888' }}>Periode:</span>
+      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+        {PRESETS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => applyPreset(p)}
+            className={preset === p.key ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <span style={{ color: '#ddd' }}>|</span>
+      <input
+        type="date" value={from} title="Dari tanggal"
+        onChange={(e) => { setFrom(e.target.value); setPreset(''); }}
+      />
+      <span style={{ color: '#aaa', fontSize: '0.85rem' }}>s/d</span>
+      <input
+        type="date" value={to} title="Sampai tanggal"
+        onChange={(e) => { setTo(e.target.value); setPreset(''); }}
+      />
+      {extentCount > 0 && (
+        <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: '#888' }}>
+          Data tersedia {fmt(extent.first_purchase_date)} – {fmt(extent.last_purchase_date)}
+          <span style={{ color: '#bbb' }}> · {extentCount} pembelian</span>
+        </span>
+      )}
+    </div>
+  );
+
+  const body = () => {
+    if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat riwayat harga…</div>;
+    if (error)   return <div className="card" style={{ padding: '2rem', color: '#e74c3c' }}>{error}</div>;
+    if (!summary) {
+      return (
+        <div className="card" style={{ padding: '2rem', color: '#999', textAlign: 'center' }}>
+          {extentCount === 0 ? (
+            'Belum ada pembelian tercatat untuk barang ini.'
+          ) : (
+            <>
+              <div>Tidak ada pembelian pada periode ini.</div>
+              <div style={{ fontSize: '0.85rem', marginTop: '0.4rem' }}>
+                Pembelian terakhir {fmt(extent.last_purchase_date)}.
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                style={{ marginTop: '0.85rem' }}
+                onClick={() => applyPreset(PRESETS[PRESETS.length - 1])}
+              >
+                Tampilkan semua data
+              </button>
+            </>
+          )}
+        </div>
+      );
+    }
+    return dataBody();
+  };
+
+  const dataBody = () => {
   const unitName = summary.unit_name ?? 'satuan';
   const avg      = avgPrice(summary);
   const last     = Number(summary.last_price);
@@ -161,7 +254,7 @@ export default function ItemPriceBreakdown({ itemId }) {
         <Stat label="Harga Terendah" value={idr(summary.min_price)} color="#27ae60" />
         <Stat label="Harga Tertinggi" value={idr(summary.max_price)} color="#e74c3c" />
         <Stat
-          label="Perubahan Sejak Awal"
+          label={from || to ? 'Perubahan Periode Ini' : 'Perubahan Sejak Awal'}
           value={first > 0 && last > 0 ? <Delta from={first} to={last} /> : '—'}
           sub={first > 0 ? `dari ${idr(first)} (${fmt(summary.first_purchase_date)})` : undefined}
         />
@@ -307,6 +400,14 @@ export default function ItemPriceBreakdown({ itemId }) {
           </tbody>
         </table>
       </Card>
+    </>
+  );
+  };
+
+  return (
+    <>
+      {rangePicker}
+      {body()}
     </>
   );
 }

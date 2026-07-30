@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { getFinancialReport, getBranches } from '../api';
+import { getFinancialReport, getProfitLossByBranch } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -39,6 +39,105 @@ function buildTree(accounts) {
 // zero by design.
 function effectiveBalance(node) {
   return node.children.reduce((s, c) => s + effectiveBalance(c), Number(node.balance));
+}
+
+// ── Per-branch P&L ────────────────────────────────────────────────────────────
+//
+// Same rule as effectiveBalance, applied one column at a time: a parent's figure
+// in a branch column is its own postings there plus its children's. An expense
+// category child and its division parent belong to the same branch, so in
+// practice a subtree lands in a single column — but nothing relies on that, and
+// an account re-parented across branches still adds up.
+function effectiveAmounts(node, columns) {
+  const out = {};
+  for (const col of columns) out[col.id] = Number(node.amounts?.[col.id] || 0);
+  for (const child of node.children) {
+    const sub = effectiveAmounts(child, columns);
+    for (const col of columns) out[col.id] += sub[col.id];
+  }
+  return out;
+}
+
+function sumAmounts(rows, columns) {
+  const out = {};
+  for (const col of columns) out[col.id] = 0;
+  for (const row of rows) for (const col of columns) out[col.id] += row[col.id];
+  return out;
+}
+
+function totalOfAmounts(amounts, columns) {
+  return columns.reduce((s, col) => s + amounts[col.id], 0);
+}
+
+function BranchAccountRow({ node, columns, depth = 0 }) {
+  const [open, setOpen] = useState(depth < 2);
+  const amounts = effectiveAmounts(node, columns);
+  const total = totalOfAmounts(amounts, columns);
+  const hasChildren = node.children.length > 0;
+  const isRoot = depth === 0;
+
+  if (total === 0 && !hasChildren && !isRoot) return null;
+
+  return (
+    <>
+      <tr
+        style={{
+          background: isRoot ? '#f0f4ff' : depth === 1 ? '#f8f9ff' : undefined,
+          cursor: hasChildren ? 'pointer' : undefined,
+        }}
+        onClick={hasChildren ? () => setOpen(o => !o) : undefined}
+      >
+        <td style={{ paddingLeft: `${depth * 1.25 + 0.75}rem`, paddingTop: '0.4rem', paddingBottom: '0.4rem', position: 'sticky', left: 0, background: isRoot ? '#f0f4ff' : depth === 1 ? '#f8f9ff' : '#fff' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+            {hasChildren && (
+              <span style={{ fontSize: '0.65rem', color: '#aaa', userSelect: 'none' }}>{open ? '▼' : '▶'}</span>
+            )}
+            {node.account_number && (
+              <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#4f8ef7', minWidth: '3rem' }}>
+                {node.account_number}
+              </span>
+            )}
+            <span style={{ fontWeight: isRoot ? 700 : depth === 1 ? 600 : 400, fontSize: '0.85rem' }}>
+              {node.name}
+            </span>
+          </span>
+        </td>
+        {columns.map(col => (
+          <td key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.82rem', fontWeight: isRoot || hasChildren ? 600 : 400, color: amounts[col.id] < 0 ? '#e74c3c' : undefined }}>
+            {amounts[col.id] !== 0 ? idr(amounts[col.id]) : <span style={{ color: '#ddd' }}>—</span>}
+          </td>
+        ))}
+        <td style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.82rem', fontWeight: 700, borderLeft: '1px solid #eee', color: total < 0 ? '#e74c3c' : undefined }}>
+          {total !== 0 ? idr(total) : <span style={{ color: '#ddd' }}>—</span>}
+        </td>
+      </tr>
+      {open && node.children.map(child => (
+        <BranchAccountRow key={child.id} node={child} columns={columns} depth={depth + 1} />
+      ))}
+    </>
+  );
+}
+
+function BranchSectionRows({ title, nodes, columns, color }) {
+  const totals = sumAmounts(nodes.map(n => effectiveAmounts(n, columns)), columns);
+  return (
+    <>
+      <tr style={{ background: color }}>
+        <td style={{ fontWeight: 700, fontSize: '0.92rem', padding: '0.55rem 0.75rem', position: 'sticky', left: 0, background: color }}>
+          {title}
+        </td>
+        {columns.map(col => (
+          <td key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.85rem' }}>
+            {idr(totals[col.id])}
+          </td>
+        ))}
+        <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.85rem', borderLeft: '1px solid #eee' }}>
+          {idr(totalOfAmounts(totals, columns))}
+        </td>
+      </tr>
+      {nodes.map(n => <BranchAccountRow key={n.id} node={n} columns={columns} depth={0} />)}
+    </>
+  );
 }
 
 function AccountRow({ node, depth = 0 }) {
@@ -203,6 +302,62 @@ function buildExcel({ trees, startDate, endDate, isPeriod }) {
   XLSX.writeFile(wb, filename);
 }
 
+function flattenBranchTree(nodes, columns, depth = 0, rows = []) {
+  for (const node of nodes) {
+    const amounts = effectiveAmounts(node, columns);
+    const total = totalOfAmounts(amounts, columns);
+    if (total !== 0 || node.children.length > 0 || depth === 0) {
+      rows.push({ indent: depth, account_number: node.account_number || '', name: node.name, amounts, total });
+    }
+    if (node.children.length > 0) flattenBranchTree(node.children, columns, depth + 1, rows);
+  }
+  return rows;
+}
+
+function buildBranchExcel({ branchTrees, columns, startDate, endDate, isPeriod }) {
+  const wb = XLSX.utils.book_new();
+  const dateLabel = isPeriod ? `${startDate} s/d ${endDate}` : 'Semua waktu';
+
+  const rows = [
+    ['Laporan Laba Rugi per Cabang', '', dateLabel],
+    [],
+    ['No. Akun', 'Akun', ...columns.map(c => c.name), 'Total'],
+  ];
+
+  const sectionTotals = {};
+  const addSection = (label, nodes) => {
+    const totals = sumAmounts(nodes.map(n => effectiveAmounts(n, columns)), columns);
+    sectionTotals[label] = totals;
+    rows.push([label.toUpperCase(), '', ...columns.map(() => ''), '']);
+    for (const row of flattenBranchTree(nodes, columns)) {
+      rows.push([
+        row.account_number,
+        '  '.repeat(row.indent) + row.name,
+        ...columns.map(c => (row.amounts[c.id] !== 0 ? row.amounts[c.id] : '')),
+        row.total !== 0 ? row.total : '',
+      ]);
+    }
+    rows.push(['', `Total ${label}`, ...columns.map(c => totals[c.id]), totalOfAmounts(totals, columns)]);
+    rows.push([]);
+  };
+
+  addSection('Pendapatan', branchTrees.revenue || []);
+  addSection('Beban', branchTrees.expense || []);
+
+  const rev = sectionTotals['Pendapatan'];
+  const exp = sectionTotals['Beban'];
+  const net = columns.map(c => rev[c.id] - exp[c.id]);
+  rows.push(['', 'LABA / RUGI BERSIH', ...net, net.reduce((s, v) => s + v, 0)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{ wch: 12 }, { wch: 40 }, ...columns.map(() => ({ wch: 18 })), { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Laba Rugi per Cabang');
+
+  XLSX.writeFile(wb, isPeriod
+    ? `laba-rugi-per-cabang_${startDate}_${endDate}.xlsx`
+    : 'laba-rugi-per-cabang.xlsx');
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function FinancialReport() {
@@ -211,23 +366,37 @@ export default function FinancialReport() {
   const [startDate, setStartDate] = useState(firstOfMonthStr());
   const [endDate, setEndDate]     = useState(todayStr());
   const [isPeriod, setIsPeriod]   = useState(false);
-  const [branchId, setBranchId]   = useState('');
-  const [branches, setBranches]   = useState([]);
-
-  useEffect(() => {
-    getBranches().then(r => setBranches(r.data)).catch(() => {});
-  }, []);
+  const [byBranch, setByBranch]   = useState(false);
+  // The report is stored with the filter key it was fetched for, so "still
+  // loading" is derived rather than tracked: no second state to keep in sync, and
+  // a response that arrives after the filters moved on is visibly stale instead
+  // of silently overwriting the current one.
+  const [branchReport, setBranchReport] = useState(null);
 
   const fetchReport = useCallback(() => {
     setLoading(true);
     const params = isPeriod ? { start_date: startDate, end_date: endDate } : {};
-    if (branchId && isPeriod) params.branch_id = branchId;
     getFinancialReport(params)
       .then(r => setAccounts(r.data))
       .finally(() => setLoading(false));
-  }, [isPeriod, startDate, endDate, branchId]);
+  }, [isPeriod, startDate, endDate]);
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
+
+  const branchKey = isPeriod ? `${startDate}..${endDate}` : 'all';
+
+  useEffect(() => {
+    if (!byBranch) return undefined;
+    let cancelled = false;
+    const params = isPeriod ? { start_date: startDate, end_date: endDate } : {};
+    getProfitLossByBranch(params)
+      .then(r => { if (!cancelled) setBranchReport({ key: branchKey, data: r.data }); })
+      .catch(() => { if (!cancelled) setBranchReport({ key: branchKey, data: null }); });
+    return () => { cancelled = true; };
+  }, [byBranch, isPeriod, startDate, endDate, branchKey]);
+
+  const branchData = branchReport?.key === branchKey ? branchReport.data : null;
+  const branchLoading = byBranch && branchData === null;
 
   const { trees } = useMemo(() => {
     const byType = { asset: [], liability: [], equity: [], revenue: [], expense: [] };
@@ -236,6 +405,22 @@ export default function FinancialReport() {
     for (const type of Object.keys(byType)) trees[type] = buildTree(byType[type]);
     return { trees };
   }, [accounts]);
+
+  const branchColumns = useMemo(() => branchData?.columns ?? [], [branchData]);
+  const branchTrees = useMemo(() => {
+    const byType = { revenue: [], expense: [] };
+    (branchData?.accounts ?? []).forEach(a => { if (byType[a.account_type]) byType[a.account_type].push(a); });
+    return { revenue: buildTree(byType.revenue), expense: buildTree(byType.expense) };
+  }, [branchData]);
+
+  const branchNet = useMemo(() => {
+    if (branchColumns.length === 0) return {};
+    const rev = sumAmounts((branchTrees.revenue || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns);
+    const exp = sumAmounts((branchTrees.expense || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns);
+    const out = {};
+    for (const col of branchColumns) out[col.id] = rev[col.id] - exp[col.id];
+    return out;
+  }, [branchTrees, branchColumns]);
 
   const totalRevenue = trees.revenue?.reduce((s, n) => s + effectiveBalance(n), 0) ?? 0;
   const totalExpense = trees.expense?.reduce((s, n) => s + effectiveBalance(n), 0) ?? 0;
@@ -250,6 +435,15 @@ export default function FinancialReport() {
         <h1>Laporan Keuangan</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <Link to="/account-adjustments" className="btn btn-secondary">Jurnal Manual</Link>
+          {byBranch && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => buildBranchExcel({ branchTrees, columns: branchColumns, startDate, endDate, isPeriod })}
+              disabled={branchLoading || branchColumns.length === 0}
+            >
+              Unduh Excel (per Cabang)
+            </button>
+          )}
           <button
             className="btn btn-primary"
             onClick={() => buildExcel({ trees, startDate, endDate, isPeriod })}
@@ -295,21 +489,17 @@ export default function FinancialReport() {
                 />
               </div>
 
-              {branches.length > 0 && (
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.2rem', display: 'block' }}>Cabang (Laba Rugi)</label>
-                  <select
-                    value={branchId}
-                    onChange={e => setBranchId(e.target.value)}
-                    style={{ padding: '0.35rem 0.6rem', border: '1px solid #ddd', borderRadius: 6, fontSize: '0.88rem' }}
-                  >
-                    <option value="">Seluruh Organisasi</option>
-                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                </div>
-              )}
             </>
           )}
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none', alignSelf: 'flex-end', paddingBottom: '0.25rem' }}>
+            <input
+              type="checkbox"
+              checked={byBranch}
+              onChange={e => setByBranch(e.target.checked)}
+            />
+            <span style={{ fontWeight: 600, fontSize: '0.88rem' }}>Rincian per cabang</span>
+          </label>
 
           {isPeriod && (
             <span style={{ fontSize: '0.82rem', color: '#888', alignSelf: 'flex-end', paddingBottom: '0.25rem' }}>
@@ -318,6 +508,66 @@ export default function FinancialReport() {
           )}
         </div>
       </div>
+
+      {/* ── Per-branch P&L ── */}
+      {byBranch && (
+        <div className="card" style={{ marginBottom: '1.5rem' }}>
+          <div className="card-header" style={{ marginBottom: '1rem' }}>
+            <h2>Laba Rugi per Cabang</h2>
+            <span style={{ fontSize: '0.78rem', color: '#888' }}>
+              {isPeriod ? `${startDate} s/d ${endDate}` : 'Semua waktu'} · dari jurnal
+            </span>
+          </div>
+
+          {branchLoading ? (
+            <p style={{ padding: '1.5rem', color: '#999' }}>Memuat...</p>
+          ) : branchColumns.length === 0 ? (
+            <p style={{ padding: '1.5rem', color: '#999' }}>Belum ada cabang.</p>
+          ) : (
+            <>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: `${28 + branchColumns.length * 9}rem` }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #eee' }}>
+                      <th style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', color: '#888', position: 'sticky', left: 0, background: '#fff' }}>Akun</th>
+                      {branchColumns.map(col => (
+                        <th key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.8rem', color: col.id === 'unallocated' ? '#b0863a' : '#888' }}>
+                          {col.name}
+                        </th>
+                      ))}
+                      <th style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.8rem', color: '#555', borderLeft: '1px solid #eee' }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <BranchSectionRows title="Pendapatan" nodes={branchTrees.revenue} columns={branchColumns} color="#e6f9f0" />
+                    <BranchSectionRows title="Beban" nodes={branchTrees.expense} columns={branchColumns} color="#fff3e0" />
+                    <tr style={{ background: '#f0f4ff', borderTop: '2px solid #dde4ff' }}>
+                      <td style={{ fontWeight: 700, fontSize: '0.95rem', padding: '0.65rem 0.75rem', position: 'sticky', left: 0, background: '#f0f4ff' }}>
+                        Laba / Rugi Bersih
+                      </td>
+                      {branchColumns.map(col => (
+                        <td key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.88rem', color: branchNet[col.id] >= 0 ? '#1b5e45' : '#c0392b' }}>
+                          {idr(branchNet[col.id])}
+                        </td>
+                      ))}
+                      <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.92rem', borderLeft: '1px solid #eee', color: totalOfAmounts(branchNet, branchColumns) >= 0 ? '#1b5e45' : '#c0392b' }}>
+                        {idr(totalOfAmounts(branchNet, branchColumns))}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <p style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.75rem', lineHeight: 1.5 }}>
+                Setiap akun pendapatan/beban dipetakan ke cabang pemiliknya — akun cabang, akun divisinya,
+                dan akun turunannya (kategori beban, beban gaji). Kolom <strong>Umum</strong> memuat akun
+                yang tidak dimiliki cabang mana pun, sehingga laba tiap cabang hanya menanggung biayanya sendiri.
+                Angka diambil dari jurnal, jadi termasuk pemakaian dispatch, gaji, selisih opname dan jurnal manual.
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <p style={{ padding: '2rem', color: '#999' }}>Memuat...</p>
@@ -332,14 +582,7 @@ export default function FinancialReport() {
                 {isPeriod && (
                   <span style={{ fontSize: '0.78rem', color: '#888' }}>{startDate} s/d {endDate}</span>
                 )}
-                {isPeriod && branchId && (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, background: '#e8f0fe', color: '#3949ab', borderRadius: 4, padding: '0.1rem 0.45rem' }}>
-                    {branches.find(b => b.id === branchId)?.name || 'Cabang'}
-                  </span>
-                )}
-                {isPeriod && !branchId && (
-                  <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Seluruh Organisasi</span>
-                )}
+                <span style={{ fontSize: '0.75rem', color: '#aaa' }}>Seluruh Organisasi</span>
               </div>
             </div>
 

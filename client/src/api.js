@@ -121,7 +121,7 @@ export const getItemLastPrice = (id, params) => api.get(`/items/${id}/last-price
 export const getItemStockDetail = (id) => api.get(`/items/${id}/stock-detail`);
 // Purchase-price breakdown for an item: rolled up per unit, per vendor and per
 // month, plus the raw invoice lines behind those numbers.
-export const getItemPriceHistory = (id) => api.get(`/items/${id}/price-history`);
+export const getItemPriceHistory = (id, params) => api.get(`/items/${id}/price-history`, { params });
 
 export const getInventory = (params) => api.get('/inventory', { params });
 export const getInventoryCount = (params) => api.get('/inventory/count', { params });
@@ -259,6 +259,7 @@ export const getExpenseReport = (params) => api.get('/expense-report', { params 
 export const getInventoryValueReport = (params) => api.get('/reports/inventory-value', { params });
 export const getExpenseSummaryReport  = (params) => api.get('/reports/expense-summary', { params });
 export const getFinancialReport       = (params)  => api.get('/reports/financial', { params });
+export const getProfitLossByBranch    = (params)  => api.get('/reports/profit-loss-by-branch', { params });
 export const getCashSummaryReport     = (params)  => api.get('/reports/cash-summary', { params });
 
 export const getPriceChangesReport    = (params)  => api.get('/reports/price-changes', { params });

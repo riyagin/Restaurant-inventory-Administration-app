@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions, getVendors } from '../api';
 
@@ -9,11 +9,11 @@ function getUser() {
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
-const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
-const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
+const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman', cancelled: 'Dibatalkan' };
+const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched', cancelled: 'status-cancelled' };
 // Each status carries a shape as well as a hue, so the chips stay separable
 // without colour vision (and in grayscale print).
-const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: '→' };
+const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: '→', cancelled: '⨯' };
 
 function StatusBadge({ status }) {
   return (
@@ -28,7 +28,99 @@ const PAGE_SIZE = 25;
 const todayStr = new Date().toISOString().split('T')[0];
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 
-const VALID_STATUS = ['all', 'unpaid', 'partial', 'paid', 'dispatched'];
+// Order the picker top-to-bottom by how often you actually want them: the two
+// machine-written statuses sit at the bottom, since they are the ones being
+// hidden rather than sought.
+const ALL_STATUSES = ['unpaid', 'partial', 'paid', 'dispatched', 'cancelled'];
+const VALID_STATUS = ['all', ...ALL_STATUSES];
+
+// Status is filtered by exclusion — the picker hides statuses rather than
+// selecting one — so a deep link like ?status=unpaid becomes "hide the rest".
+function initialHiddenStatuses(params) {
+  const only = params.get('status');
+  if (only && only !== 'all' && ALL_STATUSES.includes(only)) {
+    return ALL_STATUSES.filter((s) => s !== only);
+  }
+  const excluded = params.get('exclude_status');
+  if (excluded) return excluded.split(',').filter((s) => ALL_STATUSES.includes(s));
+  return [];
+}
+
+// Dropdown of checkboxes: checked = shown. Closes on outside click and Esc so
+// it behaves like the rest of the app's menus.
+function StatusFilter({ hidden, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey  = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const shown = ALL_STATUSES.filter((s) => !hidden.includes(s));
+  const label =
+    hidden.length === 0 ? 'Semua Status'
+    : shown.length === 1 ? STATUS_LABEL[shown[0]]
+    : shown.length === 0 ? 'Tidak ada status'
+    : `Status: ${shown.length}/${ALL_STATUSES.length}`;
+
+  const toggle = (s) =>
+    onChange(hidden.includes(s) ? hidden.filter((h) => h !== s) : [...hidden, s]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="btn btn-secondary"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="true"
+        title="Pilih status yang ditampilkan"
+      >
+        {label} <span aria-hidden="true" style={{ fontSize: '0.7em', marginLeft: '0.2rem' }}>▼</span>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute', top: 'calc(100% + 0.35rem)', right: 0, zIndex: 'var(--z-dropdown, 200)',
+            background: '#fff', border: '1px solid #ddd', borderRadius: '6px',
+            boxShadow: '0 6px 20px rgba(0,0,0,0.12)', padding: '0.5rem', minWidth: '13rem',
+          }}
+        >
+          {ALL_STATUSES.map((s) => (
+            <label
+              key={s}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.4rem', cursor: 'pointer', fontSize: '0.88rem', whiteSpace: 'nowrap' }}
+            >
+              <input type="checkbox" checked={!hidden.includes(s)} onChange={() => toggle(s)} />
+              <span className={`badge ${STATUS_CLASS[s]}`}>
+                <span aria-hidden="true">{STATUS_GLYPH[s]}</span> {STATUS_LABEL[s]}
+              </span>
+            </label>
+          ))}
+          <div style={{ display: 'flex', gap: '0.4rem', borderTop: '1px solid #eee', marginTop: '0.4rem', paddingTop: '0.5rem' }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onChange([])}>Tampilkan semua</button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => onChange([...new Set([...hidden, 'dispatched', 'cancelled'])])}
+              title="Sembunyikan faktur yang dibuat otomatis oleh pengiriman dan pembatalan"
+            >
+              Sembunyikan otomatis
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Invoices() {
   const currentUser = getUser();
@@ -36,7 +128,7 @@ export default function Invoices() {
 
   // The dashboard links here with ?status=unpaid — honour it as the initial filter.
   const [searchParams] = useSearchParams();
-  const initialStatus = VALID_STATUS.includes(searchParams.get('status')) ? searchParams.get('status') : 'all';
+  const initialHidden = initialHiddenStatuses(searchParams);
 
   const [invoices, setInvoices]           = useState([]);
   const [total, setTotal]                 = useState(0);
@@ -56,7 +148,7 @@ export default function Invoices() {
   const [vendors,    setVendors]    = useState([]);
 
   const [search,     setSearch]     = useState('');
-  const [status,     setStatus]     = useState(initialStatus);
+  const [hiddenStatuses, setHiddenStatuses] = useState(initialHidden);
   const [type,       setType]       = useState('all');
   const [dateFrom,   setDateFrom]   = useState('');
   const [dateTo,     setDateTo]     = useState('');
@@ -67,8 +159,8 @@ export default function Invoices() {
   const load = useCallback(() => {
     setLoading(true);
     const params = { page, limit: PAGE_SIZE };
-    if (search)                params.search      = search;
-    if (status !== 'all')      params.status      = status;
+    if (search)                params.search         = search;
+    if (hiddenStatuses.length) params.exclude_status = hiddenStatuses.join(',');
     if (type   !== 'all')      params.type        = type;
     if (dateFrom)              params.date_from   = dateFrom;
     if (dateTo)                params.date_to     = dateTo;
@@ -83,7 +175,7 @@ export default function Invoices() {
         setOutCount(r.data.outstanding_count ?? 0);
       })
       .finally(() => setLoading(false));
-  }, [search, status, type, dateFrom, dateTo, branchFilter, divisionNameFilter, vendorFilter, page]);
+  }, [search, hiddenStatuses, type, dateFrom, dateTo, branchFilter, divisionNameFilter, vendorFilter, page]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -137,14 +229,14 @@ export default function Invoices() {
   };
 
   const clearFilters = () => {
-    setSearch(''); setStatus('all'); setType('all');
+    setSearch(''); setHiddenStatuses([]); setType('all');
     setDateFrom(''); setDateTo('');
     setBranchFilter(''); setDivisionNameFilter(''); setVendorFilter('');
     setPage(1);
   };
 
   const totalPages  = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const hasFilters  = search || status !== 'all' || type !== 'all' || dateFrom || dateTo || branchFilter || divisionNameFilter || vendorFilter;
+  const hasFilters  = search || hiddenStatuses.length > 0 || type !== 'all' || dateFrom || dateTo || branchFilter || divisionNameFilter || vendorFilter;
   const pageStart   = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd     = Math.min(page * PAGE_SIZE, total);
 
@@ -184,12 +276,7 @@ export default function Invoices() {
               <option value="purchase">Pembelian</option>
               <option value="expense">Pengeluaran</option>
             </select>
-            <select value={status} onChange={e => setFilter(setStatus)(e.target.value)}>
-              <option value="all">Semua Status</option>
-              <option value="unpaid">Belum Dibayar</option>
-              <option value="partial">Sebagian</option>
-              <option value="paid">Lunas</option>
-            </select>
+            <StatusFilter hidden={hiddenStatuses} onChange={setFilter(setHiddenStatuses)} />
             {vendors.length > 0 && (
               <select value={vendorFilter} onChange={e => setFilter(setVendorFilter)(e.target.value)} title="Filter vendor">
                 <option value="">Semua Vendor</option>

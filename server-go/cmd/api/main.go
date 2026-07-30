@@ -616,6 +616,7 @@ func main() {
 
 		// Reports & Stats — all authenticated
 		r.Get("/api/reports/financial", reportsHandler.Financial)
+		r.Get("/api/reports/profit-loss-by-branch", reportsHandler.ProfitLossByBranch)
 		r.Get("/api/reports/cash-summary", reportsHandler.CashSummary)
 		r.Get("/api/reports/daily", reportsHandler.Daily)
 		r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)

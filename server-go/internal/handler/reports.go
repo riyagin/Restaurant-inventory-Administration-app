@@ -24,14 +24,16 @@ func NewReportsHandler(pool *pgxpool.Pool, queries *db.Queries) *ReportsHandler 
 }
 
 // Financial — GET /api/reports/financial
-// Params: start_date (or from), end_date (or to), branch_id (optional)
+// Params: start_date (or from), end_date (or to)
+//
+// Organisation-wide. The per-branch split lives in ProfitLossByBranch, which
+// derives its figures from the journal; this endpoint's period figures still come
+// from the source tables below.
 func (h *ReportsHandler) Financial(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	startDate := firstNonEmpty(q.Get("start_date"), q.Get("from"))
 	endDate := firstNonEmpty(q.Get("end_date"), q.Get("to"))
-	branchID := q.Get("branch_id")
 	usePeriod := startDate != "" && endDate != ""
-	hasBranch := branchID != ""
 	ctx := r.Context()
 
 	// Fetch all accounts
@@ -64,77 +66,8 @@ func (h *ReportsHandler) Financial(w http.ResponseWriter, r *http.Request) {
 	adjMap := map[string]int64{}
 
 	if usePeriod {
-		var sql string
-		var params []any
-		if hasBranch {
-			params = []any{startDate, endDate, branchID}
-			sql = `
-WITH pos_branch_imps AS (
-  SELECT DISTINCT pil.import_id
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id AND pi.date BETWEEN $1 AND $2
-  JOIN divisions dv ON dv.revenue_account_id = pil.account_id AND dv.branch_id = $3
-  WHERE pil.line_type = 'revenue'
-),
-sales_rev AS (
-  SELECT COALESCE(dv.revenue_account_id, b.revenue_account_id) AS account_id,
-         SUM(s.amount) AS total
-  FROM sales s
-  LEFT JOIN divisions dv ON dv.id = s.division_id
-  LEFT JOIN branches b ON b.id = s.branch_id
-  WHERE s.date BETWEEN $1 AND $2
-    AND COALESCE(dv.revenue_account_id, b.revenue_account_id) IS NOT NULL
-    AND COALESCE(s.branch_id, dv.branch_id) = $3
-  GROUP BY 1
-),
-pos_rev AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id
-  WHERE pil.line_type = 'revenue' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-inv_exp AS (
-  SELECT COALESCE(dv.expense_account_id, b.expense_account_id) AS account_id,
-         COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
-  FROM invoices inv
-  LEFT JOIN divisions dv ON dv.id = inv.division_id
-  LEFT JOIN branches b ON b.id = inv.branch_id
-  LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-  WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
-    AND COALESCE(dv.expense_account_id, b.expense_account_id) IS NOT NULL
-    AND COALESCE(inv.branch_id, dv.branch_id) = $3
-  GROUP BY 1
-),
-pos_exp AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id
-  WHERE pil.line_type = 'expense' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-pos_disc AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  JOIN pos_branch_imps pbi ON pbi.import_id = pil.import_id
-  WHERE pil.line_type = 'discount' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-combined AS (
-  SELECT account_id, total FROM sales_rev
-  UNION ALL SELECT account_id, total FROM pos_rev
-  UNION ALL SELECT account_id, total FROM inv_exp
-  UNION ALL SELECT account_id, total FROM pos_exp
-  UNION ALL SELECT account_id, total FROM pos_disc
-)
-SELECT account_id, SUM(total)::BIGINT AS period_balance
-FROM combined GROUP BY account_id`
-		} else {
-			params = []any{startDate, endDate}
-			sql = `
+		params := []any{startDate, endDate}
+		sql := `
 WITH sales_rev AS (
   SELECT COALESCE(dv.revenue_account_id, b.revenue_account_id) AS account_id,
          SUM(s.amount) AS total
@@ -193,7 +126,6 @@ combined AS (
 )
 SELECT account_id, SUM(total)::BIGINT AS period_balance
 FROM combined GROUP BY account_id`
-		}
 
 		pRows, err := h.pool.Query(ctx, sql, params...)
 		if err != nil {
@@ -337,11 +269,16 @@ func (h *ReportsHandler) CashSummary(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal menghitung pembelian")
 		return
 	}
+	// dispatch_id IS NULL: a dispatch's auto-invoice moves value from inventory to
+	// the division's expense account and never touches cash — the cash for those
+	// goods already left as "Pembelian Persediaan" above. Counting it here would
+	// charge the same rupiah to cash twice.
 	expenses, err := scalar(`
 		SELECT COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT
 		FROM invoices inv
 		JOIN invoice_items ii ON ii.invoice_id = inv.id
-		WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2`)
+		WHERE inv.invoice_type = 'expense' AND inv.dispatch_id IS NULL
+		  AND inv.date BETWEEN $1 AND $2`)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghitung beban operasional")
 		return

@@ -17,11 +17,18 @@ RETURNING id, name, code, units, is_stock;
 -- name: DeleteItem :exec
 DELETE FROM items WHERE id = $1;
 
+-- A dispatch auto-creates an expense invoice carrying the FIFO cost of the stock
+-- it consumed (see handler/dispatches.go). Those lines are *outflow at cost*, not
+-- purchases: their price is a booked cost, their payment_status is the sentinel
+-- 'dispatched'. Every purchase/price query below therefore excludes them with
+-- `dispatch_id IS NULL`; dispatch lines are reported by GetItemDispatchHistory.
+
 -- name: GetItemLastPrice :one
 SELECT ii.price, ii.unit_index, i.date
 FROM invoice_items ii
 JOIN invoices i ON i.id = ii.invoice_id
 WHERE ii.item_id = $1
+  AND i.dispatch_id IS NULL
 ORDER BY i.date DESC, i.created_at DESC
 LIMIT 1;
 
@@ -45,7 +52,62 @@ LEFT JOIN branches b    ON b.id  = inv.branch_id
 LEFT JOIN divisions dv  ON dv.id = inv.division_id
 LEFT JOIN warehouses wh ON wh.id = inv.warehouse_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 ORDER BY inv.date DESC, inv.created_at DESC;
+
+-- How far back the price data actually goes, ignoring whatever window the
+-- caller is looking at — so the UI can offer to widen the range and say what
+-- widening would buy. Unit-agnostic on purpose: it answers "is there older
+-- data?", not "at what price?".
+-- name: GetItemPriceRange :one
+SELECT
+    MIN(inv.date) AS first_purchase_date,
+    MAX(inv.date) AS last_purchase_date,
+    COUNT(*)::int AS purchase_count
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL;
+
+-- Outflow to a branch/division, one row per item line per dispatch. Quantity and
+-- unit come from dispatch_items (the current state of the dispatch); the value is
+-- summed off the linked auto-invoice, whose edit deltas and cancellation
+-- reversals net to what the dispatch is actually worth today.
+-- name: GetItemDispatchHistory :many
+SELECT
+    d.id AS dispatch_id,
+    d.dispatched_at,
+    COALESCE(d.status, 'active') AS status,
+    d.notes,
+    w.name  AS warehouse_name,
+    b.name  AS branch_name,
+    dv.name AS division_name,
+    di.quantity,
+    di.unit_name,
+    inv.id AS invoice_id,
+    inv.invoice_number,
+    COALESCE(line.value, 0)::bigint AS value
+FROM dispatch_items di
+JOIN dispatches d       ON d.id  = di.dispatch_id
+LEFT JOIN warehouses w  ON w.id  = d.warehouse_id
+LEFT JOIN branches b    ON b.id  = d.branch_id
+LEFT JOIN divisions dv  ON dv.id = d.division_id
+LEFT JOIN LATERAL (
+    SELECT i2.id, i2.invoice_number
+    FROM invoices i2
+    WHERE i2.dispatch_id = d.id
+    ORDER BY i2.created_at
+    LIMIT 1
+) inv ON TRUE
+LEFT JOIN LATERAL (
+    SELECT SUM(ii.quantity * ii.price)::bigint AS value
+    FROM invoice_items ii
+    WHERE ii.invoice_id = inv.id AND ii.item_id = di.item_id
+) line ON TRUE
+WHERE di.item_id = $1
+ORDER BY d.dispatched_at DESC;
 
 -- Price breakdown per unit: prices for different units of the same item are not
 -- comparable, so every rollup below keeps unit_index in the grouping key.
@@ -67,6 +129,9 @@ FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
 JOIN items it     ON it.id = ii.item_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY ii.unit_index, it.units->ii.unit_index->>'name'
 ORDER BY total_spend DESC;
 
@@ -90,6 +155,9 @@ JOIN invoices inv   ON inv.id = ii.invoice_id
 JOIN items it       ON it.id  = ii.item_id
 LEFT JOIN vendors v ON v.id   = COALESCE(ii.vendor_id, inv.vendor_id)
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY v.id, v.name, ii.unit_index, it.units->ii.unit_index->>'name'
 ORDER BY MAX(inv.date) DESC;
 
@@ -108,6 +176,9 @@ FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
 JOIN items it     ON it.id = ii.item_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY 1, ii.unit_index, 3
 ORDER BY 1 DESC;
 

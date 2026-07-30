@@ -56,12 +56,43 @@ type invoiceListRow struct {
 	TotalAmount     int64              `json:"total_amount"`
 }
 
+// Every value invoices.payment_status is allowed to hold. 'dispatched' marks a
+// dispatch's auto-generated mirror invoice and 'cancelled' a reversed one —
+// neither is a payment state, which is exactly why callers want to filter them
+// out. Anything not on this list is dropped rather than passed to the query.
+var invoicePaymentStatuses = map[string]bool{
+	"unpaid":     true,
+	"partial":    true,
+	"paid":       true,
+	"dispatched": true,
+	"cancelled":  true,
+}
+
+// parseStatusList reads a comma-separated ?exclude_status= value into a
+// deduplicated slice of known payment statuses.
+func parseStatusList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		s := strings.TrimSpace(part)
+		if invoicePaymentStatuses[s] && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // List — GET /api/invoices
 func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
 
 	status := q.Get("status")
+	excludeStatus := parseStatusList(q.Get("exclude_status"))
 	invType := q.Get("type")
 	search := q.Get("search")
 	dateFrom := q.Get("date_from")
@@ -88,6 +119,13 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if status != "" && status != "all" {
 		args = append(args, status)
 		conds = append(conds, fmt.Sprintf("inv.payment_status = $%d", len(args)))
+	}
+	// Exclusion is its own filter rather than an inverted `status`: the common
+	// case is hiding one noisy status (dispatch mirror invoices, cancellations)
+	// while still browsing everything else.
+	if len(excludeStatus) > 0 {
+		args = append(args, excludeStatus)
+		conds = append(conds, fmt.Sprintf("NOT (inv.payment_status = ANY($%d::text[]))", len(args)))
 	}
 	if invType != "" && invType != "all" {
 		args = append(args, invType)

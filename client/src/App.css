@@ -50,6 +50,11 @@
   --st-dispatched-bg: #d5c8f2;
   --st-dispatched-ink: #3d2880;
   --st-dispatched-line: #bda9e6;
+  /* cancelled — neutral and voided: no hue at all, so it reads as "not a state
+     on the payment ladder"; the ⨯ glyph and dashed border carry it further */
+  --st-cancelled-bg: #ededf0;
+  --st-cancelled-ink: #5c5c66;
+  --st-cancelled-line: #c9c9d1;
   /* paid — quiet cool tint: the resolved state recedes */
   --st-paid-bg: #e2f0fa;
   --st-paid-ink: #0a5674;
@@ -327,6 +332,7 @@ tr:hover td { background: var(--surface-2); }
 .badge.status-unpaid     { background: var(--st-unpaid-bg);     color: var(--st-unpaid-ink);     border-color: var(--st-unpaid-line); }
 .badge.status-partial    { background: var(--st-partial-bg);    color: var(--st-partial-ink);    border-color: var(--st-partial-line); }
 .badge.status-dispatched { background: var(--st-dispatched-bg); color: var(--st-dispatched-ink); border-color: var(--st-dispatched-line); }
+.badge.status-cancelled  { background: var(--st-cancelled-bg);  color: var(--st-cancelled-ink);  border-color: var(--st-cancelled-line); border-style: dashed; }
 
 /* Invoice type: quieter than status, told apart by border style as well as
    tint (solid = pembelian, dashed = pengeluaran). */

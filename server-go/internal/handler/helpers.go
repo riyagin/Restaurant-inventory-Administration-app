@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -60,6 +61,21 @@ func parseUUID(s string) (uuid.UUID, error) {
 
 func parseBody(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// parseDateParam turns a YYYY-MM-DD query parameter into a pgtype.Date. An
+// empty string yields an invalid (SQL NULL) date, which the `$n::date IS NULL
+// OR …` filters read as "unbounded"; a malformed one is an error rather than a
+// silently ignored filter.
+func parseDateParam(s string) (pgtype.Date, error) {
+	if s == "" {
+		return pgtype.Date{}, nil
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return pgtype.Date{}, err
+	}
+	return pgtype.Date{Time: t, Valid: true}, nil
 }
 
 // numericToFloat64 converts a pgtype.Numeric to float64.

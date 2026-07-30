@@ -22,6 +22,14 @@ const PAYMENT_STYLE = {
   paid:    { background: '#e6f9f0', color: '#27ae60' },
 };
 
+const DISPATCH_STATUS_LABEL = { active: 'Aktif', cancelled: 'Dibatalkan' };
+const DISPATCH_STATUS_STYLE = {
+  active:    { background: '#f3e8ff', color: '#8b5cf6' },
+  cancelled: { background: '#eee',    color: '#777' },
+};
+
+const PAGE_SIZE = 50;
+
 const TABS = [
   ['ringkasan',  'Ringkasan'],
   ['pembelian',  'Pembelian'],
@@ -75,11 +83,13 @@ export default function StockItemDetail() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState('');
   const [tab, setTab]             = useState('ringkasan');
-  const [mvFilter, setMvFilter]   = useState({ warehouse_id: '', type: '' });
+  const [mvFilter, setMvFilter]   = useState({ warehouse_id: '', type: '', direction: '' });
+  const [mvPage, setMvPage]       = useState(1);
 
   useEffect(() => {
     setLoading(true);
     setError('');
+    setMvPage(1);
     Promise.all([getItemStockDetail(id), getStockHistory(id, {})])
       .then(([d, m]) => {
         setDetail(d.data);
@@ -89,12 +99,13 @@ export default function StockItemDetail() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  const item      = detail?.item;
-  const stock     = detail?.stock_by_warehouse ?? [];
-  const purchases = detail?.purchases ?? [];
-  const usage     = detail?.usage_by_destination ?? [];
-  const monthly   = detail?.monthly_flow ?? [];
-  const byType    = detail?.flow_by_type ?? [];
+  const item       = detail?.item;
+  const stock      = detail?.stock_by_warehouse ?? [];
+  const purchases  = detail?.purchases ?? [];
+  const dispatches = detail?.dispatches ?? [];
+  const usage      = detail?.usage_by_destination ?? [];
+  const monthly    = detail?.monthly_flow ?? [];
+  const byType     = detail?.flow_by_type ?? [];
 
   const baseUnit = item?.units?.[0]?.name ?? '';
 
@@ -103,7 +114,8 @@ export default function StockItemDetail() {
     return {
       onHandQty:   sum(detail?.stock_by_warehouse, 'quantity'),
       onHandValue: sum(detail?.stock_by_warehouse, 'value'),
-      spend:       sum(detail?.purchases, 'line_total'),
+      spend:         sum(detail?.purchases, 'line_total'),
+      dispatchValue: sum(detail?.dispatches, 'value'),
       qtyIn:       sum(detail?.monthly_flow, 'qty_in'),
       qtyOut:      sum(detail?.monthly_flow, 'qty_out'),
       valueOut:    sum(detail?.monthly_flow, 'value_out'),
@@ -126,8 +138,23 @@ export default function StockItemDetail() {
   const filteredMovements = useMemo(
     () => movements.filter((m) =>
       (!mvFilter.warehouse_id || m.warehouse_id === mvFilter.warehouse_id) &&
-      (!mvFilter.type || m.type === mvFilter.type)),
+      (!mvFilter.type || m.type === mvFilter.type) &&
+      (!mvFilter.direction ||
+        (mvFilter.direction === 'in'  && Number(m.quantity_change) > 0) ||
+        (mvFilter.direction === 'out' && Number(m.quantity_change) < 0))),
     [movements, mvFilter],
+  );
+
+  const setFilter = (patch) => {
+    setMvFilter((f) => ({ ...f, ...patch }));
+    setMvPage(1);
+  };
+
+  const pageCount   = Math.max(1, Math.ceil(filteredMovements.length / PAGE_SIZE));
+  const currentPage = Math.min(mvPage, pageCount);
+  const pagedMovements = useMemo(
+    () => filteredMovements.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filteredMovements, currentPage],
   );
 
   if (loading) return <div className="card" style={{ padding: '2rem', color: '#999' }}>Memuat…</div>;
@@ -373,41 +400,59 @@ export default function StockItemDetail() {
             </table>
           </Card>
 
-          <Card title="Pemakaian & Pengurangan Stok">
+          {/* Per-dispatch detail. These lines used to sit on the Pembelian tab,
+              because a dispatch books its cost onto an auto-created expense
+              invoice — they belong here, next to the usage they explain. */}
+          <Card title={`Riwayat Pengeluaran (${dispatches.length})`}>
             <table>
               <thead>
                 <tr>
-                  <th>Waktu</th>
-                  <th>Jenis</th>
-                  <th style={{ textAlign: 'right' }}>Qty Keluar</th>
+                  <th>Tanggal</th>
+                  <th>Gudang Asal</th>
+                  <th>Cabang</th>
+                  <th>Divisi</th>
+                  <th style={{ textAlign: 'right' }}>Qty</th>
                   <th>Satuan</th>
-                  <th style={{ textAlign: 'right' }}>Nilai</th>
-                  <th>Gudang</th>
-                  <th>Referensi</th>
+                  <th style={{ textAlign: 'right' }}>Nilai (HPP)</th>
+                  <th>Catatan</th>
+                  <th>Status</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {movements.filter((m) => Number(m.quantity_change) < 0).length === 0 ? (
-                  <Empty cols={7}>Belum ada pengurangan stok tercatat.</Empty>
-                ) : movements.filter((m) => Number(m.quantity_change) < 0).map((m) => {
-                  const path = sourcePath(m.source_type, m.source_id);
-                  return (
-                    <tr key={m.id}>
-                      <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmtTime(m.created_at)}</td>
-                      <td><Badge label={typeLabel(m.type)} style={typeStyle(m.type)} /></td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: '#e74c3c' }}>{num(Math.abs(Number(m.quantity_change)))}</td>
-                      <td style={{ color: '#666' }}>{m.unit_name}</td>
-                      <td style={{ textAlign: 'right', color: '#555' }}>{m.value == null ? dash : idr(Math.abs(Number(m.value)))}</td>
-                      <td><span className="badge">{m.warehouse_name}</span></td>
-                      <td style={{ fontSize: '0.85rem' }}>
-                        {path
-                          ? <Link to={path} style={{ color: '#4f8ef7', textDecoration: 'none', fontWeight: 500 }}>{m.reference ?? 'Lihat'}</Link>
-                          : <span style={{ color: m.reference ? '#888' : '#ccc' }}>{m.reference ?? '—'}</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {dispatches.length === 0 ? (
+                  <Empty cols={10}>Belum ada pengeluaran tercatat untuk barang ini.</Empty>
+                ) : dispatches.map((r, i) => (
+                  <tr key={`${r.dispatch_id}-${i}`}>
+                    <td style={{ color: '#888', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{fmt(r.dispatched_at)}</td>
+                    <td><span className="badge">{r.warehouse_name ?? '—'}</span></td>
+                    <td style={{ fontWeight: 500 }}>{r.branch_name ?? dash}</td>
+                    <td style={{ color: '#555' }}>{r.division_name ?? dash}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }}>{num(r.quantity)}</td>
+                    <td style={{ color: '#666' }}>{r.unit_name}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: '#8b5cf6' }}>{idr(r.value)}</td>
+                    <td style={{ color: '#888', fontSize: '0.85rem' }}>{r.notes || dash}</td>
+                    <td>
+                      <Badge
+                        label={DISPATCH_STATUS_LABEL[r.status] ?? r.status}
+                        style={DISPATCH_STATUS_STYLE[r.status] ?? { background: '#eee', color: '#555' }}
+                      />
+                    </td>
+                    <td>
+                      <Link to={`/dispatches/${r.dispatch_id}`} className="btn btn-secondary btn-sm">Lihat</Link>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
+              {dispatches.length > 0 && (
+                <tfoot>
+                  <tr>
+                    <td colSpan={6} style={{ textAlign: 'right', fontWeight: 600, color: '#555' }}>Total Nilai Pengeluaran:</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700, color: '#8b5cf6' }}>{idr(totals.dispatchValue)}</td>
+                    <td colSpan={3}></td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </Card>
         </>
@@ -418,13 +463,18 @@ export default function StockItemDetail() {
           title={`${filteredMovements.length} pergerakan`}
           right={
             <div className="filters">
-              <select value={mvFilter.warehouse_id} onChange={(e) => setMvFilter((f) => ({ ...f, warehouse_id: e.target.value }))}>
+              <select value={mvFilter.warehouse_id} onChange={(e) => setFilter({ warehouse_id: e.target.value })}>
                 <option value="">Semua Gudang</option>
                 {warehouseOptions.map(([wid, name]) => <option key={wid} value={wid}>{name}</option>)}
               </select>
-              <select value={mvFilter.type} onChange={(e) => setMvFilter((f) => ({ ...f, type: e.target.value }))}>
+              <select value={mvFilter.type} onChange={(e) => setFilter({ type: e.target.value })}>
                 <option value="">Semua Jenis</option>
                 {typeOptions.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
+              </select>
+              <select value={mvFilter.direction} onChange={(e) => setFilter({ direction: e.target.value })}>
+                <option value="">Masuk & Keluar</option>
+                <option value="in">Hanya Masuk</option>
+                <option value="out">Hanya Keluar</option>
               </select>
             </div>
           }
@@ -432,35 +482,43 @@ export default function StockItemDetail() {
           <table>
             <thead>
               <tr>
-                <th>Waktu</th>
+                <th>Tanggal</th>
+                <th>Dicatat</th>
                 <th>Jenis</th>
                 <th style={{ textAlign: 'right' }}>Perubahan</th>
+                <th style={{ textAlign: 'right' }}>Saldo</th>
                 <th>Satuan</th>
                 <th style={{ textAlign: 'right' }}>Nilai</th>
                 <th>Gudang</th>
+                <th>Tujuan</th>
                 <th>Vendor</th>
                 <th>Referensi</th>
               </tr>
             </thead>
             <tbody>
-              {filteredMovements.length === 0 ? (
-                <Empty cols={8}>Tidak ada pergerakan ditemukan.</Empty>
-              ) : filteredMovements.map((m) => {
+              {pagedMovements.length === 0 ? (
+                <Empty cols={11}>Tidak ada pergerakan ditemukan.</Empty>
+              ) : pagedMovements.map((m) => {
                 const qty   = Number(m.quantity_change);
                 const val   = m.value == null ? null : Number(m.value);
                 const path  = sourcePath(m.source_type, m.source_id);
                 return (
                   <tr key={m.id}>
-                    <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{fmtTime(m.created_at)}</td>
+                    <td style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{fmt(m.date)}</td>
+                    <td style={{ color: '#aaa', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{fmtTime(m.created_at)}</td>
                     <td><Badge label={typeLabel(m.type)} style={typeStyle(m.type)} /></td>
                     <td style={{ textAlign: 'right', fontWeight: 700, color: qty >= 0 ? '#27ae60' : '#e74c3c', whiteSpace: 'nowrap' }}>
                       {qty > 0 ? '+' : ''}{num(qty)}
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: '#555', whiteSpace: 'nowrap' }}>
+                      {m.balance_after == null ? dash : num(m.balance_after)}
                     </td>
                     <td style={{ color: '#666' }}>{m.unit_name}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap', color: val == null ? '#ccc' : val >= 0 ? '#27ae60' : '#e74c3c' }}>
                       {val == null ? '—' : (val >= 0 ? '+' : '-') + idr(Math.abs(val))}
                     </td>
                     <td><span className="badge">{m.warehouse_name}</span></td>
+                    <td style={{ color: '#555', fontSize: '0.85rem' }}>{m.destination ?? dash}</td>
                     <td style={{ color: '#555' }}>{m.vendor ?? dash}</td>
                     <td style={{ fontSize: '0.85rem' }}>
                       {path
@@ -472,6 +530,21 @@ export default function StockItemDetail() {
               })}
             </tbody>
           </table>
+
+          {filteredMovements.length > PAGE_SIZE && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', padding: '0.85rem 1rem', flexWrap: 'wrap' }}>
+              <span style={{ color: '#888', fontSize: '0.85rem' }}>
+                Menampilkan {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredMovements.length)} dari {filteredMovements.length}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage === 1} onClick={() => setMvPage(1)}>«</button>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage === 1} onClick={() => setMvPage((p) => Math.max(1, p - 1))}>‹ Sebelumnya</button>
+                <span style={{ color: '#555', fontSize: '0.85rem' }}>Hal. {currentPage} / {pageCount}</span>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage === pageCount} onClick={() => setMvPage((p) => Math.min(pageCount, p + 1))}>Berikutnya ›</button>
+                <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage === pageCount} onClick={() => setMvPage(pageCount)}>»</button>
+              </div>
+            </div>
+          )}
         </Card>
       )}
     </>

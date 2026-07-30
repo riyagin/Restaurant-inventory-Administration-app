@@ -342,7 +342,9 @@ func (h *ItemsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	history, err := h.queries.GetItemPurchaseHistory(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+	history, err := h.queries.GetItemPurchaseHistory(r.Context(), &db.GetItemPurchaseHistoryParams{
+		ItemID: pgtype.UUID{Bytes: id, Valid: true},
+	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
 		return
@@ -356,6 +358,11 @@ func (h *ItemsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 // GetPriceHistory returns how the purchase price of an item has moved over
 // time: rolled up per unit, per vendor, and per month. Prices are always kept
 // split by unit — a price per dus and a price per pcs are not the same number.
+//
+// Optional ?from=/?to= (YYYY-MM-DD) bound every rollup to a window. "range" is
+// deliberately computed *outside* that window: it reports how far the item's
+// price data actually reaches, so the UI can say whether widening would find
+// anything. Omitting both dates returns the full history, as before.
 func (h *ItemsHandler) GetPriceHistory(w http.ResponseWriter, r *http.Request) {
 	rawID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -364,6 +371,17 @@ func (h *ItemsHandler) GetPriceHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	id := pgtype.UUID{Bytes: rawID, Valid: true}
 	ctx := r.Context()
+
+	from, err := parseDateParam(r.URL.Query().Get("from"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format tanggal 'from' tidak valid (gunakan YYYY-MM-DD)")
+		return
+	}
+	to, err := parseDateParam(r.URL.Query().Get("to"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format tanggal 'to' tidak valid (gunakan YYYY-MM-DD)")
+		return
+	}
 
 	item, err := h.queries.GetItemByID(ctx, id)
 	if err != nil {
@@ -375,24 +393,29 @@ func (h *ItemsHandler) GetPriceHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byUnit, err := h.queries.GetItemPriceByUnit(ctx, id)
+	byUnit, err := h.queries.GetItemPriceByUnit(ctx, &db.GetItemPriceByUnitParams{ItemID: id, Column2: from, Column3: to})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan harga")
 		return
 	}
-	byVendor, err := h.queries.GetItemPriceByVendor(ctx, id)
+	byVendor, err := h.queries.GetItemPriceByVendor(ctx, &db.GetItemPriceByVendorParams{ItemID: id, Column2: from, Column3: to})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil harga per vendor")
 		return
 	}
-	trend, err := h.queries.GetItemPriceTrend(ctx, id)
+	trend, err := h.queries.GetItemPriceTrend(ctx, &db.GetItemPriceTrendParams{ItemID: id, Column2: from, Column3: to})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil tren harga")
 		return
 	}
-	purchases, err := h.queries.GetItemPurchaseHistory(ctx, id)
+	purchases, err := h.queries.GetItemPurchaseHistory(ctx, &db.GetItemPurchaseHistoryParams{ItemID: id, Column2: from, Column3: to})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
+		return
+	}
+	priceRange, err := h.queries.GetItemPriceRange(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil rentang data harga")
 		return
 	}
 
@@ -415,6 +438,7 @@ func (h *ItemsHandler) GetPriceHistory(w http.ResponseWriter, r *http.Request) {
 		"by_vendor": byVendor,
 		"monthly":   trend,
 		"purchases": purchases,
+		"range":     priceRange,
 	})
 }
 
@@ -457,7 +481,13 @@ func (h *ItemsHandler) GetStockHistory(w http.ResponseWriter, r *http.Request) {
 
 // GetStockDetail bundles everything the stock-item history page needs in one
 // round trip: the item itself, on-hand stock per warehouse, purchase invoice
-// lines, dispatch usage per destination, and monthly / per-type flow rollups.
+// lines, dispatch usage (rolled up per destination and line by line), and
+// monthly / per-type flow rollups.
+//
+// "purchases" and "dispatches" are deliberately separate: a dispatch books its
+// FIFO cost onto an auto-created expense invoice, so without the dispatch_id
+// filter in GetItemPurchaseHistory those outflow lines surface as purchases
+// carrying the sentinel payment_status 'dispatched'.
 func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
 	rawID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -482,7 +512,7 @@ func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil stok per gudang")
 		return
 	}
-	purchases, err := h.queries.GetItemPurchaseHistory(ctx, id)
+	purchases, err := h.queries.GetItemPurchaseHistory(ctx, &db.GetItemPurchaseHistoryParams{ItemID: id})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pembelian")
 		return
@@ -490,6 +520,11 @@ func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
 	usage, err := h.queries.GetItemUsageByDestination(ctx, id)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data pemakaian")
+		return
+	}
+	dispatches, err := h.queries.GetItemDispatchHistory(ctx, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat pengeluaran")
 		return
 	}
 	monthly, err := h.queries.GetItemMonthlyFlow(ctx, id)
@@ -512,6 +547,9 @@ func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
 	if usage == nil {
 		usage = []*db.GetItemUsageByDestinationRow{}
 	}
+	if dispatches == nil {
+		dispatches = []*db.GetItemDispatchHistoryRow{}
+	}
 	if monthly == nil {
 		monthly = []*db.GetItemMonthlyFlowRow{}
 	}
@@ -524,6 +562,7 @@ func (h *ItemsHandler) GetStockDetail(w http.ResponseWriter, r *http.Request) {
 		"stock_by_warehouse":   stock,
 		"purchases":            purchases,
 		"usage_by_destination": usage,
+		"dispatches":           dispatches,
 		"monthly_flow":         monthly,
 		"flow_by_type":         byType,
 	})

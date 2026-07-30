@@ -73,6 +73,7 @@ SELECT ii.price, ii.unit_index, i.date
 FROM invoice_items ii
 JOIN invoices i ON i.id = ii.invoice_id
 WHERE ii.item_id = $1
+  AND i.dispatch_id IS NULL
 ORDER BY i.date DESC, i.created_at DESC
 LIMIT 1
 `
@@ -173,8 +174,17 @@ LEFT JOIN branches b    ON b.id  = inv.branch_id
 LEFT JOIN divisions dv  ON dv.id = inv.division_id
 LEFT JOIN warehouses wh ON wh.id = inv.warehouse_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 ORDER BY inv.date DESC, inv.created_at DESC
 `
+
+type GetItemPurchaseHistoryParams struct {
+	ItemID  pgtype.UUID `json:"item_id"`
+	Column2 pgtype.Date `json:"column_2"`
+	Column3 pgtype.Date `json:"column_3"`
+}
 
 type GetItemPurchaseHistoryRow struct {
 	ID            pgtype.UUID    `json:"id"`
@@ -195,8 +205,8 @@ type GetItemPurchaseHistoryRow struct {
 	UnitName      pgtype.Text    `json:"unit_name"`
 }
 
-func (q *Queries) GetItemPurchaseHistory(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPurchaseHistoryRow, error) {
-	rows, err := q.db.Query(ctx, getItemPurchaseHistory, itemID)
+func (q *Queries) GetItemPurchaseHistory(ctx context.Context, arg *GetItemPurchaseHistoryParams) ([]*GetItemPurchaseHistoryRow, error) {
+	rows, err := q.db.Query(ctx, getItemPurchaseHistory, arg.ItemID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +242,113 @@ func (q *Queries) GetItemPurchaseHistory(ctx context.Context, itemID pgtype.UUID
 	return items, nil
 }
 
+const getItemPriceRange = `-- name: GetItemPriceRange :one
+SELECT
+    MIN(inv.date) AS first_purchase_date,
+    MAX(inv.date) AS last_purchase_date,
+    COUNT(*)::int AS purchase_count
+FROM invoice_items ii
+JOIN invoices inv ON inv.id = ii.invoice_id
+WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+`
+
+type GetItemPriceRangeRow struct {
+	FirstPurchaseDate pgtype.Date `json:"first_purchase_date"`
+	LastPurchaseDate  pgtype.Date `json:"last_purchase_date"`
+	PurchaseCount     int32       `json:"purchase_count"`
+}
+
+func (q *Queries) GetItemPriceRange(ctx context.Context, itemID pgtype.UUID) (*GetItemPriceRangeRow, error) {
+	row := q.db.QueryRow(ctx, getItemPriceRange, itemID)
+	var i GetItemPriceRangeRow
+	err := row.Scan(&i.FirstPurchaseDate, &i.LastPurchaseDate, &i.PurchaseCount)
+	return &i, err
+}
+
+const getItemDispatchHistory = `-- name: GetItemDispatchHistory :many
+SELECT
+    d.id AS dispatch_id,
+    d.dispatched_at,
+    COALESCE(d.status, 'active') AS status,
+    d.notes,
+    w.name  AS warehouse_name,
+    b.name  AS branch_name,
+    dv.name AS division_name,
+    di.quantity,
+    di.unit_name,
+    inv.id AS invoice_id,
+    inv.invoice_number,
+    COALESCE(line.value, 0)::bigint AS value
+FROM dispatch_items di
+JOIN dispatches d       ON d.id  = di.dispatch_id
+LEFT JOIN warehouses w  ON w.id  = d.warehouse_id
+LEFT JOIN branches b    ON b.id  = d.branch_id
+LEFT JOIN divisions dv  ON dv.id = d.division_id
+LEFT JOIN LATERAL (
+    SELECT i2.id, i2.invoice_number
+    FROM invoices i2
+    WHERE i2.dispatch_id = d.id
+    ORDER BY i2.created_at
+    LIMIT 1
+) inv ON TRUE
+LEFT JOIN LATERAL (
+    SELECT SUM(ii.quantity * ii.price)::bigint AS value
+    FROM invoice_items ii
+    WHERE ii.invoice_id = inv.id AND ii.item_id = di.item_id
+) line ON TRUE
+WHERE di.item_id = $1
+ORDER BY d.dispatched_at DESC
+`
+
+type GetItemDispatchHistoryRow struct {
+	DispatchID    pgtype.UUID        `json:"dispatch_id"`
+	DispatchedAt  pgtype.Timestamptz `json:"dispatched_at"`
+	Status        string             `json:"status"`
+	Notes         pgtype.Text        `json:"notes"`
+	WarehouseName pgtype.Text        `json:"warehouse_name"`
+	BranchName    pgtype.Text        `json:"branch_name"`
+	DivisionName  pgtype.Text        `json:"division_name"`
+	Quantity      pgtype.Numeric     `json:"quantity"`
+	UnitName      string             `json:"unit_name"`
+	InvoiceID     pgtype.UUID        `json:"invoice_id"`
+	InvoiceNumber pgtype.Text        `json:"invoice_number"`
+	Value         int64              `json:"value"`
+}
+
+func (q *Queries) GetItemDispatchHistory(ctx context.Context, itemID pgtype.UUID) ([]*GetItemDispatchHistoryRow, error) {
+	rows, err := q.db.Query(ctx, getItemDispatchHistory, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetItemDispatchHistoryRow
+	for rows.Next() {
+		var i GetItemDispatchHistoryRow
+		if err := rows.Scan(
+			&i.DispatchID,
+			&i.DispatchedAt,
+			&i.Status,
+			&i.Notes,
+			&i.WarehouseName,
+			&i.BranchName,
+			&i.DivisionName,
+			&i.Quantity,
+			&i.UnitName,
+			&i.InvoiceID,
+			&i.InvoiceNumber,
+			&i.Value,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getItemPriceByUnit = `-- name: GetItemPriceByUnit :many
 SELECT
     ii.unit_index,
@@ -250,9 +367,18 @@ FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
 JOIN items it     ON it.id = ii.item_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY ii.unit_index, it.units->ii.unit_index->>'name'
 ORDER BY total_spend DESC
 `
+
+type GetItemPriceByUnitParams struct {
+	ItemID  pgtype.UUID `json:"item_id"`
+	Column2 pgtype.Date `json:"column_2"`
+	Column3 pgtype.Date `json:"column_3"`
+}
 
 type GetItemPriceByUnitRow struct {
 	UnitIndex         pgtype.Int4    `json:"unit_index"`
@@ -269,8 +395,8 @@ type GetItemPriceByUnitRow struct {
 	FirstPrice        int64          `json:"first_price"`
 }
 
-func (q *Queries) GetItemPriceByUnit(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceByUnitRow, error) {
-	rows, err := q.db.Query(ctx, getItemPriceByUnit, itemID)
+func (q *Queries) GetItemPriceByUnit(ctx context.Context, arg *GetItemPriceByUnitParams) ([]*GetItemPriceByUnitRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceByUnit, arg.ItemID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
@@ -322,9 +448,18 @@ JOIN invoices inv   ON inv.id = ii.invoice_id
 JOIN items it       ON it.id  = ii.item_id
 LEFT JOIN vendors v ON v.id   = COALESCE(ii.vendor_id, inv.vendor_id)
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY v.id, v.name, ii.unit_index, it.units->ii.unit_index->>'name'
 ORDER BY MAX(inv.date) DESC
 `
+
+type GetItemPriceByVendorParams struct {
+	ItemID  pgtype.UUID `json:"item_id"`
+	Column2 pgtype.Date `json:"column_2"`
+	Column3 pgtype.Date `json:"column_3"`
+}
 
 type GetItemPriceByVendorRow struct {
 	VendorID          pgtype.UUID    `json:"vendor_id"`
@@ -342,8 +477,8 @@ type GetItemPriceByVendorRow struct {
 	FirstPrice        int64          `json:"first_price"`
 }
 
-func (q *Queries) GetItemPriceByVendor(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceByVendorRow, error) {
-	rows, err := q.db.Query(ctx, getItemPriceByVendor, itemID)
+func (q *Queries) GetItemPriceByVendor(ctx context.Context, arg *GetItemPriceByVendorParams) ([]*GetItemPriceByVendorRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceByVendor, arg.ItemID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
@@ -391,9 +526,18 @@ FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
 JOIN items it     ON it.id = ii.item_id
 WHERE ii.item_id = $1
+  AND inv.dispatch_id IS NULL
+  AND ($2::date IS NULL OR inv.date >= $2)
+  AND ($3::date IS NULL OR inv.date <= $3)
 GROUP BY 1, ii.unit_index, 3
 ORDER BY 1 DESC
 `
+
+type GetItemPriceTrendParams struct {
+	ItemID  pgtype.UUID `json:"item_id"`
+	Column2 pgtype.Date `json:"column_2"`
+	Column3 pgtype.Date `json:"column_3"`
+}
 
 type GetItemPriceTrendRow struct {
 	Month         pgtype.Text    `json:"month"`
@@ -407,8 +551,8 @@ type GetItemPriceTrendRow struct {
 	LastPrice     int64          `json:"last_price"`
 }
 
-func (q *Queries) GetItemPriceTrend(ctx context.Context, itemID pgtype.UUID) ([]*GetItemPriceTrendRow, error) {
-	rows, err := q.db.Query(ctx, getItemPriceTrend, itemID)
+func (q *Queries) GetItemPriceTrend(ctx context.Context, arg *GetItemPriceTrendParams) ([]*GetItemPriceTrendRow, error) {
+	rows, err := q.db.Query(ctx, getItemPriceTrend, arg.ItemID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
