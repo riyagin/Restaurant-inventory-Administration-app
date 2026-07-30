@@ -1,18 +1,29 @@
+-- The on-hand total rides along so the list can flag what has fallen below its
+-- min_stock without a second round trip per item. Both figures are in the
+-- item's base unit — every lot of an item carries the same unit_index — so they
+-- are directly comparable.
 -- name: ListItems :many
-SELECT id, name, code, units, is_stock FROM items ORDER BY name;
+SELECT
+    i.id, i.name, i.code, i.units, i.is_stock, i.min_stock,
+    COALESCE(s.quantity, 0)::numeric AS stock_quantity
+FROM items i
+LEFT JOIN LATERAL (
+    SELECT SUM(inv.quantity) AS quantity FROM inventory inv WHERE inv.item_id = i.id
+) s ON TRUE
+ORDER BY i.name;
 
 -- name: GetItemByID :one
-SELECT id, name, code, units, is_stock FROM items WHERE id = $1;
+SELECT id, name, code, units, is_stock, min_stock FROM items WHERE id = $1;
 
 -- name: CreateItem :one
-INSERT INTO items (id, name, code, units, is_stock)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, code, units, is_stock;
+INSERT INTO items (id, name, code, units, is_stock, min_stock)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+RETURNING id, name, code, units, is_stock, min_stock;
 
 -- name: UpdateItem :one
-UPDATE items SET name = $1, code = $2, units = $3, is_stock = $4
-WHERE id = $5
-RETURNING id, name, code, units, is_stock;
+UPDATE items SET name = $1, code = $2, units = $3, is_stock = $4, min_stock = $5
+WHERE id = $6
+RETURNING id, name, code, units, is_stock, min_stock;
 
 -- name: DeleteItem :exec
 DELETE FROM items WHERE id = $1;

@@ -522,3 +522,70 @@ tr.row-expanded td { background: var(--accent-soft) !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── HR Onboarding Wizard ──────────────────────────────────────────────── */
+.onb-stepper {
+  display: flex; gap: 0; margin-bottom: 1.4rem; flex-wrap: wrap;
+}
+.onb-step-item {
+  position: relative; display: flex; align-items: center; gap: 0.6rem;
+  flex: 1; min-width: 150px;
+}
+.onb-dot {
+  width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; font-weight: 700; background: var(--surface-2);
+  color: var(--ink-3); border: 2px solid #d5d9e0;
+  transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease, transform 0.35s ease;
+}
+.onb-step-item.active .onb-dot {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+  transform: scale(1.08); box-shadow: 0 4px 14px var(--accent-soft);
+}
+.onb-step-item.done .onb-dot {
+  background: #1a9d5a; color: #fff; border-color: #1a9d5a;
+}
+.onb-step-label { display: flex; flex-direction: column; line-height: 1.15; }
+.onb-step-title { font-weight: 600; font-size: 0.9rem; color: var(--ink); }
+.onb-step-desc { font-size: 0.75rem; color: var(--ink-3); }
+.onb-line {
+  position: absolute; top: 20px; left: 40px; right: 0; height: 3px;
+  background: #d5d9e0; z-index: -1; margin-left: 0.4rem;
+}
+.onb-line.filled { background: #1a9d5a; transition: background 0.4s ease; }
+
+.onb-panel { animation: onbSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes onbSlideIn {
+  from { opacity: 0; transform: translateX(26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.onb-doc-row {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.6rem 0.8rem; border: 1px solid #e3e6ec; border-radius: 8px;
+  margin-bottom: 0.5rem; background: var(--surface-2);
+  animation: onbFadeUp 0.3s ease;
+}
+@keyframes onbFadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.onb-summary .onb-check-badge {
+  width: 64px; height: 64px; border-radius: 50%; margin: 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  background: #1a9d5a; color: #fff; font-size: 2rem; font-weight: 800;
+  animation: onbPop 0.5s cubic-bezier(0.18, 1.4, 0.4, 1);
+}
+@keyframes onbPop {
+  0% { transform: scale(0); opacity: 0; }
+  70% { transform: scale(1.15); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.onb-summary > div > div > strong { display: block; font-size: 0.75rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.4px; }
+
+@media (max-width: 640px) {
+  .onb-step-desc { display: none; }
+  .onb-line { display: none; }
+  .onb-step-item { min-width: 64px; flex: 0 0 auto; }
+}

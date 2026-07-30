@@ -295,6 +295,17 @@ export const createPosition = (data) => api.post('/hr/positions', data);
 export const updatePosition = (id, data) => api.put(`/hr/positions/${id}`, data);
 export const deletePosition = (id) => api.delete(`/hr/positions/${id}`);
 
+// ── HR: Dokumen (generator PKWT/PKWTT/SP/Paklaring + arsip dokumen karyawan) ──
+// format = 'docx' | 'pdf'; returns a blob for the browser to download.
+export const generateHrDocument = (data, format = 'docx') =>
+  api.post(`/hr/documents/generate?format=${format}`, data, { responseType: 'blob' });
+export const getEmployeeDocuments   = (id) => api.get(`/hr/employees/${id}/documents`);
+export const uploadEmployeeDocument = (id, formData) =>
+  api.post(`/hr/employees/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const downloadEmployeeDocument = (id, docId) =>
+  api.get(`/hr/employees/${id}/documents/${docId}/download`, { responseType: 'blob' });
+export const deleteEmployeeDocument = (id, docId) => api.delete(`/hr/employees/${id}/documents/${docId}`);
+
 // ── HR: Komponen & Struktur Gaji ────────────────────────────────────────────
 export const getWageComponents   = (params) => api.get('/hr/wage-components', { params });
 export const createWageComponent = (data)    => api.post('/hr/wage-components', data);

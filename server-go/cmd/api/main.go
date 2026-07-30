@@ -190,6 +190,8 @@ func main() {
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 	thrHandler := handler.NewThrHandler(pool, queries)
 	thrHandler.SetUploadsDir(cfg.UploadsDir)
+	hrDocumentsHandler := handler.NewHRDocumentsHandler(pool, queries)
+	hrDocumentsHandler.SetUploadsDir(cfg.UploadsDir)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)
@@ -413,6 +415,18 @@ func main() {
 			r.Post("/api/hr/positions", hrEmployeesHandler.CreatePosition)
 			r.Put("/api/hr/positions/{id}", hrEmployeesHandler.UpdatePosition)
 			r.Delete("/api/hr/positions/{id}", hrEmployeesHandler.DeletePosition)
+		})
+
+		// HR Documents — generation (PKWT/PKWTT/Surat Peringatan/Paklaring as
+		// DOCX/PDF) and the per-employee signed-document store used by onboarding.
+		// Admin/manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Post("/api/hr/documents/generate", hrDocumentsHandler.Generate)
+			r.Get("/api/hr/employees/{id}/documents", hrDocumentsHandler.ListEmployeeDocuments)
+			r.Post("/api/hr/employees/{id}/documents", hrDocumentsHandler.UploadEmployeeDocument)
+			r.Get("/api/hr/employees/{id}/documents/{docId}/download", hrDocumentsHandler.DownloadEmployeeDocument)
+			r.Delete("/api/hr/employees/{id}/documents/{docId}", hrDocumentsHandler.DeleteEmployeeDocument)
 		})
 
 		// HR Wage module — admin/manager only (staff has NO access).

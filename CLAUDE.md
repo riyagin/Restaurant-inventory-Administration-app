@@ -250,6 +250,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | PayrollDashboard | `/hr/payroll` | Manager+ |
 | PayrollPeriodDetail | `/hr/payroll/:id` | Manager+ |
 | HRSettings | `/hr/settings` | Manager+ (view/quick-links; company-info mutations still admin only) |
+| OnboardingWizard | `/hr/onboarding` | Manager+ (animated multi-step: creates employee + uploads signed docs) |
+| DocumentGenerator | `/hr/documents` | Manager+ (generate PKWT/PKWTT/Surat Peringatan/Paklaring as DOCX/PDF) |
 
 ### Components (`client/src/components/`)
 - `CurrencyInput.jsx` — IDR currency input with formatting
@@ -287,7 +289,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `division_categories` | POS revenue labels per division — matched by name against POS import lines to auto-fill revenue accounts. Despite the name, nothing to do with expense |
 | `expense_categories` | Subaccount breakdown under a division's expense account — name + the child COA account it posts to |
 | `vendors` | Supplier master |
-| `items` | Item master — name, code, units (JSONB array of {name, ratio}), is_stock |
+| `items` | Item master — name, code, units (JSONB array of {name, ratio}), is_stock, min_stock (low-stock threshold, in the base unit; 0 = unset) |
 | `inventory` | Current stock lots per item+warehouse — quantity, unit_index, value (cents) |
 | `stock_history` | Immutable movement log — type, quantity_change, value, source_id/type |
 | `stock_transfers` | Warehouse-to-warehouse transfers with group_id for batch |
@@ -331,13 +333,14 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `payroll_lines` | Per-employee line within a period — gross, deductions, net, reviewed flag |
 | `payroll_postings` | Queue/status of a closed period's automatic ledger posting — status, attempts, last_error, journal_entry_id |
 | `hr_settings` | Company-level HR config — company_name, logo_path, payslip footer text |
+| `employee_documents` | Signed scans/files filed per employee (onboarding uploads + kept letters) — doc_type, title, file_path, is_signed, uploaded_by. Files live in the uploads dir; served through an authenticated download endpoint, not `/uploads/` |
 
 ### Key DB Rules
 - Hard deletes only (no soft delete)
 - `accounts.balance` updated in real time on every financial transaction
 - Accounts payable is split per vendor: each vendor owns a sub-account `Utang Usaha - <name>` (numbers 20101+) under the system parent `Utang Usaha` (20100), linked via `vendors.account_id`. Invoices with no vendor post to `Utang Usaha - Lainnya` (20999). The 20100 parent holds no balance of its own. Resolve the account with `service.VendorPayableAccountID()`, never by looking up 20100 directly
 - `items.units` runs **largest → smallest**, so the base unit is the **last** entry (`unit_index = len-1`), not index 0. `perPrev` on entry i says how many of unit i fit in one unit i-1
-- Inventory is stored at the base unit, and **nothing in the deduction path converts units** — `service.FIFODeduct` compares the requested quantity directly against `inventory.quantity`. Every lot of an item must therefore share one `unit_index`. Changing an item's units rescales its lots in the same transaction (`handler.rescaleInventoryForUnits`); dropping a unit that stock is held in is rejected outright
+- Inventory is stored at the base unit, and **nothing in the deduction path converts units** — `service.FIFODeduct` compares the requested quantity directly against `inventory.quantity`. Every lot of an item must therefore share one `unit_index`. Changing an item's units rescales its lots in the same transaction (`handler.rescaleInventoryForUnits`); dropping a unit that stock is held in is rejected outright. `items.min_stock` is denominated in the same base unit and is rescaled by the same factor on a units edit — a threshold left unconverted would silently change what it means. The item list compares it against the summed on-hand quantity to flag low stock
 - Purchase invoice lines and dispatch lines are **entered in any unit and converted to the base unit** before touching inventory. The rate is `handler.resolveLineConversion()`: the item's own `perPrev` chain, unless the line carries a one-off `conversion_factor` override (a supplier's dus holding 20 where the catalogue says 24). The override is stored on `invoice_items.conversion_factor` / `dispatch_items.conversion_factor` — **never** written back to `items.units` — and every reversal (invoice edit/delete, dispatch edit/cancel) must unwind at the *stored* factor, not today's catalogue figure. `stock_history` for these paths records base-unit quantities
 - A parent account's reported total is **its own balance plus its children's**, not the children alone (`totalOf` in Accounts.jsx, `effectiveBalance` in FinancialReport.jsx). Pure grouping accounts carry zero so they are unaffected, but a division expense account holds both: dispatch usage debits the parent directly, purchases debit its expense-category children. Summing only children silently drops the dispatch spending
 - Operational expense is split by `expense_categories`: each row is a named child account under a division's `expense_account_id`, created together with its account in one transaction (`handler/expense_categories.go`). An expense invoice's `expense_category_id` routes the debit there; blank posts to the division parent as before. `invoiceExpenseAccountID` resolves category → division → branch, and edit/delete reversals must pass the **stored** category so the credit lands on the account that was debited. A category whose account has journal lines cannot be deleted
@@ -364,7 +367,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Vendors** (5): CRUD /api/vendors + GET /api/vendors/:id/history (vendor + invoices it appears on + per-item purchase breakdown with latest/avg price + payable summary — powers the vendor activity page)
 
-**Items** (10): CRUD /api/items + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page) + GET /:id/price-history (purchase price rolled up per unit, per vendor and per month — powers the "Riwayat Harga" tab on both item detail pages; optional `?from=`/`?to=` bound every rollup, and the tab defaults to the last 30 days, but the `range` field in the response reports the item's full data extent *outside* that window so the UI can offer to widen it)
+**Items** (10): CRUD /api/items (list rows carry `stock_quantity` + `is_low_stock`; `?low_stock=true` keeps only the ones under their threshold) + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page) + GET /:id/price-history (purchase price rolled up per unit, per vendor and per month — powers the "Riwayat Harga" tab on both item detail pages; optional `?from=`/`?to=` bound every rollup, and the tab defaults to the last 30 days, but the `range` field in the response reports the item's full data extent *outside* that window so the UI can offer to widen it)
 
 **Accounts** (4): CRUD /api/accounts
 
@@ -431,6 +434,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 **HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips (single PDF, two slips per A4-landscape page — cut down the middle for two A5-portrait slips)
 
 **HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo
+
+**HR Documents** (5): POST /api/hr/documents/generate?format=docx|pdf (stateless render of PKWT/PKWTT/Surat Peringatan/Paklaring, legally-compliant Indonesian templates — see `service/hrdoc*.go`); GET/POST /api/hr/employees/:id/documents (list/upload signed docs); GET /api/hr/employees/:id/documents/:docId/download; DELETE /api/hr/employees/:id/documents/:docId — admin/manager
 
 _(HR total: ~78 endpoints; grand total: ~175)_
 

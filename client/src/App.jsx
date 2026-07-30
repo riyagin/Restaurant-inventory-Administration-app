@@ -68,6 +68,8 @@ import ThrRunDetail from './pages/hr/ThrRunDetail';
 import Approvals from './pages/hr/Approvals';
 import HRSettings from './pages/hr/HRSettings';
 import ManpowerPlanning from './pages/hr/ManpowerPlanning';
+import DocumentGenerator from './pages/hr/DocumentGenerator';
+import OnboardingWizard from './pages/hr/OnboardingWizard';
 import './App.css';
 
 function getUser() {
@@ -215,6 +217,8 @@ function Nav() {
 
         {(isAdminOrManager || isStaff) && (
           <NavDropdown label="HR" paths={['/hr']}>
+            {isAdminOrManager && menuLink('/hr/onboarding', 'Onboarding Karyawan')}
+            {isAdminOrManager && menuLink('/hr/documents', 'Dokumen HR')}
             {menuLink('/hr/attendance', 'Absensi')}
             {isAdminOrManager && menuLink('/hr/attendance/corrections', 'Koreksi Kehadiran')}
             {isAdminOrManager && menuLink('/hr/face', 'Wajah & Perangkat')}
@@ -297,6 +301,8 @@ function Nav() {
 
           {(isAdminOrManager || isStaff) && (
             <MobileSection label="HR" paths={['/hr']}>
+              {isAdminOrManager && <Link to="/hr/onboarding" className={isActive('/hr/onboarding') ? 'active' : ''}>Onboarding Karyawan</Link>}
+              {isAdminOrManager && <Link to="/hr/documents" className={isActive('/hr/documents') ? 'active' : ''}>Dokumen HR</Link>}
               <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
               {isAdminOrManager && <Link to="/hr/face" className={isActive('/hr/face') ? 'active' : ''}>Wajah &amp; Perangkat</Link>}
               {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Evaluasi</Link>}
@@ -416,6 +422,8 @@ export default function App() {
                 <Route path="/users" element={<Users />} />
                 <Route path="/activity" element={<ActivityLog />} />
                 <Route path="/profile" element={<Profile />} />
+                <Route path="/hr/onboarding" element={<RequireManagerOrAdmin><OnboardingWizard /></RequireManagerOrAdmin>} />
+                <Route path="/hr/documents" element={<RequireManagerOrAdmin><DocumentGenerator /></RequireManagerOrAdmin>} />
                 <Route path="/hr/employees" element={<Employees />} />
                 <Route path="/hr/employees/new" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
                 <Route path="/hr/employees/:id" element={<EmployeeDetail />} />

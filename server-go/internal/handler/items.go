@@ -60,6 +60,10 @@ func itemChangeSummary(before, after *db.Item) string {
 	if !bytes.Equal(before.Units, after.Units) {
 		changes = append(changes, "satuan diubah")
 	}
+	if beforeMin, afterMin := numericToFloat64(before.MinStock), numericToFloat64(after.MinStock); beforeMin != afterMin {
+		changes = append(changes, fmt.Sprintf("stok minimum: %s → %s",
+			formatQty(beforeMin), formatQty(afterMin)))
+	}
 	if len(changes) == 0 {
 		return ""
 	}
@@ -88,6 +92,9 @@ type itemResponse struct {
 	Code    string          `json:"code"`
 	Units   json.RawMessage `json:"units"`
 	IsStock bool            `json:"is_stock"`
+	// MinStock is the low-stock threshold, in the item's base (smallest) unit —
+	// the same denomination inventory.quantity is kept in. 0 means unset.
+	MinStock float64 `json:"min_stock"`
 }
 
 func itemToResponse(i *db.Item) itemResponse {
@@ -96,12 +103,64 @@ func itemToResponse(i *db.Item) itemResponse {
 		units = json.RawMessage("[]")
 	}
 	return itemResponse{
-		ID:      i.ID,
-		Name:    i.Name,
-		Code:    i.Code,
-		Units:   units,
-		IsStock: i.IsStock,
+		ID:       i.ID,
+		Name:     i.Name,
+		Code:     i.Code,
+		Units:    units,
+		IsStock:  i.IsStock,
+		MinStock: numericToFloat64(i.MinStock),
 	}
+}
+
+// itemListResponse is the list row: the item plus what the low-stock flag is
+// computed from, so the client never has to fetch inventory to render it.
+type itemListResponse struct {
+	itemResponse
+	StockQuantity float64 `json:"stock_quantity"`
+	IsLowStock    bool    `json:"is_low_stock"`
+}
+
+func itemRowToResponse(i *db.ListItemsRow) itemListResponse {
+	base := itemToResponse(&db.Item{
+		ID: i.ID, Name: i.Name, Code: i.Code,
+		Units: i.Units, IsStock: i.IsStock, MinStock: i.MinStock,
+	})
+	stock := numericToFloat64(i.StockQuantity)
+	return itemListResponse{
+		itemResponse:  base,
+		StockQuantity: stock,
+		// A threshold of 0 means "not set", so it never flags — otherwise every
+		// item that has simply never had a minimum configured would light up.
+		IsLowStock: i.IsStock && base.MinStock > 0 && stock < base.MinStock,
+	}
+}
+
+// itemBody is the shape both Create and Update accept. min_stock is optional:
+// an omitted field leaves the threshold at whatever the row already holds
+// (0 on create), so older clients that never send it keep working.
+type itemBody struct {
+	Name     string          `json:"name"`
+	Code     string          `json:"code"`
+	Units    json.RawMessage `json:"units"`
+	IsStock  bool            `json:"is_stock"`
+	MinStock *float64        `json:"min_stock"`
+}
+
+// minStockValue resolves the threshold to store. A non-stock item is never
+// counted in inventory, so it can have no meaningful threshold; a negative
+// number is clamped rather than rejected, since it can only come from a typo in
+// the Excel import.
+func (b *itemBody) minStockValue(current float64) float64 {
+	if !b.IsStock {
+		return 0
+	}
+	if b.MinStock == nil {
+		return current
+	}
+	if *b.MinStock < 0 {
+		return 0
+	}
+	return *b.MinStock
 }
 
 func (h *ItemsHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +172,8 @@ func (h *ItemsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	search      := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("search")))
 	isStockStr  := r.URL.Query().Get("is_stock")
-	result := make([]itemResponse, 0, len(items))
+	lowOnly     := r.URL.Query().Get("low_stock") == "true"
+	result := make([]itemListResponse, 0, len(items))
 	for _, item := range items {
 		if isStockStr != "" {
 			wantStock := isStockStr == "true"
@@ -127,7 +187,11 @@ func (h *ItemsHandler) List(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		result = append(result, itemToResponse(item))
+		row := itemRowToResponse(item)
+		if lowOnly && !row.IsLowStock {
+			continue
+		}
+		result = append(result, row)
 	}
 	respondJSON(w, http.StatusOK, result)
 }
@@ -152,12 +216,7 @@ func (h *ItemsHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ItemsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name    string          `json:"name"`
-		Code    string          `json:"code"`
-		Units   json.RawMessage `json:"units"`
-		IsStock bool            `json:"is_stock"`
-	}
+	var body itemBody
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
 		return
@@ -172,10 +231,11 @@ func (h *ItemsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	item, err := h.queries.CreateItem(r.Context(), &db.CreateItemParams{
-		Name:    body.Name,
-		Code:    body.Code,
-		Units:   []byte(body.Units),
-		IsStock: body.IsStock,
+		Name:     body.Name,
+		Code:     body.Code,
+		Units:    []byte(body.Units),
+		IsStock:  body.IsStock,
+		MinStock: floatToNumeric(body.minStockValue(0)),
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal membuat item")
@@ -196,12 +256,7 @@ func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Name    string          `json:"name"`
-		Code    string          `json:"code"`
-		Units   json.RawMessage `json:"units"`
-		IsStock bool            `json:"is_stock"`
-	}
+	var body itemBody
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
 		return
@@ -238,6 +293,10 @@ func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
+	// The submitted threshold is denominated in the unit the form was showing —
+	// the item's base unit *before* this edit, same as every existing lot.
+	minStock := body.minStockValue(numericToFloat64(before.MinStock))
+
 	rescaled := 0
 	if !bytes.Equal(before.Units, []byte(body.Units)) {
 		oldUnits, errOld := parseUnitDefs(before.Units)
@@ -253,15 +312,29 @@ func (h *ItemsHandler) Update(w http.ResponseWriter, r *http.Request) {
 					fmt.Sprintf("gagal menyesuaikan stok ke satuan baru: %v", err))
 				return
 			}
+			// The threshold is compared against inventory.quantity, so it has to
+			// follow the lots into the new base unit — otherwise a 10-kaleng
+			// minimum silently becomes 10 liters the moment a smaller unit is
+			// appended. Same conversion, so the rule it expresses is unchanged.
+			if minStock > 0 {
+				factor, _, errScale := lotRescale(oldUnits, newUnits, int32(len(oldUnits)-1))
+				if errScale != nil {
+					respondError(w, http.StatusUnprocessableEntity,
+						fmt.Sprintf("gagal menyesuaikan stok minimum ke satuan baru: %v", errScale))
+					return
+				}
+				minStock *= factor
+			}
 		}
 	}
 
 	item, err := qtx.UpdateItem(ctx, &db.UpdateItemParams{
-		Name:    body.Name,
-		Code:    body.Code,
-		Units:   []byte(body.Units),
-		IsStock: body.IsStock,
-		ID:      pgtype.UUID{Bytes: id, Valid: true},
+		Name:     body.Name,
+		Code:     body.Code,
+		Units:    []byte(body.Units),
+		IsStock:  body.IsStock,
+		MinStock: floatToNumeric(minStock),
+		ID:       pgtype.UUID{Bytes: id, Valid: true},
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui item")

@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getItem, createItem, updateItem } from '../api';
 
-const empty = { name: '', code: '', is_stock: true, units: [{ name: '', perPrev: null }] };
+const empty = { name: '', code: '', is_stock: true, min_stock: '', units: [{ name: '', perPrev: null }] };
 
 const unitKey = (name) => (name || '').trim().toLowerCase();
+
+const qty = (n) => Number(n).toLocaleString('id-ID', { maximumFractionDigits: 4 });
 
 export default function ItemForm() {
   const { id } = useParams();
@@ -16,32 +18,64 @@ export default function ItemForm() {
 
   useEffect(() => {
     if (id) getItem(id).then(r => {
-      setForm({ ...r.data, is_stock: r.data.is_stock ?? true });
+      setForm({
+        ...r.data,
+        is_stock: r.data.is_stock ?? true,
+        min_stock: Number(r.data.min_stock) > 0 ? String(r.data.min_stock) : '',
+      });
       setSavedUnits(r.data.units || []);
     });
   }, [id]);
+
+  // How the saved base unit maps onto the one being submitted. Everything
+  // denominated in the base unit — every inventory lot, and the minimum-stock
+  // threshold — is restated by this factor when the item is saved.
+  const baseConversion = useMemo(() => {
+    if (!isEdit || !savedUnits?.length || !form.is_stock) return null;
+    const oldBase = savedUnits[savedUnits.length - 1];
+    if (!oldBase?.name) return null;
+
+    const idx = form.units.findIndex(u => unitKey(u.name) === unitKey(oldBase.name));
+    if (idx === -1) {
+      // A rename keeps the same shape and is handled positionally; anything
+      // else means the unit the stock is held in is gone.
+      if (form.units.length === savedUnits.length) return null;
+      return { dropped: true, oldBase: oldBase.name };
+    }
+
+    let factor = 1;
+    for (let j = idx + 1; j < form.units.length; j++) factor *= Number(form.units[j].perPrev) || 1;
+    if (factor === 1) return null;
+
+    return {
+      factor,
+      oldBase: oldBase.name,
+      newBase: form.units[form.units.length - 1]?.name || 'satuan terkecil',
+    };
+  }, [isEdit, savedUnits, form.units, form.is_stock]);
 
   // Adding a smaller unit moves the item's base unit down a level, and the
   // backend restates existing stock into it. Spell out that conversion before
   // the user saves — the stock figures on every other page will change.
   const unitNotice = useMemo(() => {
-    if (!isEdit || !savedUnits?.length || !form.is_stock) return '';
-    const oldBase = savedUnits[savedUnits.length - 1];
-    if (!oldBase?.name) return '';
-
-    const idx = form.units.findIndex(u => unitKey(u.name) === unitKey(oldBase.name));
-    if (idx === -1) {
-      if (form.units.length === savedUnits.length) return ''; // a rename, handled positionally
-      return `Satuan "${oldBase.name}" dihapus. Stok yang tersimpan dalam satuan itu tidak bisa dikonversi — kosongkan stoknya dulu.`;
+    if (!baseConversion) return '';
+    if (baseConversion.dropped)
+      return `Satuan "${baseConversion.oldBase}" dihapus. Stok yang tersimpan dalam satuan itu tidak bisa dikonversi — kosongkan stoknya dulu.`;
+    const { oldBase, newBase, factor } = baseConversion;
+    let msg = `Satuan terkecil berubah. Stok yang ada akan dikonversi otomatis: 1 ${oldBase} = ${factor} ${newBase}. Nilai rupiah stok tidak berubah.`;
+    if (Number(form.min_stock) > 0) {
+      msg += ` Stok minimum ikut dikonversi: ${qty(form.min_stock)} ${oldBase} → ${qty(Number(form.min_stock) * factor)} ${newBase}.`;
     }
+    return msg;
+  }, [baseConversion, form.min_stock]);
 
-    let factor = 1;
-    for (let j = idx + 1; j < form.units.length; j++) factor *= Number(form.units[j].perPrev) || 1;
-    if (factor === 1) return '';
-
-    const newBase = form.units[form.units.length - 1]?.name || 'satuan terkecil';
-    return `Satuan terkecil berubah. Stok yang ada akan dikonversi otomatis: 1 ${oldBase.name} = ${factor} ${newBase}. Nilai rupiah stok tidak berubah.`;
-  }, [isEdit, savedUnits, form.units, form.is_stock]);
+  // The unit the minimum-stock figure is read in. While the units are being
+  // edited it stays the *saved* base unit: that is what the backend converts
+  // from, so the label has to keep saying what the number currently means.
+  const minStockUnit =
+    (isEdit && savedUnits?.length ? savedUnits[savedUnits.length - 1]?.name : '') ||
+    form.units[form.units.length - 1]?.name ||
+    'satuan terkecil';
 
   const setField = (field) => (e) => setForm(f => ({ ...f, [field]: e.target.value }));
 
@@ -76,6 +110,7 @@ export default function ItemForm() {
       name: form.name,
       code: form.code,
       is_stock: form.is_stock,
+      min_stock: form.is_stock ? Number(form.min_stock) || 0 : 0,
       units: form.units.map((u, i) => ({
         name: u.name,
         perPrev: i === 0 ? null : Number(u.perPrev),
@@ -137,6 +172,23 @@ export default function ItemForm() {
             ))}
           </div>
         </div>
+
+        {form.is_stock && (
+          <div className="form-group">
+            <label>Stok Minimum <span style={{fontWeight:400,color:'#888'}}>(dalam {minStockUnit})</span></label>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              value={form.min_stock}
+              onChange={setField('min_stock')}
+              placeholder="0 = tanpa batas minimum"
+            />
+            <span style={{fontSize:'0.78rem',color:'#888'}}>
+              Barang ditandai stok menipis saat total stok di seluruh gudang berada di bawah angka ini.
+            </span>
+          </div>
+        )}
 
         <div style={{marginBottom:'1.1rem'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'0.6rem'}}>

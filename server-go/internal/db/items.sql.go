@@ -12,16 +12,17 @@ import (
 )
 
 const createItem = `-- name: CreateItem :one
-INSERT INTO items (id, name, code, units, is_stock)
-VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, code, units, is_stock
+INSERT INTO items (id, name, code, units, is_stock, min_stock)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+RETURNING id, name, code, units, is_stock, min_stock
 `
 
 type CreateItemParams struct {
-	Name    string `json:"name"`
-	Code    string `json:"code"`
-	Units   []byte `json:"units"`
-	IsStock bool   `json:"is_stock"`
+	Name     string         `json:"name"`
+	Code     string         `json:"code"`
+	Units    []byte         `json:"units"`
+	IsStock  bool           `json:"is_stock"`
+	MinStock pgtype.Numeric `json:"min_stock"`
 }
 
 func (q *Queries) CreateItem(ctx context.Context, arg *CreateItemParams) (*Item, error) {
@@ -30,6 +31,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg *CreateItemParams) (*Item,
 		arg.Code,
 		arg.Units,
 		arg.IsStock,
+		arg.MinStock,
 	)
 	var i Item
 	err := row.Scan(
@@ -38,6 +40,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg *CreateItemParams) (*Item,
 		&i.Code,
 		&i.Units,
 		&i.IsStock,
+		&i.MinStock,
 	)
 	return &i, err
 }
@@ -52,7 +55,7 @@ func (q *Queries) DeleteItem(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getItemByID = `-- name: GetItemByID :one
-SELECT id, name, code, units, is_stock FROM items WHERE id = $1
+SELECT id, name, code, units, is_stock, min_stock FROM items WHERE id = $1
 `
 
 func (q *Queries) GetItemByID(ctx context.Context, id pgtype.UUID) (*Item, error) {
@@ -64,6 +67,7 @@ func (q *Queries) GetItemByID(ctx context.Context, id pgtype.UUID) (*Item, error
 		&i.Code,
 		&i.Units,
 		&i.IsStock,
+		&i.MinStock,
 	)
 	return &i, err
 }
@@ -784,24 +788,43 @@ func (q *Queries) GetItemFlowByType(ctx context.Context, itemID pgtype.UUID) ([]
 }
 
 const listItems = `-- name: ListItems :many
-SELECT id, name, code, units, is_stock FROM items ORDER BY name
+SELECT
+    i.id, i.name, i.code, i.units, i.is_stock, i.min_stock,
+    COALESCE(s.quantity, 0)::numeric AS stock_quantity
+FROM items i
+LEFT JOIN LATERAL (
+    SELECT SUM(inv.quantity) AS quantity FROM inventory inv WHERE inv.item_id = i.id
+) s ON TRUE
+ORDER BY i.name
 `
 
-func (q *Queries) ListItems(ctx context.Context) ([]*Item, error) {
+type ListItemsRow struct {
+	ID            pgtype.UUID    `json:"id"`
+	Name          string         `json:"name"`
+	Code          string         `json:"code"`
+	Units         []byte         `json:"units"`
+	IsStock       bool           `json:"is_stock"`
+	MinStock      pgtype.Numeric `json:"min_stock"`
+	StockQuantity pgtype.Numeric `json:"stock_quantity"`
+}
+
+func (q *Queries) ListItems(ctx context.Context) ([]*ListItemsRow, error) {
 	rows, err := q.db.Query(ctx, listItems)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*Item
+	var items []*ListItemsRow
 	for rows.Next() {
-		var i Item
+		var i ListItemsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Code,
 			&i.Units,
 			&i.IsStock,
+			&i.MinStock,
+			&i.StockQuantity,
 		); err != nil {
 			return nil, err
 		}
@@ -814,17 +837,18 @@ func (q *Queries) ListItems(ctx context.Context) ([]*Item, error) {
 }
 
 const updateItem = `-- name: UpdateItem :one
-UPDATE items SET name = $1, code = $2, units = $3, is_stock = $4
-WHERE id = $5
-RETURNING id, name, code, units, is_stock
+UPDATE items SET name = $1, code = $2, units = $3, is_stock = $4, min_stock = $5
+WHERE id = $6
+RETURNING id, name, code, units, is_stock, min_stock
 `
 
 type UpdateItemParams struct {
-	Name    string      `json:"name"`
-	Code    string      `json:"code"`
-	Units   []byte      `json:"units"`
-	IsStock bool        `json:"is_stock"`
-	ID      pgtype.UUID `json:"id"`
+	Name     string         `json:"name"`
+	Code     string         `json:"code"`
+	Units    []byte         `json:"units"`
+	IsStock  bool           `json:"is_stock"`
+	MinStock pgtype.Numeric `json:"min_stock"`
+	ID       pgtype.UUID    `json:"id"`
 }
 
 func (q *Queries) UpdateItem(ctx context.Context, arg *UpdateItemParams) (*Item, error) {
@@ -833,6 +857,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg *UpdateItemParams) (*Item,
 		arg.Code,
 		arg.Units,
 		arg.IsStock,
+		arg.MinStock,
 		arg.ID,
 	)
 	var i Item
@@ -842,6 +867,7 @@ func (q *Queries) UpdateItem(ctx context.Context, arg *UpdateItemParams) (*Item,
 		&i.Code,
 		&i.Units,
 		&i.IsStock,
+		&i.MinStock,
 	)
 	return &i, err
 }

@@ -284,11 +284,12 @@ type InvoiceTemplateItem struct {
 }
 
 type Item struct {
-	ID      pgtype.UUID `json:"id"`
-	Name    string      `json:"name"`
-	Code    string      `json:"code"`
-	Units   []byte      `json:"units"`
-	IsStock bool        `json:"is_stock"`
+	ID       pgtype.UUID    `json:"id"`
+	Name     string         `json:"name"`
+	Code     string         `json:"code"`
+	Units    []byte         `json:"units"`
+	IsStock  bool           `json:"is_stock"`
+	MinStock pgtype.Numeric `json:"min_stock"`
 }
 
 type Kasbon struct {

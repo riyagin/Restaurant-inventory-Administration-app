@@ -1,0 +1,12 @@
+-- Minimum stock level per item, so the item list can flag what is running low.
+--
+-- Denominated in the item's BASE unit — the last entry of items.units — for the
+-- same reason inventory.quantity is: nothing in the deduction path converts
+-- units, so a threshold kept in any other unit could not be compared against
+-- the on-hand quantity without a conversion the rest of the system never does.
+-- Changing an item's units rescales min_stock alongside its inventory lots
+-- (handler.rescaleInventoryForUnits / lotRescale).
+--
+-- 0 means "no threshold set", which is what every existing row gets. Non-stock
+-- items are never tracked in inventory, so theirs stays 0.
+ALTER TABLE items ADD COLUMN min_stock NUMERIC NOT NULL DEFAULT 0;
