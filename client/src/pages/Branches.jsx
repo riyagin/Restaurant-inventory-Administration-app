@@ -286,12 +286,13 @@ export default function Branches() {
                 <th>Cabang</th>
                 <th>Akun Pendapatan</th>
                 <th>Akun Beban</th>
+                <th>Kas Kecil</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {branches.length === 0 ? (
-                <tr><td colSpan={4} style={{ textAlign: 'center', color: '#999', padding: '1.5rem' }}>Belum ada cabang</td></tr>
+                <tr><td colSpan={5} style={{ textAlign: 'center', color: '#999', padding: '1.5rem' }}>Belum ada cabang</td></tr>
               ) : branches.map(b => (
                 <tr
                   key={b.id}
@@ -316,6 +317,17 @@ export default function Branches() {
                   </td>
                   <td onClick={e => e.stopPropagation()}>
                     <AccountBadge number={b.expense_account_number} name={null} />
+                  </td>
+                  {/* The cash box is created with the branch; a blank here means
+                      the account went missing, which is worth seeing. */}
+                  <td onClick={e => e.stopPropagation()}>
+                    {b.petty_cash_account_id ? (
+                      <span title={b.petty_cash_account_name || ''}>
+                        Rp {Number(b.petty_cash_balance || 0).toLocaleString('id-ID')}
+                      </span>
+                    ) : (
+                      <span style={{ color: '#c00', fontSize: '0.85rem' }}>belum ada</span>
+                    )}
                   </td>
                   <td onClick={e => e.stopPropagation()}>
                     <div className="actions">

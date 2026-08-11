@@ -324,3 +324,68 @@ func TestProfitLossByBranchColumnsReconcile(t *testing.T) {
 		t.Errorf("columns sum to %d but org-wide net is %d — the split is not a partition", summed, net)
 	}
 }
+
+// TestFinancialAgreesWithBranchSplit is the guarantee the two reports exist to
+// give together: ticking "Rincian per cabang" must re-slice the same money, not
+// re-derive a different total. They disagreed for real — the org-wide report
+// summed the source tables (sales, pos_import_lines, invoices,
+// account_adjustments) while the split read the journal, so payroll, daily
+// purchases and opname write-offs appeared in one view and not the other, and
+// cancelled invoices inflated the combined figure only. Both now read
+// plActivityByAccount; this test fails if either grows its own definition again.
+func TestFinancialAgreesWithBranchSplit(t *testing.T) {
+	pool := testutil.OpenDB(t)
+	f := setupPLBranchFixtures(t, pool)
+
+	split := fetchPLByBranch(t, pool, plFixtureDate, plFixtureDate)
+
+	h := handler.NewReportsHandler(pool, db.New(pool))
+	rec := httptest.NewRecorder()
+	h.Financial(rec, httptest.NewRequest(http.MethodGet,
+		"/api/reports/financial?start_date="+plFixtureDate+"&end_date="+plFixtureDate, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("financial status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var combined []struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		AccountType string `json:"account_type"`
+		Balance     int64  `json:"balance"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &combined); err != nil {
+		t.Fatalf("decode financial response: %v", err)
+	}
+	combinedOf := map[string]int64{}
+	for _, a := range combined {
+		combinedOf[a.ID] = a.Balance
+	}
+
+	// Every P&L account the split reports must carry the same figure in the
+	// combined view, and it must equal the sum of its columns — a per-account
+	// check rather than a net-total one, so an error that happens to cancel out
+	// across revenue and expense still fails.
+	for _, a := range split.Accounts {
+		var columnSum int64
+		for _, amt := range a.Amounts {
+			columnSum += amt
+		}
+		if columnSum != a.Total {
+			t.Errorf("%s: columns sum to %d but the row total is %d", a.Name, columnSum, a.Total)
+		}
+		got, ok := combinedOf[a.ID]
+		if !ok {
+			t.Errorf("%s: present in the branch split but missing from the combined report", a.Name)
+			continue
+		}
+		if got != a.Total {
+			t.Errorf("%s: combined = %d, per-branch = %d — the two reports disagree", a.Name, got, a.Total)
+		}
+	}
+
+	// Guard the fixture itself: if the period filter ever silently matched
+	// nothing, every comparison above would pass on zeroes.
+	if combinedOf[f.branchRevID.String()] != 500_000 {
+		t.Errorf("fixture branch revenue = %d in the combined report, want 500000",
+			combinedOf[f.branchRevID.String()])
+	}
+}

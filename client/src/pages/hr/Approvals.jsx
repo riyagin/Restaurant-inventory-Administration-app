@@ -4,6 +4,7 @@ import {
   getOvertimeRequests, approveOvertimeRequest, rejectOvertimeRequest,
   getBranches,
 } from '../../api';
+import { canApprove } from '../../roles';
 
 const TYPE_META = {
   leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
@@ -12,10 +13,7 @@ const TYPE_META = {
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
-}
-const isManager = () => getUser()?.role === 'manager';
+const isManager = () => canApprove();
 
 function TypeBadge({ type }) {
   const m = TYPE_META[type] || TYPE_META.leave;

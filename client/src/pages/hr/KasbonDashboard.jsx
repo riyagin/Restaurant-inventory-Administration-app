@@ -4,6 +4,7 @@ import {
   getKasbons, getKasbon, approveKasbon, rejectKasbon, cancelKasbon, processKasbon,
 } from '../../api';
 import KasbonFormModal from './KasbonFormModal';
+import { canApprove } from '../../roles';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -22,10 +23,7 @@ const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', curren
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
-}
-const isManager = () => getUser()?.role === 'manager';
+const isManager = () => canApprove();
 
 function StatusChip({ status }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.cancelled;

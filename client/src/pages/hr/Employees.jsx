@@ -1,17 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
+import { canUseHR } from '../../roles';
 
 const SERVER = 'http://localhost:5000';
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
-}
-
-const canEdit = () => {
-  const role = getUser()?.role;
-  return role === 'admin' || role === 'manager';
-};
+const canEdit = canUseHR;
 
 // Whole-day difference between a contract end date and today (negative = overdue).
 const DAY_MS = 86400000;

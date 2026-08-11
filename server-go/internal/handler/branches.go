@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +24,31 @@ type BranchesHandler struct {
 
 func NewBranchesHandler(pool *pgxpool.Pool, queries *db.Queries) *BranchesHandler {
 	return &BranchesHandler{pool: pool, queries: queries}
+}
+
+// createBranchPettyCashAccount allocates a branch's cash box account: an asset
+// numbered in 11100-11199, hung under the system parent "Kas dan Setara Kas"
+// (11000) so the balance sheet's cash total picks it up for free.
+//
+// A missing parent does not fail the branch — the account is created without one
+// and shows up unparented on the accounts page, which is visible and fixable,
+// unlike refusing to open a branch over a chart-of-accounts quirk.
+func createBranchPettyCashAccount(ctx context.Context, qtx *db.Queries, branchName string) (pgtype.UUID, error) {
+	num, err := qtx.GetNextPettyCashAccountNumber(ctx)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+
+	parent := pgtype.UUID{}
+	if p, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.CashAccountNumber, Valid: true}); err == nil {
+		parent = p.ID
+	}
+
+	return qtx.CreatePettyCashAccountForBranch(ctx, &db.CreatePettyCashAccountForBranchParams{
+		Name:          "Kas Kecil - " + branchName,
+		AccountNumber: pgtype.Int4{Int32: num, Valid: true},
+		ParentID:      parent,
+	})
 }
 
 func (h *BranchesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -106,10 +132,22 @@ func (h *BranchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every branch keeps a physical cash box, so it gets its own asset account
+	// under "Kas dan Setara Kas" the moment it exists — Pembelanjaan Harian has
+	// somewhere to post from on day one, and the box is on the balance sheet
+	// without anyone remembering to add it. Missing parent is not fatal: the
+	// account is still created, just unparented, which the accounts page shows.
+	pettyID, err := createBranchPettyCashAccount(ctx, qtx, body.Name)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat akun kas kecil")
+		return
+	}
+
 	newBranch, err := qtx.CreateBranch(ctx, &db.CreateBranchParams{
-		Name:             body.Name,
-		RevenueAccountID: revID,
-		ExpenseAccountID: expID,
+		Name:               body.Name,
+		RevenueAccountID:   revID,
+		ExpenseAccountID:   expID,
+		PettyCashAccountID: pettyID,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -135,7 +173,7 @@ func (h *BranchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Action:      "CREATE",
 		EntityType:  "branch",
 		EntityID:    newBranch.ID.Bytes,
-		Description: fmt.Sprintf("Menambahkan cabang %q beserta akun pendapatan dan bebannya", body.Name),
+		Description: fmt.Sprintf("Menambahkan cabang %q beserta akun pendapatan, beban dan kas kecilnya", body.Name),
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -186,6 +224,20 @@ func (h *BranchesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keep the cash box's label in step with the branch, the same way a vendor
+	// rename relabels its payable sub-account. The revenue and expense accounts
+	// are deliberately left alone here — that is pre-existing behaviour and
+	// changing it is a separate decision.
+	if branch.PettyCashAccountID.Valid {
+		if err := h.queries.RenameAccount(r.Context(), &db.RenameAccountParams{
+			Name: "Kas Kecil - " + branch.Name,
+			ID:   branch.PettyCashAccountID,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui nama akun kas kecil")
+			return
+		}
+	}
+
 	logMutation(r, h.queries, "UPDATE", "branch", id,
 		fmt.Sprintf("Mengubah nama cabang %q → %q", before.Name, branch.Name))
 
@@ -215,6 +267,15 @@ func (h *BranchesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.queries.GetBranchByID(ctx, pgID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "cabang tidak ditemukan")
+		return
+	}
+
+	// Money still in the box is money the business owns. Deleting the branch
+	// would set petty_cash_account_id to NULL and strand it in an account nobody
+	// looks at, so the balance has to be dealt with first.
+	if existing.PettyCashBalance != 0 {
+		respondError(w, http.StatusConflict,
+			fmt.Sprintf("kas kecil cabang masih bersaldo %d — setorkan atau nolkan dulu", existing.PettyCashBalance))
 		return
 	}
 

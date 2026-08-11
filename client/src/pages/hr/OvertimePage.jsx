@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getUser, getOvertimeRequests, createOvertimeRequest, deleteOvertimeRequest, getEmployees } from '../../api';
+import { getOvertimeRequests, createOvertimeRequest, deleteOvertimeRequest, getEmployees } from '../../api';
+import { isAdminRole } from '../../roles';
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
@@ -9,7 +10,7 @@ function currentMonthValue() {
 }
 
 export default function OvertimePage() {
-  const isAdmin = getUser()?.role === 'admin';
+  const isAdmin = isAdminRole();
 
   const [requests, setRequests] = useState([]);
   const [employees, setEmployees] = useState([]);

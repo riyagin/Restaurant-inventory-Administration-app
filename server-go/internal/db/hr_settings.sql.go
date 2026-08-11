@@ -12,7 +12,11 @@ import (
 )
 
 const getHRSettings = `-- name: GetHRSettings :one
-SELECT id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
+SELECT id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
+       company_phone, company_email, company_city,
+       signatory_name, signatory_position, signatory_national_id,
+       doc_number_format, doc_number_counter,
+       doc_working_hours, doc_payment_info, doc_probation_months
 FROM hr_settings
 WHERE id = 1
 `
@@ -28,23 +32,59 @@ func (q *Queries) GetHRSettings(ctx context.Context) (*HrSetting, error) {
 		&i.PayslipFooter,
 		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
+		&i.CompanyPhone,
+		&i.CompanyEmail,
+		&i.CompanyCity,
+		&i.SignatoryName,
+		&i.SignatoryPosition,
+		&i.SignatoryNationalID,
+		&i.DocNumberFormat,
+		&i.DocNumberCounter,
+		&i.DocWorkingHours,
+		&i.DocPaymentInfo,
+		&i.DocProbationMonths,
 	)
 	return &i, err
 }
 
 const updateHRSettings = `-- name: UpdateHRSettings :one
-INSERT INTO hr_settings (id, company_name, address, payslip_footer, absence_grace_days, updated_at)
-VALUES (1, $1, $2, $3, $4, now())
+INSERT INTO hr_settings (
+  id, company_name, address, payslip_footer, absence_grace_days,
+  company_phone, company_email, company_city,
+  signatory_name, signatory_position, signatory_national_id,
+  doc_number_format, doc_number_counter,
+  doc_working_hours, doc_payment_info, doc_probation_months, updated_at)
+VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 ON CONFLICT (id) DO UPDATE
-SET company_name = $1, address = $2, payslip_footer = $3, absence_grace_days = $4, updated_at = now()
-RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
+SET company_name = $1, address = $2, payslip_footer = $3, absence_grace_days = $4,
+    company_phone = $5, company_email = $6, company_city = $7,
+    signatory_name = $8, signatory_position = $9, signatory_national_id = $10,
+    doc_number_format = $11, doc_number_counter = $12,
+    doc_working_hours = $13, doc_payment_info = $14, doc_probation_months = $15,
+    updated_at = now()
+RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
+          company_phone, company_email, company_city,
+          signatory_name, signatory_position, signatory_national_id,
+          doc_number_format, doc_number_counter,
+          doc_working_hours, doc_payment_info, doc_probation_months
 `
 
 type UpdateHRSettingsParams struct {
-	CompanyName      string `json:"company_name"`
-	Address          string `json:"address"`
-	PayslipFooter    string `json:"payslip_footer"`
-	AbsenceGraceDays int32  `json:"absence_grace_days"`
+	CompanyName         string `json:"company_name"`
+	Address             string `json:"address"`
+	PayslipFooter       string `json:"payslip_footer"`
+	AbsenceGraceDays    int32  `json:"absence_grace_days"`
+	CompanyPhone        string `json:"company_phone"`
+	CompanyEmail        string `json:"company_email"`
+	CompanyCity         string `json:"company_city"`
+	SignatoryName       string `json:"signatory_name"`
+	SignatoryPosition   string `json:"signatory_position"`
+	SignatoryNationalID string `json:"signatory_national_id"`
+	DocNumberFormat     string `json:"doc_number_format"`
+	DocNumberCounter    int32  `json:"doc_number_counter"`
+	DocWorkingHours     string `json:"doc_working_hours"`
+	DocPaymentInfo      string `json:"doc_payment_info"`
+	DocProbationMonths  int32  `json:"doc_probation_months"`
 }
 
 func (q *Queries) UpdateHRSettings(ctx context.Context, arg *UpdateHRSettingsParams) (*HrSetting, error) {
@@ -53,6 +93,17 @@ func (q *Queries) UpdateHRSettings(ctx context.Context, arg *UpdateHRSettingsPar
 		arg.Address,
 		arg.PayslipFooter,
 		arg.AbsenceGraceDays,
+		arg.CompanyPhone,
+		arg.CompanyEmail,
+		arg.CompanyCity,
+		arg.SignatoryName,
+		arg.SignatoryPosition,
+		arg.SignatoryNationalID,
+		arg.DocNumberFormat,
+		arg.DocNumberCounter,
+		arg.DocWorkingHours,
+		arg.DocPaymentInfo,
+		arg.DocProbationMonths,
 	)
 	var i HrSetting
 	err := row.Scan(
@@ -63,6 +114,17 @@ func (q *Queries) UpdateHRSettings(ctx context.Context, arg *UpdateHRSettingsPar
 		&i.PayslipFooter,
 		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
+		&i.CompanyPhone,
+		&i.CompanyEmail,
+		&i.CompanyCity,
+		&i.SignatoryName,
+		&i.SignatoryPosition,
+		&i.SignatoryNationalID,
+		&i.DocNumberFormat,
+		&i.DocNumberCounter,
+		&i.DocWorkingHours,
+		&i.DocPaymentInfo,
+		&i.DocProbationMonths,
 	)
 	return &i, err
 }
@@ -71,7 +133,11 @@ const updateHRSettingsLogo = `-- name: UpdateHRSettingsLogo :one
 UPDATE hr_settings
 SET logo_path = $1, updated_at = now()
 WHERE id = 1
-RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at
+RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
+          company_phone, company_email, company_city,
+          signatory_name, signatory_position, signatory_national_id,
+          doc_number_format, doc_number_counter,
+          doc_working_hours, doc_payment_info, doc_probation_months
 `
 
 func (q *Queries) UpdateHRSettingsLogo(ctx context.Context, logoPath pgtype.Text) (*HrSetting, error) {
@@ -85,6 +151,36 @@ func (q *Queries) UpdateHRSettingsLogo(ctx context.Context, logoPath pgtype.Text
 		&i.PayslipFooter,
 		&i.AbsenceGraceDays,
 		&i.UpdatedAt,
+		&i.CompanyPhone,
+		&i.CompanyEmail,
+		&i.CompanyCity,
+		&i.SignatoryName,
+		&i.SignatoryPosition,
+		&i.SignatoryNationalID,
+		&i.DocNumberFormat,
+		&i.DocNumberCounter,
+		&i.DocWorkingHours,
+		&i.DocPaymentInfo,
+		&i.DocProbationMonths,
 	)
+	return &i, err
+}
+
+const consumeHRDocumentNumber = `-- name: ConsumeHRDocumentNumber :one
+UPDATE hr_settings
+SET doc_number_counter = doc_number_counter + 1, updated_at = now()
+WHERE id = 1
+RETURNING doc_number_counter - 1 AS reserved, doc_number_format
+`
+
+type ConsumeHRDocumentNumberRow struct {
+	Reserved        int32  `json:"reserved"`
+	DocNumberFormat string `json:"doc_number_format"`
+}
+
+func (q *Queries) ConsumeHRDocumentNumber(ctx context.Context) (*ConsumeHRDocumentNumberRow, error) {
+	row := q.db.QueryRow(ctx, consumeHRDocumentNumber)
+	var i ConsumeHRDocumentNumberRow
+	err := row.Scan(&i.Reserved, &i.DocNumberFormat)
 	return &i, err
 }

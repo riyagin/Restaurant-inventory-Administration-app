@@ -189,7 +189,8 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 ### Pages (`client/src/pages/`)
 | Page | Route | Admin only |
 |---|---|---|
-| Dashboard | `/` | No |
+| Dashboard | `/` | No (operational overview; `staff` gets StaffDashboard and `hr` gets HRDashboard instead) |
+| StaffDashboard | `/` for the `staff` role | Shortcuts (purchasing, transfer, dispatch) + the pending daily-task board |
 | Login | `/login` | — |
 | Profile | `/profile` | No |
 | ActivityLog | `/activity` | Yes |
@@ -220,6 +221,9 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | Productions | `/productions` | No |
 | Sales | `/sales` | No |
 | SalesImport | `/sales/import` | No |
+| DailyPurchases | `/daily-purchases` | No (cancel: Yes) |
+| PettyCash | `/petty-cash` | No (recording counts: Yes) |
+| Setoran | `/setoran` | No (recording: Yes) |
 | ExpenseReport | `/expense-report` | Yes |
 | ExpenseSummary | `/reports/expense-summary` | Yes |
 | DailyReport | `/reports/daily` | Yes |
@@ -249,18 +253,27 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | KasbonDetail | `/hr/kasbon/:id` | Manager+ |
 | PayrollDashboard | `/hr/payroll` | Manager+ |
 | PayrollPeriodDetail | `/hr/payroll/:id` | Manager+ |
-| HRSettings | `/hr/settings` | Manager+ (view/quick-links; company-info mutations still admin only) |
-| OnboardingWizard | `/hr/onboarding` | Manager+ (animated multi-step: creates employee + uploads signed docs) |
-| DocumentGenerator | `/hr/documents` | Manager+ (generate PKWT/PKWTT/Surat Peringatan/Paklaring as DOCX/PDF) |
+| HRSettings | `/hr/settings` | HR roles (company data, signatory, document numbering, payslip/attendance config + quick links) |
+| OnboardingWizard | `/hr/onboarding` | HR roles (animated multi-step: creates employee + uploads signed docs) |
+| DocumentGenerator | `/hr/documents` | HR roles (generate PKWT/PKWTT/Surat Peringatan/Paklaring as DOCX/PDF) |
+| HRDashboard | `/` for the `hr` role | Shortcut map of every HR page — replaces the operational dashboard |
+| StaffKPI | `/hr/kpi` | HR roles (daily-task definitions + staff KPIs + monthly scorecards) |
 
 ### Components (`client/src/components/`)
 - `CurrencyInput.jsx` — IDR currency input with formatting
+- `ItemPriceBreakdown.jsx`, `UnitConversion.jsx`
+- `SearchSelect.jsx` — type-to-filter picker (keyboard-navigable combobox) for lists too long for a `<select>`, e.g. the employee roster on the document generator
+- `NotificationBell.jsx` — navbar bell (sits left of the user block); polls `/api/notifications` every 2 min and on every navigation
+
+### HR navigation
+The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan / Harian / Berkala / Pengaturan. It had grown past twenty flat entries, and cadence is the axis that predicts what someone is looking for when they open it. The HR-only role gets those four as its whole navbar; the operational navbar flattens them into one dropdown but keeps the group names as headings. `HRDashboard` uses the same four groups, so the vocabulary matches wherever you are.
 
 ### API Layer (`client/src/api.js`)
 - Axios instance with `Authorization: Bearer <token>` header
 - Base URL loaded from `/config.json` at runtime (allows VPS config without rebuild)
 - Auto-refresh: on 401, queues in-flight requests, refreshes token, replays queue
 - On refresh failure: clears localStorage, redirects to `/login`
+- `getAllEmployees()` pages through the roster: `GET /api/hr/employees` is paginated and **caps `limit` at 100**, so a single call silently truncates. Any picker that needs the whole roster must use it — a plain `getEmployees()` returns only the first 25 by default. Note the response is an envelope, `{data, page, limit, total}`, not a bare array
 - **67+ exported functions** across 23+ domains (auth, users, items, inventory, warehouses, vendors, accounts, stock-history, stock-opname, invoices, transfers, branches, divisions, division-categories, dispatches, sales, pos-import, recipes, productions, invoice-templates, dispatch-templates, activity-log, stats, reports, account-adjustments, enumerations, hr-employees, hr-positions, hr-wages, hr-import, attendance, performance, leave, kasbon, payroll, payslip, hr-settings)
 
 ### Frontend Conventions
@@ -280,15 +293,20 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 | Table | Purpose |
 |---|---|
-| `users` | Auth — username, password_hash, role (admin\|manager\|staff) |
+| `users` | Auth — username, password_hash, role (superuser\|admin\|manager\|staff\|hr\|store_manager) |
 | `token_blocklist` | Revoked JWT jti values with expiry |
 | `accounts` | Chart of accounts — hierarchical (parent_id), types: asset/liability/equity/revenue/expense, system-protected |
 | `warehouses` | Physical storage locations, linked to an inventory CoA account |
-| `branches` | Business branches, each has revenue + expense accounts |
+| `branches` | Business branches, each has revenue + expense + petty cash accounts |
 | `divisions` | Sub-units of a branch, each has revenue + expense + discount accounts |
 | `division_categories` | POS revenue labels per division — matched by name against POS import lines to auto-fill revenue accounts. Despite the name, nothing to do with expense |
 | `expense_categories` | Subaccount breakdown under a division's expense account — name + the child COA account it posts to |
 | `vendors` | Supplier master |
+| `vendor_bank_accounts` | Transfer destinations per vendor — bank_name, account_number, account_holder, bank_branch, is_primary, note. A vendor may hold any number; a partial unique index enforces at most one default. **Not** part of the chart of accounts: these are payment instructions, and a vendor's only accounting object remains its payable sub-account |
+| `daily_purchases` | Pembelanjaan Harian header — branch, division, warehouse, expense_category, petty_cash_account_id (frozen), vendor, total_amount, status (posted/cancelled) |
+| `daily_purchase_items` | Lines — item_id nullable (free-text lines are normal here), quantity, unit_index, price, conversion_factor |
+| `petty_cash_counts` | One row per branch per date — opening/closing counts, the expected closing frozen at the moment of counting, variance and its mandatory note |
+| `cash_deposits` | Setoran — branch cash → owner's bank, and petty cash top-ups. movement_type, from/to account, amount, reference, handed_to, status |
 | `items` | Item master — name, code, units (JSONB array of {name, ratio}), is_stock, min_stock (low-stock threshold, in the base unit; 0 = unset) |
 | `inventory` | Current stock lots per item+warehouse — quantity, unit_index, value (cents) |
 | `stock_history` | Immutable movement log — type, quantity_change, value, source_id/type |
@@ -297,7 +315,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `stock_opname_items` | Per-item count results — recorded vs actual, waste_value |
 | `dispatches` | Warehouse-to-branch/division dispatch header |
 | `dispatch_items` | Items in a dispatch |
-| `invoices` | Purchase & expense invoices — payment_status, amount_paid, photo_path |
+| `invoices` | Purchase & expense invoices — payment_status, amount_paid, payment_date (latest settlement), photo_path |
 | `invoice_items` | Line items on an invoice |
 | `invoice_templates` | Reusable invoice skeletons |
 | `invoice_template_items` | Line items on a template |
@@ -312,6 +330,10 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `account_adjustments` | Manual journal entries — account, amount, description |
 | `enumerations` | Item breakdowns — source item → output item with value transfer |
 | `activity_log` | Audit trail — user, action (CREATE/UPDATE/DELETE), entity_type, description |
+| `daily_task_definitions` | Recurring back-office duties — task_type (purchasing/pos_import/manual), scope (global/per_branch), target_role, link_path, starts_on, due_offset_days, grace_days |
+| `daily_task_completions` | Manual-type completions only; derived types are answered by the data |
+| `staff_kpis` | Staff targets measured against a daily task — metric (completion_rate/same_day_rate/completed_count), target_value, weight |
+| `hr_contract_templates` | Reusable PKWT/PKWTT condition presets — position, place of work, wage, job description, contract_months. Company-level fields are deliberately absent; they live in `hr_settings` |
 | `employees` | HR employee master — code, name, position, branch, bank details, status |
 | `positions` | Job positions catalog (Kasir, Koki, etc.) |
 | `wage_components` | Catalog of wage component types (allowance/bonus/deduction/daily_allowance, fixed/variable) |
@@ -332,7 +354,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | `payroll_periods` | Payroll period header — month, status (open/closed/paid) |
 | `payroll_lines` | Per-employee line within a period — gross, deductions, net, reviewed flag |
 | `payroll_postings` | Queue/status of a closed period's automatic ledger posting — status, attempts, last_error, journal_entry_id |
-| `hr_settings` | Company-level HR config — company_name, logo_path, payslip footer text |
+| `hr_settings` | Company-level HR config (singleton, id=1) — company_name, address, logo_path, payslip footer, absence grace days, **plus the document-generation defaults**: company_phone/email/city, signatory_name/position/national_id, doc_number_format + doc_number_counter, doc_working_hours, doc_payment_info, doc_probation_months |
 | `employee_documents` | Signed scans/files filed per employee (onboarding uploads + kept letters) — doc_type, title, file_path, is_signed, uploaded_by. Files live in the uploads dir; served through an authenticated download endpoint, not `/uploads/` |
 
 ### Key DB Rules
@@ -344,10 +366,17 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 - Purchase invoice lines and dispatch lines are **entered in any unit and converted to the base unit** before touching inventory. The rate is `handler.resolveLineConversion()`: the item's own `perPrev` chain, unless the line carries a one-off `conversion_factor` override (a supplier's dus holding 20 where the catalogue says 24). The override is stored on `invoice_items.conversion_factor` / `dispatch_items.conversion_factor` — **never** written back to `items.units` — and every reversal (invoice edit/delete, dispatch edit/cancel) must unwind at the *stored* factor, not today's catalogue figure. `stock_history` for these paths records base-unit quantities
 - A parent account's reported total is **its own balance plus its children's**, not the children alone (`totalOf` in Accounts.jsx, `effectiveBalance` in FinancialReport.jsx). Pure grouping accounts carry zero so they are unaffected, but a division expense account holds both: dispatch usage debits the parent directly, purchases debit its expense-category children. Summing only children silently drops the dispatch spending
 - Operational expense is split by `expense_categories`: each row is a named child account under a division's `expense_account_id`, created together with its account in one transaction (`handler/expense_categories.go`). An expense invoice's `expense_category_id` routes the debit there; blank posts to the division parent as before. `invoiceExpenseAccountID` resolves category → division → branch, and edit/delete reversals must pass the **stored** category so the credit lands on the account that was debited. A category whose account has journal lines cannot be deleted
-- A branch's slice of the P&L is a question about the **chart of accounts**, not about the journal: `journal_lines` has no branch dimension and does not need one, because every revenue/expense account is branch-scoped by construction. `handler.accountBranchOwnerSQL` resolves it — a branch owns its own revenue/expense accounts, a division's revenue/expense/discount accounts belong to `divisions.branch_id`, and everything hung *underneath* those inherits the owner via a recursive descent (that is how expense categories and `Beban Gaji - <cabang>` land on the right branch without their own link). Accounts no branch owns (e.g. `Pendapatan Ongkir DO` 49900) go to a separate **Umum** column — never spread across branches, so a branch's profit only carries costs it actually owns. `GET /api/reports/profit-loss-by-branch` takes its amounts from the journal, so it includes dispatch usage, payroll, opname write-offs and manual journals; the org-wide `GET /api/reports/financial` still derives its *period* figures from the source tables (sales, pos_import_lines, invoices) and therefore does not see those. The two can disagree — do not treat the older endpoint as the reference when they do
+- A branch's slice of the P&L is a question about the **chart of accounts**, not about the journal: `journal_lines` has no branch dimension and does not need one, because every revenue/expense account is branch-scoped by construction. `handler.accountBranchOwnerSQL` resolves it — a branch owns its own revenue/expense accounts, a division's revenue/expense/discount accounts belong to `divisions.branch_id`, and everything hung *underneath* those inherits the owner via a recursive descent (that is how expense categories and `Beban Gaji - <cabang>` land on the right branch without their own link). Accounts no branch owns (e.g. `Pendapatan Ongkir DO` 49900) go to a separate **Umum** column — never spread across branches, so a branch's profit only carries costs it actually owns. **Both** `GET /api/reports/profit-loss-by-branch` and the org-wide `GET /api/reports/financial` take their period amounts from the journal, through the one shared `handler.plActivityByAccount` — so the branch columns sum to the combined figure by construction, and ticking "Rincian per cabang" re-slices the same money instead of re-deriving it. `financial` used to sum the source tables (sales, pos_import_lines, invoices, account_adjustments) for its period figures, and the two disagreed on the same period: that path misses everything reaching a P&L account without passing through those tables (payroll, Pembelanjaan Harian, opname write-offs), values dispatch consumption at the mirror invoice's booked price rather than FIFO cost, and never filtered cancelled invoices out of its expense total. **Do not reintroduce a second definition of period P&L activity** — `handler.TestFinancialAgreesWithBranchSplit` fails per-account if either report grows its own. Note this is only about the *income statement*: `financial`'s balance-sheet figures are still `accounts.balance` (correct — nothing writes it outside `service.Post`), and `total_adjustments` is still an informational column read from `account_adjustments`
 - Every dispatch auto-creates a mirror **expense invoice** (`handler.CreateDispatch`, `invoices.dispatch_id` set, `payment_status = 'dispatched'`) — that invoice *is* how the consumption reaches the division's expense account, and it carries the same items as the dispatch's `stock_history` rows. So the dispatch is visible twice in the source tables at slightly different values (invoice at booked price, `stock_history` at FIFO cost). **Any aggregate must pick exactly one side.** Reading `stock_history WHERE source_type = 'dispatch'` and `invoices WHERE invoice_type = 'expense'` in the same total doubles every dispatch — that was the dashboard chart's bug (`handler.StockFlow`), which reported ~2× spend on every day. Aggregates that read invoices *only* (financial report, expense summary, expense report) are correct as they stand and must keep including dispatch invoices, since that is where dispatch consumption enters. Cash reports are the exception: `handler.CashSummary` filters `dispatch_id IS NULL`, because the cash for those goods already left as a purchase invoice. The journal is safe by construction — the dispatch posts one `service.Post` entry and the auto-invoice posts none. Per-item views of *purchase* history are the other side of the same coin: an `invoice_items` row on a dispatch's mirror invoice is stock leaving at cost, not a purchase, so `GetItemLastPrice`, `GetItemPurchaseHistory` and the three `GetItemPrice*` rollups all filter `dispatch_id IS NULL` — without it the item page lists dispatches as purchases (badged with the raw sentinel "dispatched") and the price min/max/last mixes booked cost into supplier prices. Dispatch lines are reported separately by `GetItemDispatchHistory`
+- **A payment is dated when the cash moved, not when it was keyed in.** `POST /api/invoices/:id/pay` takes an optional `payment_date` (defaulting to today, future dates refused) and that date becomes the settlement entry's journal date — an invoice paid on Friday and recorded on Monday lands in Friday's books. `invoices.payment_date` caches the *latest* settlement so the list and detail can show it without a join; the per-payment history stays where it already was, one `journal_entries` row per payment (`source_type = 'invoice_payment'`), which is what a partial invoice's earlier instalments are read from. Creating an invoice already marked paid/partial also accepts `payment_date`, defaulting to the invoice date — its pre-existing meaning
 - FIFO lot consumption: always deduct from oldest `inventory` rows first
 - Every movement of stock leaves a `stock_history` row, including manual lot create/edit/delete — the item history reconstructs on-hand from these, so a change without one makes the quantity disagree with the sum of its own history. Manual lots use type `manual_in` / `manual_out` (never `purchase`: there is no invoice, vendor or price behind them, and the item detail page groups its flow breakdown by this label) with `source_type = 'inventory'`. Use `handler.recordManualStockMove`
+- Every branch owns a **"Kas Kecil - &lt;Cabang&gt;"** asset account, numbered 11100-11199 under the system parent `Kas dan Setara Kas` (11000), created together with the branch in `handler.createBranchPettyCashAccount` and backfilled for existing branches by migration 062. The range is not arbitrary: `GetNextInventoryAccountNumber` allocates warehouse inventory accounts as `MAX(account_number) + 1` over the whole 11000-19999 span and those already sit at 12001+, so petty cash must stay *below* that maximum or every future warehouse account silently jumps range. `branches.petty_cash_account_id` is the link; deleting a branch whose box is non-zero is refused rather than stranding the money in an unlinked account
+- **Pembelanjaan Harian is its own table, not an invoice with a flag.** It is a purchase mechanically — FIFO lots, `stock_history`, unit conversion, expense-category routing all behave exactly as on an invoice — but settlement differs: cash changes hands at the stall, so there is no payable, no due date, no payment status, and it must never touch `Utang Usaha`. One entry does the lot: `Dr Persediaan - <Gudang>` (stock lines) + `Dr Beban - <Divisi>/<Kategori>` (non-stock lines) `Cr Kas Kecil - <Cabang>`. The credit is what makes the day's count checkable. **The cost of the separate table is that invoice-derived aggregates do not see these rows**: `GetItemPurchaseHistory`, `GetItemLastPrice`, the price-history rollups, the financial report's period figures and the expense report all read `invoice_items` / `invoices` and therefore exclude daily purchases. Stock quantities and the journal *are* correct, because both go through the shared services. Any new aggregate that means "everything we bought" must union both sources — and, per the dispatch rule above, must still pick exactly one side per source
+- The petty cash account credited is **frozen onto `daily_purchases.petty_cash_account_id`**, not looked up from the branch at read time. Repointing a branch at a new box must not rewrite where last month's money came from. The same applies to `daily_purchase_items.conversion_factor`: a cancellation unwinds at the factor that was booked, never today's catalogue figure
+- Recording a spend is **never blocked for want of a recorded top-up**. The money left the box whether or not Setoran knows about it, so refusing would make the spend invisible — strictly worse than a negative `Kas Kecil` balance, which is itself the signal that a top-up is missing. The create response carries the resulting balance so the UI can say so. Setoran is the opposite case and *does* check the source balance: it is recorded by the person moving the money, so getting it right at entry is both possible and cheaper
+- **A petty cash count never posts to the ledger.** It is an observation of a physical box; letting a typo write a journal entry would mean a miscount could rewrite the books. `expected_closing` and `variance` are computed at the moment the closing is recorded and frozen onto the row — recomputing them on read would let a spend backdated into a closed day quietly change a variance someone has already signed off on. The board shows both the frozen pair and a live recomputation, and the difference between them is worth seeing. A non-zero variance cannot be saved without a note (enforced by a table CHECK, not just the handler). Re-recording an opening clears that day's closing, because a variance measured against the old opening is now meaningless
+- The `petty_cash` daily task is satisfied only when **both** ends are counted — an opening with no closing is precisely the omission the duty exists to catch — and is attributed to whoever recorded the closing, since that is the person who owns the variance
 - Nothing writes `accounts.balance` outside `service.Post`, which refuses an unbalanced entry and routes unresolvable legs to the suspense account. `GET /api/accounts/trial-balance` reports per-account drift between the cached balance and the journal — a healthy system returns an empty list
 - `go test ./...` runs the handler tests against the **real** database, so fixtures leave rows in the live Chart of Accounts. A fixture's own `t.Cleanup` cannot delete an account once a journal entry references it (FK, and the error is swallowed), which is how hundreds of fake accounts carrying real balances once accumulated. `handler.TestMain` sweeps them after each run: it deletes fixture-shaped rows (8-hex suffix; accounts additionally must have no COA number, no parent and no `is_system`), removes the journal entries touching them, rolls back the balance those entries gave any surviving shared account, and only commits when the equation and per-account drift are both still 0. Name new fixture accounts `<Prefix> <8 hex>` so the sweep can find them
 - Stock opname corrections are append-only: a correction is a new `stock_opname_items` row with `is_correction = true`, never an edit of the original. An item counted down to 0 loses its inventory lots and disappears from the warehouse, so the correction UI lists the union of current lots **and** the opname's own items (the zeroed ones at system qty 0) — otherwise the rows most likely to need fixing are the ones you cannot reach. A correction that puts stock back is valued at the cost this opname wrote off (`handler.opnameNetWaste`), not at the latest purchase price, and carries a **negative** `waste_value` so the opname's net loss drops by what was restored. That is what keeps the write-off and its reversal from leaving a residue in `Selisih Persediaan`, and what stops a second correction reversing the same value twice. Only quantity beyond what the opname removed is a genuine surplus, priced from the last purchase
@@ -365,7 +394,13 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Warehouses** (4): CRUD /api/warehouses
 
-**Vendors** (5): CRUD /api/vendors + GET /api/vendors/:id/history (vendor + invoices it appears on + per-item purchase breakdown with latest/avg price + payable summary — powers the vendor activity page)
+**Vendors** (9): CRUD /api/vendors + GET /api/vendors/:id/history (vendor + invoices it appears on + per-item purchase breakdown with latest/avg price + payable summary — powers the vendor activity page) + CRUD /api/vendors/:id/bank-accounts (transfer destinations; the list endpoint returns each vendor's accounts inline so the vendor page needs one round trip)
+
+**Pembelanjaan Harian** (4): GET /api/daily-purchases (`?branch_id=&from=&to=&status=`), GET /:id, POST (admin + staff), POST /:id/cancel (admin)
+
+**Kas Kecil** (5): GET /api/petty-cash?date= (one row per branch: counts, the movements that should explain them, live expected/variance), GET /history, GET /accounts, POST /opening, POST /closing (both admin only)
+
+**Setoran** (3): GET /api/cash-deposits (`?branch_id=&from=&to=&type=&status=`), POST, POST /:id/cancel (both admin only)
 
 **Items** (10): CRUD /api/items (list rows carry `stock_quantity` + `is_low_stock`; `?low_stock=true` keeps only the ones under their threshold) + GET /:id/last-price + GET /:id/history (purchase invoice lines) + GET /:id/stock-history + GET /:id/stock-detail (warehouse balances, purchases, dispatch usage, monthly/per-type flow — powers the stock item history page) + GET /:id/price-history (purchase price rolled up per unit, per vendor and per month — powers the "Riwayat Harga" tab on both item detail pages; optional `?from=`/`?to=` bound every rollup, and the tab defaults to the last 30 days, but the `range` field in the response reports the item's full data extent *outside* that window so the UI can offer to widen it)
 
@@ -413,6 +448,14 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **Stats** (3): GET /api/stats, /stats/daily-sales, /stats/stock-flow
 
+**Daily Tasks** (7): GET /api/tasks/daily (the board over a date window), /api/tasks/pending, /api/tasks/definitions; POST /api/tasks/definitions, /api/tasks/daily/complete (manual types only); PUT/DELETE /api/tasks/definitions/:id — core roles only
+
+**Notifications** (1): GET /api/notifications — role-assembled feed behind the navbar bell
+
+**HR KPI** (5): GET/POST /api/hr/kpi, PUT/DELETE /api/hr/kpi/:id, GET /api/hr/kpi/scores?month=YYYY-MM
+
+**HR Contract Templates** (4): GET/POST /api/hr/contract-templates (`?type=pkwt|pkwtt`; a template with a blank `doc_type` is offered for both), PUT/DELETE /api/hr/contract-templates/:id
+
 **Expense Report** (1): GET /api/expense-report
 
 **HR Employees & Positions** (11): CRUD /api/hr/employees + photo upload/delete; CRUD /api/hr/positions
@@ -433,21 +476,44 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 
 **HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips (single PDF, two slips per A4-landscape page — cut down the middle for two A5-portrait slips)
 
-**HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo
+**HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo — HR roles (this is where the company data feeding payslips *and* generated documents lives)
 
-**HR Documents** (5): POST /api/hr/documents/generate?format=docx|pdf (stateless render of PKWT/PKWTT/Surat Peringatan/Paklaring, legally-compliant Indonesian templates — see `service/hrdoc*.go`); GET/POST /api/hr/employees/:id/documents (list/upload signed docs); GET /api/hr/employees/:id/documents/:docId/download; DELETE /api/hr/employees/:id/documents/:docId — admin/manager
+**HR Documents** (7): POST /api/hr/documents/generate?format=docx|pdf (render of PKWT/PKWTT/Surat Peringatan/Paklaring, legally-compliant Indonesian templates — see `service/hrdoc*.go`); GET/POST /api/hr/documents/next-number (peek / reserve the running letter number); GET/POST /api/hr/employees/:id/documents (list/upload signed docs); GET /api/hr/employees/:id/documents/:docId/download; DELETE /api/hr/employees/:id/documents/:docId
 
-_(HR total: ~78 endpoints; grand total: ~175)_
+_(HR total: ~80 endpoints; grand total: ~177)_
+
+### Daily tasks, notifications, and staff KPIs
+The back office owns a few duties that must happen every day — record the day's purchasing, import each branch's POS sales — and they are **shared**: whoever gets to one does it for everyone, so a task belongs to the organisation and a date, not a person.
+
+**Completion is derived, never ticked.** A purchase invoice dated D (type `purchase`, not cancelled) satisfies D's purchasing task; a POS import satisfies branch B's task for its date. `pos_imports` carries no `branch_id` — the branch is implied by the accounts its lines post to — so `service.posImportDoneByBranch` resolves it with the same recursive walk down the chart of accounts that `handler.accountBranchOwnerSQL` uses for the branch P&L. Deriving is what keeps the board honest: it cannot report "done" when the work wasn't, needs no backfilling, and scores existing history the first time it is read. Only `manual` definitions write `daily_task_completions`; `service.CompleteManualTask` **rejects** a tick on a derived type rather than letting it contradict the data.
+
+**`due_offset_days` is not the same as `grace_days`.** A duty is actionable from `task_date + due_offset_days`, and overdue once `today > task_date + due_offset_days + grace_days`. POS import carries an offset of 1 because the sales data only lands the following morning — so today's board shows *yesterday's* POS imports as due, and today's are not listed at all. Instances that are not yet actionable are omitted entirely rather than shown pending: nagging about work that cannot be done is noise, and counting it as missed would drag the completion rate down for a day nobody could have worked.
+
+`scope = per_branch` expands to one instance per branch at query time, so opening a branch immediately carries its duties. `starts_on` is the first date a duty applies — NULL for the seeded ones (purchasing and POS import have always been expected, so history is judged), and defaulted to today for a duty someone invents now, since nobody should log in to a backlog of failures for a rule that did not exist yesterday.
+
+`invoices.created_by` was added by migration 058 for per-person attribution and backfilled from `activity_log`; note the comparison is **case-insensitive** because 048 normalised the log's action casing to lowercase. KPIs split deliberately between team and personal metrics: `completion_rate` measures the desk (identical for everyone — pinning a shared missed day on one individual would be fiction), while `same_day_rate` and `completed_count` are personal. A person is reached through `employees.user_id`; unlinked employees simply have no scorecard.
+
+The bell (`GET /api/notifications`) is assembled per role: operational roles get overdue tasks and low stock, managers additionally get the approval queues, HR roles get expiring contracts and unreviewed payroll lines. The badge counts `alert` and `warn` only. `RestrictHRRole` allowlists `/api/notifications` (so the HR role gets its own queues) but not `/api/tasks/*`.
+
+### HR document generation
+Reusable **contract condition templates** (`hr_contract_templates`) preset the *ketentuan* half of a PKWT/PKWTT — position, place of work, wage, job description, term length — so hiring several people into the same role doesn't mean retyping terms that then disagree. Applying one fills the form and leaves every field editable. The term is stored as `contract_months`, not an end date, because a template is reused months apart from whatever start date the contract gets. Company-level values (letterhead, signatory, working hours, payment wording) are deliberately **not** duplicated here — they come from `hr_settings`, and a second copy is how the two would drift.
+
+Only per-letter fields live on the generator form. Everything that belongs to the *company* — letterhead, contact details, signing city, signatory, standard working hours, payment wording, PKWTT probation length — is configured once in `hr_settings` and merged server-side by `handler.applySettingsDefaults`; a value the request does send still wins, so one-off overrides remain possible. Letter numbers come from `doc_number_format` + `doc_number_counter`: `GET /api/hr/documents/next-number` previews without advancing, `POST` claims the value and increments in a single UPDATE (so two people generating at once cannot collide). The frontend previews on load and claims only after the first successful download of a letter, which is why downloading both DOCX and PDF of the same letter burns one number, not two. `service.FormatDocNumber` owns the placeholder vocabulary; `HRSettings.jsx` mirrors it for the live preview only.
 
 ---
 
 ## Role-Based Access
 
-- **admin**: Full access to all routes including HR settings mutations
-- **manager**: Full access to HR module (employees, wages, attendance, performance, leave, kasbon, payroll); exclusive rights to approve/reject kasbon and leave requests; same access as admin on non-HR routes (the `RequireAdmin` middleware also accepts `manager` for backward-compatibility)
-- **staff**: Read-only on most resources; blocked from items CRUD, warehouses, vendors, accounts, users, activity log, reports, account adjustments, invoice templates, branches, divisions; no access to HR wage/payroll/kasbon/leave data
-- **device-key**: Machine accounts for fingerprint/face attendance devices; authenticated via `X-Device-Key` header (no JWT); access only to `/api/hr/attendance/device/*` endpoints
-- Enforced at the route level via `RequireAdmin`, `RequireAdminOrManager`, `RequireManager`, and `DeviceAuth` middleware; also reflected in frontend navigation (`isAdminOrManager` guard on HR nav group)
+- **superuser**: Every capability without exception, approvals included — the one role that is both admin and manager. Not seeded: an existing deployment already has an admin, and that admin promotes whoever should hold it (migration 067 only widens the CHECK). The navbar turns dark red (`.navbar-superuser`) for the whole session so the elevated login is visible on every page rather than only on the users screen.
+- **admin**: Full access to every module.
+- **manager**: Same as admin, **plus** the exclusive right to approve/reject kasbon, leave and overtime requests. Approval is the one capability no other role has.
+- **staff**: Same reach as admin — items, inventory, invoices, accounts, branches, users, HR — **except** reports (`/api/reports/*`, `/api/expense-report`) and the activity log. Cannot approve requests.
+- **hr**: Confined to the HR module. Gets its own navbar and its own dashboard (`HRDashboard`, a shortcut map of every HR page) instead of the operational one. Cannot approve requests.
+- **store_manager**: Attendance record entry/correction only (`RequireAttendanceAccess`); rejected everywhere else.
+- **device-key**: Machine accounts for fingerprint/face attendance devices; authenticated via `X-Device-Key` header (no JWT); access only to `/api/hr/attendance/device/*` endpoints.
+- Roles are named as constants in `middleware/auth.go` and every gate is built from one `gate(...)` helper, so adding a role means touching that file and nothing else. **`superuser` is not listed in any gate** — `hasRole` short-circuits on it, so a role defined as "all capabilities" cannot drift out of a gate added later. The exported `middleware.HasRole` carries the same bypass for the few handlers that check a role inline instead of behind a gate. The gates are `RequireAdmin` / `RequireAdminOrManager` (admin+manager), `RequireCoreAccess` (admin+manager+staff), `RequireHRAccess` (admin+manager+staff+hr), `RequireReportsAccess` (admin+manager), `RequireManager` (approvals), `RequireAttendanceAccess`, and `DeviceAuth`.
+- **`RestrictHRRole` is the exception to per-route gating**: most non-HR routes are deliberately open to every authenticated user, so scoping the `hr` role by adding middleware to each of them would mean getting it right on every future route. Instead it sits once at the top of the protected group and denies the `hr` role anything outside an allowlist (`/api/hr/*`, `/api/auth/*`, branches, divisions, accounts) — closed by default. Do not "fix" this by scattering per-route checks.
+- The frontend mirrors all of this in `client/src/roles.js` (`canUseHR`, `canViewReports`, `canUseCore`, `canApprove`, `isAdminRole`, `isHROnly`, `isSuperuser`) — used by the `RequireHR` / `RequireReports` / `RequireCore` route guards and to build the navbar. Pages that gate a single button (delete invoice, cancel a daily purchase or setoran, record a petty cash count, clear the activity log, approve a request) must call `isAdminRole()` / `canApprove()` rather than comparing `role === 'admin'` inline — the inline form is how superuser silently loses a capability. Hidden links are a courtesy; the server is the control.
 
 ---
 

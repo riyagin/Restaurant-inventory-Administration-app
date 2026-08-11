@@ -11,6 +11,7 @@ import {
 import CurrencyInput from '../../components/CurrencyInput';
 import KasbonFormModal from './KasbonFormModal';
 import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
+import { canUseHR } from '../../roles';
 
 const SERVER = 'http://localhost:5000';
 
@@ -48,13 +49,7 @@ function dailyPaidProjection(structure) {
   return total;
 }
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
-}
-const canEdit = () => {
-  const role = getUser()?.role;
-  return role === 'admin' || role === 'manager';
-};
+const canEdit = canUseHR;
 
 const TABS = [
   { key: 'profil', label: 'Profil' },

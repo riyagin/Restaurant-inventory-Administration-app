@@ -25,16 +25,41 @@ func NewVendorsHandler(pool *pgxpool.Pool, queries *db.Queries) *VendorsHandler 
 	return &VendorsHandler{pool: pool, queries: queries}
 }
 
+// vendorWithBanks is a vendor plus its transfer destinations. The list page
+// shows the default number inline, so the accounts are fetched once for
+// everybody and grouped in memory rather than one query per vendor.
+type vendorWithBanks struct {
+	*db.Vendor
+	BankAccounts []*db.VendorBankAccount `json:"bank_accounts"`
+}
+
 func (h *VendorsHandler) List(w http.ResponseWriter, r *http.Request) {
-	vendors, err := h.queries.ListVendors(r.Context())
+	ctx := r.Context()
+	vendors, err := h.queries.ListVendors(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data vendor")
 		return
 	}
-	if vendors == nil {
-		vendors = []*db.Vendor{}
+
+	banks, err := h.queries.ListAllVendorBankAccounts(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil rekening vendor")
+		return
 	}
-	respondJSON(w, http.StatusOK, vendors)
+	byVendor := make(map[uuid.UUID][]*db.VendorBankAccount, len(vendors))
+	for _, b := range banks {
+		byVendor[b.VendorID.Bytes] = append(byVendor[b.VendorID.Bytes], b)
+	}
+
+	out := make([]vendorWithBanks, 0, len(vendors))
+	for _, v := range vendors {
+		accounts := byVendor[v.ID.Bytes]
+		if accounts == nil {
+			accounts = []*db.VendorBankAccount{}
+		}
+		out = append(out, vendorWithBanks{Vendor: v, BankAccounts: accounts})
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *VendorsHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -319,9 +344,10 @@ func (h *VendorsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"vendor":   vendor,
-		"invoices": invoices,
-		"items":    items,
+		"vendor":        vendor,
+		"bank_accounts": h.vendorBankAccountsFor(r, rawID),
+		"invoices":      invoices,
+		"items":         items,
 		"summary": map[string]any{
 			"total_invoiced":    totalInvoiced,
 			"total_paid":        totalPaid,

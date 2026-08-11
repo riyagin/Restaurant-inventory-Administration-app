@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Per-branch profit & loss.
@@ -56,6 +58,60 @@ owned AS (
 )
 SELECT DISTINCT ON (account_id) account_id, branch_id
 FROM owned ORDER BY account_id, depth`
+
+// plActivityByAccount returns each revenue/expense account's movement over a
+// period, keyed by account id. An empty startDate/endDate reports all time.
+//
+// This is the single definition of "what a P&L account did in a period", shared
+// by the org-wide financial report and the per-branch split. They used to derive
+// it differently — the org-wide one summed the source tables (sales,
+// pos_import_lines, invoices, account_adjustments) while the branch split read
+// the journal — and the two therefore disagreed on the same period. Summing the
+// source tables cannot be made to agree: it misses everything that reaches a P&L
+// account without passing through them (payroll, Pembelanjaan Harian, opname
+// write-offs), values dispatch consumption at the mirror invoice's booked price
+// rather than FIFO cost, and counts cancelled invoices it never filtered out.
+// The journal has all of it, by construction, which is why both callers read it
+// here and nowhere else.
+//
+// `journal_lines.amount` is debit-positive. Negating revenue yields the natural
+// sign per type — positive revenue, positive expense — which is the same
+// convention `accounts.balance` is cached in, so a period figure and an all-time
+// balance stay directly comparable.
+func plActivityByAccount(ctx context.Context, pool *pgxpool.Pool, startDate, endDate string) (map[string]int64, error) {
+	sql := `
+SELECT jl.account_id,
+       SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE jl.amount END)::BIGINT AS total
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.entry_id
+JOIN accounts a ON a.id = jl.account_id
+WHERE a.account_type IN ('revenue', 'expense')`
+	var params []any
+	if startDate != "" && endDate != "" {
+		sql += ` AND je.entry_date BETWEEN $1 AND $2`
+		params = []any{startDate, endDate}
+	}
+	sql += ` GROUP BY jl.account_id`
+
+	rows, err := pool.Query(ctx, sql, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := map[string]int64{}
+	for rows.Next() {
+		var accountID pgtype.UUID
+		var total int64
+		if err := rows.Scan(&accountID, &total); err != nil {
+			return nil, err
+		}
+		if accountID.Valid {
+			out[uuidBytesToString(accountID.Bytes)] = total
+		}
+	}
+	return out, rows.Err()
+}
 
 // ProfitLossByBranch — GET /api/reports/profit-loss-by-branch
 // Params: start_date (or from), end_date (or to) — both optional; omitting them
@@ -111,38 +167,10 @@ func (h *ReportsHandler) ProfitLossByBranch(w http.ResponseWriter, r *http.Reque
 
 	// ── Period activity per P&L account, from the journal ──
 	//
-	// `journal_lines.amount` is debit-positive. Natural sign is +amount for an
-	// expense and -amount for revenue, which is the same convention
-	// `accounts.balance` is cached in, so the two are directly comparable.
-	activitySQL := `
-SELECT jl.account_id,
-       SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE jl.amount END)::BIGINT AS total
-FROM journal_lines jl
-JOIN journal_entries je ON je.id = jl.entry_id
-JOIN accounts a ON a.id = jl.account_id
-WHERE a.account_type IN ('revenue', 'expense')`
-	var params []any
-	if usePeriod {
-		activitySQL += ` AND je.entry_date BETWEEN $1 AND $2`
-		params = []any{startDate, endDate}
-	}
-	activitySQL += ` GROUP BY jl.account_id`
-
-	actRows, err := h.pool.Query(ctx, activitySQL, params...)
+	// Same helper the org-wide financial report uses, so the branch columns sum
+	// to the combined figure rather than merely being expected to.
+	amountOf, err := plActivityByAccount(ctx, h.pool, startDate, endDate)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menghitung mutasi laba rugi")
-		return
-	}
-	amountOf := map[string]int64{}
-	for actRows.Next() {
-		var accountID pgtype.UUID
-		var total int64
-		if err := actRows.Scan(&accountID, &total); err == nil && accountID.Valid {
-			amountOf[uuidBytesToString(accountID.Bytes)] = total
-		}
-	}
-	actRows.Close()
-	if err := actRows.Err(); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghitung mutasi laba rugi")
 		return
 	}

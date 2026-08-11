@@ -154,6 +154,11 @@ export const createVendor = (data) => api.post('/vendors', data);
 export const updateVendor = (id, data) => api.put(`/vendors/${id}`, data);
 export const deleteVendor = (id) => api.delete(`/vendors/${id}`);
 export const getVendorHistory = (id) => api.get(`/vendors/${id}/history`);
+// Vendor transfer accounts — a vendor may be paid to any number of destinations
+export const getVendorBankAccounts = (id) => api.get(`/vendors/${id}/bank-accounts`);
+export const createVendorBankAccount = (id, data) => api.post(`/vendors/${id}/bank-accounts`, data);
+export const updateVendorBankAccount = (id, bankId, data) => api.put(`/vendors/${id}/bank-accounts/${bankId}`, data);
+export const deleteVendorBankAccount = (id, bankId) => api.delete(`/vendors/${id}/bank-accounts/${bankId}`);
 
 export const getAccounts = () => api.get('/accounts');
 export const createAccount = (data) => api.post('/accounts', data);
@@ -195,6 +200,24 @@ export const getBranches = () => api.get('/branches');
 export const createBranch = (data) => api.post('/branches', data);
 export const updateBranch = (id, data) => api.put(`/branches/${id}`, data);
 export const deleteBranch = (id) => api.delete(`/branches/${id}`);
+
+// ── Kas cabang: Pembelanjaan Harian, Kas Kecil, Setoran ─────────────────────
+// The branch's cash side. Spending leaves the box, counts observe it, setoran
+// moves money in and out of it — the three only reconcile together.
+export const getDailyPurchases = (params) => api.get('/daily-purchases', { params });
+export const getDailyPurchase = (id) => api.get(`/daily-purchases/${id}`);
+export const createDailyPurchase = (data) => api.post('/daily-purchases', data);
+export const cancelDailyPurchase = (id, reason) => api.post(`/daily-purchases/${id}/cancel`, { reason });
+
+export const getPettyCashDay = (date) => api.get('/petty-cash', { params: { date } });
+export const getPettyCashHistory = (params) => api.get('/petty-cash/history', { params });
+export const getPettyCashAccounts = () => api.get('/petty-cash/accounts');
+export const recordPettyCashOpening = (data) => api.post('/petty-cash/opening', data);
+export const recordPettyCashClosing = (data) => api.post('/petty-cash/closing', data);
+
+export const getCashDeposits = (params) => api.get('/cash-deposits', { params });
+export const createCashDeposit = (data) => api.post('/cash-deposits', data);
+export const cancelCashDeposit = (id, reason) => api.post(`/cash-deposits/${id}/cancel`, { reason });
 
 export const getDivisions = (params) => api.get('/divisions', { params });
 export const createDivision = (data) => api.post('/divisions', data);
@@ -276,6 +299,18 @@ export const deleteEnumeration  = (id)   => api.delete(`/enumerations/${id}`);
 
 // ── HR: Karyawan & Jabatan ──────────────────────────────────────────────────
 export const getEmployees   = (params) => api.get('/hr/employees', { params });
+// The list endpoint is paginated and caps `limit` at 100, so a picker that wants
+// the whole roster has to page through it — a single call silently truncates
+// once there are more than 100 employees.
+export const getAllEmployees = async (params = {}) => {
+  const all = [];
+  for (let page = 1; ; page += 1) {
+    const { data } = await api.get('/hr/employees', { params: { ...params, page, limit: 100 } });
+    const rows = data?.data || [];
+    all.push(...rows);
+    if (rows.length === 0 || all.length >= (data?.total ?? all.length)) return all;
+  }
+};
 export const getContractAlerts = (params) => api.get('/hr/employees/contract-alerts', { params });
 export const getEmployee    = (id)     => api.get(`/hr/employees/${id}`);
 export const createEmployee = (data)   => api.post('/hr/employees', data);
@@ -299,12 +334,41 @@ export const deletePosition = (id) => api.delete(`/hr/positions/${id}`);
 // format = 'docx' | 'pdf'; returns a blob for the browser to download.
 export const generateHrDocument = (data, format = 'docx') =>
   api.post(`/hr/documents/generate?format=${format}`, data, { responseType: 'blob' });
+// Nomor surat berjalan: GET hanya melihat (tidak menaikkan counter), POST
+// mengambil nomor untuk dokumen yang benar-benar dibuat lalu menaikkannya.
+// Template ketentuan kontrak (PKWT/PKWTT) yang dapat dipakai ulang antar
+// karyawan dengan peran serupa.
+export const getContractTemplates   = (params) => api.get('/hr/contract-templates', { params });
+export const createContractTemplate = (data)   => api.post('/hr/contract-templates', data);
+export const updateContractTemplate = (id, data) => api.put(`/hr/contract-templates/${id}`, data);
+export const deleteContractTemplate = (id)     => api.delete(`/hr/contract-templates/${id}`);
+export const peekHrDocumentNumber    = (params) => api.get('/hr/documents/next-number', { params });
+export const reserveHrDocumentNumber = (params) => api.post('/hr/documents/next-number', null, { params });
 export const getEmployeeDocuments   = (id) => api.get(`/hr/employees/${id}/documents`);
 export const uploadEmployeeDocument = (id, formData) =>
   api.post(`/hr/employees/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
 export const downloadEmployeeDocument = (id, docId) =>
   api.get(`/hr/employees/${id}/documents/${docId}/download`, { responseType: 'blob' });
 export const deleteEmployeeDocument = (id, docId) => api.delete(`/hr/employees/${id}/documents/${docId}`);
+
+// ── Tugas Harian & Notifikasi ───────────────────────────────────────────────
+// Penyelesaian tugas diturunkan dari data (invoice pembelian / import POS),
+// bukan dari centang manual — lihat service/dailytasks.go.
+export const getDailyTasks      = (params) => api.get('/tasks/daily', { params });
+export const getPendingTasks    = (params) => api.get('/tasks/pending', { params });
+export const completeDailyTask  = (data)   => api.post('/tasks/daily/complete', data);
+export const getTaskDefinitions = ()       => api.get('/tasks/definitions');
+export const createTaskDefinition = (data)     => api.post('/tasks/definitions', data);
+export const updateTaskDefinition = (id, data) => api.put(`/tasks/definitions/${id}`, data);
+export const deleteTaskDefinition = (id)       => api.delete(`/tasks/definitions/${id}`);
+export const getNotifications   = () => api.get('/notifications');
+
+// ── HR: KPI Staff (diukur dari tugas harian) ────────────────────────────────
+export const getStaffKpis   = ()       => api.get('/hr/kpi');
+export const createStaffKpi = (data)   => api.post('/hr/kpi', data);
+export const updateStaffKpi = (id, data) => api.put(`/hr/kpi/${id}`, data);
+export const deleteStaffKpi = (id)     => api.delete(`/hr/kpi/${id}`);
+export const getStaffKpiScores = (params) => api.get('/hr/kpi/scores', { params });
 
 // ── HR: Komponen & Struktur Gaji ────────────────────────────────────────────
 export const getWageComponents   = (params) => api.get('/hr/wage-components', { params });

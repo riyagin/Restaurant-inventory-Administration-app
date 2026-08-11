@@ -66,79 +66,14 @@ func (h *ReportsHandler) Financial(w http.ResponseWriter, r *http.Request) {
 	adjMap := map[string]int64{}
 
 	if usePeriod {
-		params := []any{startDate, endDate}
-		sql := `
-WITH sales_rev AS (
-  SELECT COALESCE(dv.revenue_account_id, b.revenue_account_id) AS account_id,
-         SUM(s.amount) AS total
-  FROM sales s
-  LEFT JOIN divisions dv ON dv.id = s.division_id
-  LEFT JOIN branches b ON b.id = s.branch_id
-  WHERE s.date BETWEEN $1 AND $2
-    AND COALESCE(dv.revenue_account_id, b.revenue_account_id) IS NOT NULL
-  GROUP BY 1
-),
-pos_rev AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  WHERE pil.line_type = 'revenue' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-inv_exp AS (
-  SELECT COALESCE(dv.expense_account_id, b.expense_account_id) AS account_id,
-         COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
-  FROM invoices inv
-  LEFT JOIN divisions dv ON dv.id = inv.division_id
-  LEFT JOIN branches b ON b.id = inv.branch_id
-  LEFT JOIN invoice_items ii ON ii.invoice_id = inv.id
-  WHERE inv.invoice_type = 'expense' AND inv.date BETWEEN $1 AND $2
-    AND COALESCE(dv.expense_account_id, b.expense_account_id) IS NOT NULL
-  GROUP BY 1
-),
-pos_exp AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  WHERE pil.line_type = 'expense' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-pos_disc AS (
-  SELECT pil.account_id, SUM(pil.amount) AS total
-  FROM pos_import_lines pil
-  JOIN pos_imports pi ON pi.id = pil.import_id
-  WHERE pil.line_type = 'discount' AND pi.date BETWEEN $1 AND $2
-  GROUP BY pil.account_id
-),
-adj_period AS (
-  SELECT account_id, SUM(amount) AS total
-  FROM account_adjustments
-  WHERE created_at::date BETWEEN $1 AND $2
-  GROUP BY account_id
-),
-combined AS (
-  SELECT account_id, total FROM sales_rev
-  UNION ALL SELECT account_id, total FROM pos_rev
-  UNION ALL SELECT account_id, total FROM inv_exp
-  UNION ALL SELECT account_id, total FROM pos_exp
-  UNION ALL SELECT account_id, total FROM pos_disc
-  UNION ALL SELECT account_id, total FROM adj_period
-)
-SELECT account_id, SUM(total)::BIGINT AS period_balance
-FROM combined GROUP BY account_id`
-
-		pRows, err := h.pool.Query(ctx, sql, params...)
+		// Period revenue/expense comes from the journal — the same
+		// plActivityByAccount the per-branch split reads, so the two agree by
+		// construction instead of by coincidence. See that function for why the
+		// source tables cannot be summed into the same answer.
+		periodMap, err = plActivityByAccount(ctx, h.pool, startDate, endDate)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menghitung periode keuangan")
 			return
-		}
-		defer pRows.Close()
-		for pRows.Next() {
-			var accountID pgtype.UUID
-			var periodBalance int64
-			if err := pRows.Scan(&accountID, &periodBalance); err == nil && accountID.Valid {
-				periodMap[uuidBytesToString(accountID.Bytes)] = periodBalance
-			}
 		}
 
 		// Adjustments map

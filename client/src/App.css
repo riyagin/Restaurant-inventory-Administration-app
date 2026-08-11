@@ -64,6 +64,10 @@
   --alert-ink: #9a3412;
   --alert-line: #f0c2ae;
   --danger: #c0392b;
+  /* ok — completion / confirmed. Distinct from the payment-status ladder above,
+     which is about invoices; this is "this step is done". 4.6:1 on white. */
+  --ok: #157f49;
+  --ok-line: #b6e0c8;
 
   --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
 
@@ -96,6 +100,19 @@ body {
   position: relative;
   z-index: var(--z-sticky);
   border-bottom: 1px solid #000;
+}
+
+/* Superuser: the whole bar goes dark red, so a session that can do anything —
+   approvals included — is obvious at a glance and stays obvious on every page.
+   Only the three nav tokens are redefined; every rule below reads them, the
+   mobile drawer included, so the treatment follows the bar everywhere without
+   a second set of selectors. The ink is warmed to sit on red and still clears
+   9:1, and the active tab's cut-out inherits the red as its text colour. */
+.navbar-superuser {
+  --nav-bg: #4a1017;
+  --nav-rule: rgba(255, 255, 255, 0.14);
+  --nav-ink: #e2c9cc;
+  --nav-ink-strong: #ffffff;
 }
 
 .brand {
@@ -185,6 +202,18 @@ body {
 .nav-dropdown-menu a:hover { background: var(--surface-2); color: var(--ink); }
 .nav-dropdown-menu a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; border-left-color: var(--accent); }
 .nav-dropdown-divider { height: 1px; background: var(--line-soft); margin: 0.3rem 0; }
+/* Section label inside a long menu — the HR dropdown carries ~20 entries, and a
+   flat list that length is unscannable without saying where you are in it. */
+.nav-dropdown-heading {
+  padding: 0.4rem 1rem 0.2rem;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--ink-4);
+}
+.mobile-section-heading {
+  padding: 0.5rem 0 0.2rem;
+  font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
 
 .nav-user-name {
   display: flex; align-items: center; gap: 0.45rem;
@@ -258,6 +287,9 @@ tr:hover td { background: var(--surface-2); }
 /* Chips never wrap: a two-line "Belum Dibayar" breaks the pill shape. */
 .badge { display: inline-block; white-space: nowrap; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-line); }
 .badge.low { background: var(--alert-bg); color: var(--alert-ink); border-color: var(--alert-line); }
+/* Superuser, in the same dark red as its navbar — the role list is where the
+   grant is made, so it should read as the exceptional one. */
+.badge-superuser { background: #f7e7e9; color: #4a1017; border-color: #e0bfc4; }
 /* Glyph carries the state independently of hue. */
 .badge .glyph { display: inline-block; margin-right: 0.3rem; font-size: 0.72rem; }
 
@@ -523,48 +555,292 @@ tr.row-expanded td { background: var(--accent-soft) !important; }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 
+/* ── Notification bell ─────────────────────────────────────────────────── */
+/* Pushed to the right edge of the bar; on desktop the user block follows it, on
+   mobile the burger does. */
+.nav-bell { display: flex; align-items: center; margin-left: auto; padding-right: 0.5rem; }
+.nav-bell + .nav-user { margin-left: 0; }
+.notif { position: relative; display: flex; align-items: center; }
+.notif-btn {
+  position: relative; display: grid; place-items: center;
+  width: 36px; height: 36px; border-radius: 8px;
+  background: none; border: none; cursor: pointer; font-size: 1.05rem;
+  color: var(--nav-ink); transition: background-color 0.15s;
+}
+.notif-btn:hover, .notif-btn.open { background: rgba(255, 255, 255, 0.1); }
+.notif-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.notif-badge {
+  position: absolute; top: 2px; right: 0;
+  min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px;
+  background: var(--ink-3); color: #fff;
+  font: 600 0.68rem/17px var(--mono); text-align: center;
+  border: 1.5px solid var(--nav-bg);
+}
+/* Overdue work earns the loud colour; "not done yet today" does not. */
+.notif-badge.alert { background: var(--danger); }
+
+.notif-panel {
+  position: absolute; top: calc(100% + 6px); right: 0; width: min(360px, calc(100vw - 2rem));
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(12, 14, 20, 0.22);
+  z-index: var(--z-dropdown); overflow: hidden;
+}
+.notif-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--line-soft); font-size: 0.9rem;
+}
+.notif-head-count {
+  background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 20px; padding: 0.05rem 0.5rem; font: 600 0.75rem var(--mono); color: var(--ink-2);
+}
+.notif-list { max-height: min(60vh, 420px); overflow-y: auto; }
+.notif-item {
+  display: grid; gap: 1px; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: none; border-bottom: 1px solid var(--line-soft);
+  font-family: inherit; padding: 0.6rem 0.9rem; color: var(--ink);
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover, .notif-item:focus-visible { background: var(--surface-2); outline: none; }
+.notif-item-sev {
+  font-size: 0.67rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.notif-item.alert .notif-item-sev { color: var(--danger); }
+.notif-item-title { font-size: 0.9rem; font-weight: 600; }
+.notif-item-detail { font-size: 0.8rem; color: var(--ink-3); }
+.notif-empty { padding: 1.6rem 1rem; text-align: center; color: var(--ink-3); font-size: 0.88rem; }
+
+/* ── Staff dashboard ───────────────────────────────────────────────────── */
+.sd-shortcut {
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  overflow: hidden; transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.sd-shortcut:hover { border-color: var(--accent-line); box-shadow: 0 4px 16px rgba(18, 20, 29, 0.08); }
+.sd-shortcut-main {
+  display: flex; gap: 0.75rem; align-items: flex-start;
+  padding: 1rem; text-decoration: none; color: var(--ink); flex: 1;
+}
+.sd-shortcut-icon { font-size: 1.5rem; line-height: 1; }
+.sd-shortcut-label { display: block; font-weight: 600; font-size: 1rem; }
+.sd-shortcut-desc { display: block; font-size: 0.82rem; color: var(--ink-3); margin-top: 2px; }
+.sd-shortcut-links {
+  display: flex; gap: 0.9rem; flex-wrap: wrap;
+  padding: 0.5rem 1rem; background: var(--surface-2); border-top: 1px solid var(--line-soft);
+}
+.sd-shortcut-links a { font-size: 0.8rem; color: var(--ink-2); text-decoration: none; }
+.sd-shortcut-links a:hover { color: var(--accent); text-decoration: underline; }
+
+.sd-stat {
+  display: flex; align-items: baseline; gap: 0.5rem;
+  padding: 0.5rem 0.9rem; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface);
+}
+.sd-stat-value { font: 700 1.25rem/1 var(--mono); }
+.sd-stat-label { font-size: 0.82rem; color: var(--ink-3); }
+.sd-stat.alert { border-color: var(--alert-line); background: var(--alert-bg); }
+.sd-stat.alert .sd-stat-value, .sd-stat.alert .sd-stat-label { color: var(--alert-ink); }
+.sd-stat.warn { border-color: var(--st-partial-line); background: var(--st-partial-soft); }
+.sd-stat.warn .sd-stat-value, .sd-stat.warn .sd-stat-label { color: var(--st-partial-ink); }
+
+.sd-day { margin-bottom: 1rem; }
+.sd-day-head {
+  display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+  margin-bottom: 0.4rem;
+}
+.sd-day-name { font-weight: 600; font-size: 0.9rem; }
+.sd-day-count { font-size: 0.78rem; color: var(--ink-3); }
+.sd-task {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.6rem 0.9rem; margin-bottom: 0.4rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  text-decoration: none; color: var(--ink);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.sd-task:hover { border-color: var(--accent-line); transform: translateX(2px); }
+.sd-task-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+  background: var(--st-partial-line); border: 1px solid var(--st-partial-ink);
+}
+.sd-task.overdue .sd-task-dot { background: var(--danger); border-color: var(--danger); }
+.sd-task-name { display: block; font-weight: 500; font-size: 0.92rem; }
+.sd-task-meta { display: block; font-size: 0.78rem; color: var(--ink-3); }
+.sd-task.overdue .sd-task-meta { color: var(--alert-ink); font-weight: 500; }
+.sd-task-go { color: var(--ink-4); }
+
+.sd-clear {
+  display: flex; align-items: center; gap: 0.9rem;
+  padding: 1.1rem; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--ok-line);
+}
+.sd-clear-badge {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center;
+  background: var(--ok); color: #fff; font-size: 1.1rem; font-weight: 800;
+}
+
+/* ── Contract template bar (document generator) ────────────────────────── */
+.doc-tpl-bar {
+  display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;
+  padding: 0.7rem 0.8rem; margin-bottom: 0.6rem;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+}
+
+/* ── KPI scorecards ────────────────────────────────────────────────────── */
+.kpi-card {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.9rem 1rem; margin-bottom: 0.8rem; background: var(--surface);
+}
+.kpi-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; margin-bottom: 0.7rem; flex-wrap: wrap;
+}
+.kpi-score { display: flex; align-items: baseline; gap: 0.35rem; }
+.kpi-score-value { font: 700 1.5rem/1 var(--mono); }
+.kpi-score-label { font-size: 0.75rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.4px; }
+.kpi-row {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(90px, 1fr) auto;
+  align-items: center; gap: 0.8rem; padding: 0.4rem 0;
+  border-top: 1px solid var(--line-soft);
+}
+.kpi-bar { height: 7px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.kpi-bar-fill { height: 100%; background: var(--accent); border-radius: 4px; }
+.kpi-actual { font: 600 0.9rem var(--mono); text-align: right; white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .kpi-row { grid-template-columns: 1fr auto; }
+  .kpi-bar { grid-column: 1 / -1; }
+}
+
+/* ── HR dashboard shortcut tiles ───────────────────────────────────────── */
+.hrd-tile {
+  display: flex; gap: 0.7rem; align-items: flex-start; text-decoration: none;
+  padding: 0.9rem 1rem; border-radius: 10px; background: var(--surface);
+  border: 1px solid var(--line); color: var(--ink);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+.hrd-tile:hover, .hrd-tile:focus-visible {
+  border-color: var(--accent-line); box-shadow: 0 4px 16px rgba(18, 20, 29, 0.08);
+  transform: translateY(-2px);
+}
+.hrd-tile-icon { font-size: 1.4rem; line-height: 1; }
+.hrd-tile-label { display: block; font-weight: 600; }
+.hrd-tile-desc { display: block; font-size: 0.8rem; color: var(--ink-3); margin-top: 2px; }
+
+/* ── SearchSelect (type-to-filter picker) ──────────────────────────────── */
+.ss { position: relative; }
+.ss-control {
+  display: flex; align-items: center; gap: 0.25rem;
+  border: 1px solid #d5d9e0; border-radius: 6px; background: var(--surface);
+  padding-right: 0.5rem; transition: border-color 0.2s, box-shadow 0.2s;
+}
+.ss-control.open, .ss-control:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ss-control.disabled { background: var(--surface-2); }
+.ss-input {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  padding: 0.55rem 0.75rem; font-size: 0.95rem; font-family: inherit; color: var(--ink);
+}
+.ss-input::placeholder { color: var(--ink-4); }
+.ss-clear {
+  border: none; background: none; cursor: pointer; line-height: 1;
+  font-size: 1.15rem; color: var(--ink-4); padding: 0 0.15rem;
+}
+.ss-clear:hover { color: var(--ink); }
+.ss-caret { color: var(--ink-4); font-size: 0.7rem; pointer-events: none; }
+.ss-menu {
+  position: absolute; z-index: var(--z-dropdown); top: calc(100% + 4px); left: 0; right: 0;
+  max-height: 260px; overflow-y: auto; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(18, 20, 29, 0.14);
+}
+.ss-option {
+  display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left;
+  border: none; background: none; cursor: pointer; font-family: inherit;
+  padding: 0.5rem 0.75rem; color: var(--ink);
+}
+.ss-option.cursor { background: var(--accent-soft); }
+.ss-option.selected .ss-option-label { font-weight: 600; }
+.ss-option-label { font-size: 0.92rem; }
+.ss-option-sub { font-size: 0.78rem; color: var(--ink-3); }
+.ss-empty { padding: 0.75rem; font-size: 0.88rem; color: var(--ink-3); text-align: center; }
+
 /* ── HR Onboarding Wizard ──────────────────────────────────────────────── */
 .onb-stepper {
   display: flex; gap: 0; margin-bottom: 1.4rem; flex-wrap: wrap;
+  list-style: none;
 }
 .onb-step-item {
-  position: relative; display: flex; align-items: center; gap: 0.6rem;
-  flex: 1; min-width: 150px;
+  position: relative; flex: 1; min-width: 150px;
 }
+/* The connector is drawn by the item, not by a separate element with a negative
+   z-index — that trick puts it behind the page background as soon as the
+   stepper gains a stacking context. */
+.onb-step-item:not(:last-child)::after {
+  content: ''; position: absolute; top: 22px; left: 52px; right: 0.4rem;
+  height: 3px; border-radius: 2px; background: var(--line);
+}
+.onb-step-item.done::after, .onb-step-item.active::after { background: var(--ok); }
+
+.onb-step-btn {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  background: none; border: none; padding: 0.25rem 0.4rem 0.25rem 0;
+  font-family: inherit; text-align: left; color: inherit; border-radius: 8px;
+}
+.onb-step-btn[aria-disabled='true'] { cursor: default; }
+.onb-step-btn:not([aria-disabled='true']) { cursor: pointer; }
+.onb-step-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.onb-step-item.done .onb-step-btn:hover .onb-dot { transform: scale(1.06); }
+
 .onb-dot {
-  width: 40px; height: 40px; flex-shrink: 0; border-radius: 50%;
+  width: 44px; height: 44px; flex-shrink: 0; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 1.1rem; font-weight: 700; background: var(--surface-2);
-  color: var(--ink-3); border: 2px solid #d5d9e0;
-  transition: background 0.35s ease, color 0.35s ease, border-color 0.35s ease, transform 0.35s ease;
+  font-size: 1.1rem; font-weight: 700; background: var(--surface);
+  color: var(--ink-3); border: 2px solid var(--line);
+  transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease, transform 0.25s ease;
 }
 .onb-step-item.active .onb-dot {
   background: var(--accent); color: #fff; border-color: var(--accent);
-  transform: scale(1.08); box-shadow: 0 4px 14px var(--accent-soft);
+  box-shadow: 0 4px 14px var(--accent-soft);
 }
 .onb-step-item.done .onb-dot {
-  background: #1a9d5a; color: #fff; border-color: #1a9d5a;
+  background: var(--ok); color: #fff; border-color: var(--ok);
 }
-.onb-step-label { display: flex; flex-direction: column; line-height: 1.15; }
+.onb-step-label { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .onb-step-title { font-weight: 600; font-size: 0.9rem; color: var(--ink); }
+.onb-step-item.todo .onb-step-title { color: var(--ink-3); font-weight: 500; }
 .onb-step-desc { font-size: 0.75rem; color: var(--ink-3); }
-.onb-line {
-  position: absolute; top: 20px; left: 40px; right: 0; height: 3px;
-  background: #d5d9e0; z-index: -1; margin-left: 0.4rem;
-}
-.onb-line.filled { background: #1a9d5a; transition: background 0.4s ease; }
+.onb-step-count { display: none; font-size: 0.8rem; color: var(--ink-3); margin-bottom: 0.6rem; }
 
-.onb-panel { animation: onbSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
-@keyframes onbSlideIn {
+/* The panel slides in from the side you came from, so the motion reads as
+   travel through the flow rather than one canned entrance. */
+.onb-panel { animation: onbSlideNext 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+.onb-panel.back { animation-name: onbSlideBack; }
+@keyframes onbSlideNext {
   from { opacity: 0; transform: translateX(26px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes onbSlideBack {
+  from { opacity: 0; transform: translateX(-26px); }
   to   { opacity: 1; transform: translateX(0); }
 }
 
 .onb-doc-row {
   display: flex; align-items: center; gap: 0.7rem;
-  padding: 0.6rem 0.8rem; border: 1px solid #e3e6ec; border-radius: 8px;
+  padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 8px;
   margin-bottom: 0.5rem; background: var(--surface-2);
-  animation: onbFadeUp 0.3s ease;
+  animation: onbFadeUp 0.25s ease;
+}
+.onb-doc-name {
+  font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.onb-doc-meta {
+  font-size: 0.8rem; color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.onb-doc-empty {
+  border: 1px dashed var(--line); border-radius: 8px; padding: 1.4rem 1rem;
+  text-align: center; color: var(--ink-3); font-size: 0.9rem;
 }
 @keyframes onbFadeUp {
   from { opacity: 0; transform: translateY(8px); }
@@ -574,18 +850,30 @@ tr.row-expanded td { background: var(--accent-soft) !important; }
 .onb-summary .onb-check-badge {
   width: 64px; height: 64px; border-radius: 50%; margin: 0 auto;
   display: flex; align-items: center; justify-content: center;
-  background: #1a9d5a; color: #fff; font-size: 2rem; font-weight: 800;
-  animation: onbPop 0.5s cubic-bezier(0.18, 1.4, 0.4, 1);
+  background: var(--ok); color: #fff; font-size: 2rem; font-weight: 800;
+  /* The overshoot lives in the keyframe (0 → 1.12 → 1), so the timing function
+     is a plain exponential ease-out. An overshooting curve here as well would
+     stack two bounces on one badge. */
+  animation: onbPop 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 @keyframes onbPop {
   0% { transform: scale(0); opacity: 0; }
-  70% { transform: scale(1.15); }
+  70% { transform: scale(1.12); }
   100% { transform: scale(1); opacity: 1; }
 }
-.onb-summary > div > div > strong { display: block; font-size: 0.75rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.4px; }
+.onb-summary dt { font-size: 0.75rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.4px; }
+.onb-summary dd { margin: 0 0 0.9rem; }
+
+.onb-actions {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 0.8rem; margin-top: 1.2rem; flex-wrap: wrap;
+}
 
 @media (max-width: 640px) {
   .onb-step-desc { display: none; }
-  .onb-line { display: none; }
-  .onb-step-item { min-width: 64px; flex: 0 0 auto; }
+  .onb-step-item:not(:last-child)::after { display: none; }
+  .onb-step-item { min-width: 0; flex: 0 0 auto; }
+  .onb-step-item:not(.active) .onb-step-label { display: none; }
+  .onb-step-count { display: block; }
+  .onb-actions .btn { flex: 1; justify-content: center; }
 }

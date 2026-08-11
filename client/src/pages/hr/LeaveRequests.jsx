@@ -4,6 +4,7 @@ import {
   cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches, getLeaveBalance,
   bulkApproveLeaveRequests, bulkRejectLeaveRequests,
 } from '../../api';
+import { canApprove } from '../../roles';
 
 const STATUS_LABELS = {
   pending: 'Menunggu',
@@ -21,10 +22,7 @@ const STATUS_COLORS = {
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
-}
-const isManager = () => getUser()?.role === 'manager';
+const isManager = () => canApprove();
 
 function StatusChip({ status }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.cancelled;

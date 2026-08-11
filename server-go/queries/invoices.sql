@@ -26,7 +26,7 @@ ORDER BY i.date DESC, i.created_at DESC;
 -- name: GetInvoiceByID :one
 SELECT
     i.id, i.invoice_number, i.date, i.due_date, i.invoice_type,
-    i.payment_method, i.payment_status, i.amount_paid, i.reference_number,
+    i.payment_method, i.payment_status, i.amount_paid, i.payment_date, i.reference_number,
     i.photo_path, i.created_at, i.account_id,
     i.vendor_id, v.name AS vendor_name,
     i.warehouse_id, w.name AS warehouse_name,
@@ -100,9 +100,9 @@ DELETE FROM invoices WHERE id = $1;
 
 -- name: UpdateInvoicePayment :one
 UPDATE invoices
-SET amount_paid = $1, payment_status = $2, account_id = $3
-WHERE id = $4
-RETURNING id, invoice_number, amount_paid, payment_status;
+SET amount_paid = $1, payment_status = $2, account_id = $3, payment_date = $4
+WHERE id = $5
+RETURNING id, invoice_number, amount_paid, payment_status, payment_date;
 
 -- name: UpdateInvoicePhotoPath :exec
 UPDATE invoices SET photo_path = $1 WHERE id = $2;

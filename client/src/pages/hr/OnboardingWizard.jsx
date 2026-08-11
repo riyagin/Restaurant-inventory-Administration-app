@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   createEmployee, updateEmployee, getBranches, getPositions, createPosition,
@@ -8,12 +8,15 @@ import {
 const today = () => new Date().toISOString().slice(0, 10);
 
 const STEPS = [
-  { key: 'pribadi',    title: 'Data Pribadi',    icon: '👤', desc: 'Identitas & kontak' },
-  { key: 'kepegawaian', title: 'Kepegawaian',    icon: '💼', desc: 'Jabatan & status' },
-  { key: 'bank',       title: 'Rekening Bank',   icon: '🏦', desc: 'Info pembayaran' },
-  { key: 'dokumen',    title: 'Dokumen',         icon: '📎', desc: 'Unggah berkas' },
-  { key: 'selesai',    title: 'Selesai',         icon: '✅', desc: 'Ringkasan' },
+  { key: 'pribadi',     title: 'Data Pribadi',  icon: '👤', desc: 'Identitas & kontak' },
+  { key: 'kepegawaian', title: 'Kepegawaian',   icon: '💼', desc: 'Jabatan & status' },
+  { key: 'bank',        title: 'Rekening Bank', icon: '🏦', desc: 'Info pembayaran' },
+  { key: 'dokumen',     title: 'Dokumen',       icon: '📎', desc: 'Unggah berkas' },
+  { key: 'selesai',     title: 'Selesai',       icon: '✅', desc: 'Ringkasan' },
 ];
+
+const DOC_STEP = 3;
+const DONE_STEP = 4;
 
 const DOC_TYPES = [
   ['ktp', 'KTP'], ['kk', 'Kartu Keluarga'], ['ijazah', 'Ijazah'],
@@ -22,6 +25,7 @@ const DOC_TYPES = [
   ['pkwt', 'Kontrak PKWT (ditandatangani)'], ['pkwtt', 'Kontrak PKWTT (ditandatangani)'],
   ['foto', 'Pas Foto'], ['surat_lamaran', 'Surat Lamaran / CV'], ['other', 'Lainnya'],
 ];
+const docTypeLabel = (key) => DOC_TYPES.find((d) => d[0] === key)?.[1] || key;
 
 const emptyEmp = {
   employee_code: '', full_name: '', national_id: '', dob: '',
@@ -31,20 +35,35 @@ const emptyEmp = {
   bank_name: '', bank_account_number: '', bank_account_holder: '',
 };
 
-function Field({ label, children, full }) {
+const MAX_UPLOAD_MB = 25;
+
+function Field({ label, hint, children, full }) {
   return (
     <div className="form-group" style={full ? { gridColumn: '1 / -1' } : undefined}>
       <label>{label}</label>
       {children}
+      {hint && <div style={{ fontSize: '0.78rem', color: 'var(--ink-3)', marginTop: 4 }}>{hint}</div>}
     </div>
   );
 }
 
-const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' };
+function Summary({ label, value }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value || '—'}</dd>
+    </div>
+  );
+}
+
+const grid = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0 1rem' };
+
+const formatBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 export default function OnboardingWizard() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState('next');
   const [emp, setEmp] = useState(emptyEmp);
   const [branches, setBranches] = useState([]);
   const [positions, setPositions] = useState([]);
@@ -58,6 +77,8 @@ export default function OnboardingWizard() {
   const [docs, setDocs] = useState([]);
   const [docForm, setDocForm] = useState({ doc_type: 'ktp', title: '', notes: '', file: null });
   const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+  const errorRef = useRef(null);
 
   const set = (k) => (e) => setEmp((s) => ({ ...s, [k]: e.target.value }));
 
@@ -65,6 +86,13 @@ export default function OnboardingWizard() {
     getBranches().then((r) => setBranches(r.data)).catch(() => {});
     getPositions().then((r) => setPositions(r.data)).catch(() => {});
   }, []);
+
+  // The error banner sits above a long panel; on a short viewport a validation
+  // message triggered from the footer button would otherwise land off-screen.
+  const fail = (msg) => {
+    setError(msg);
+    requestAnimationFrame(() => errorRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  };
 
   const addPosition = async () => {
     const name = newPos.trim();
@@ -75,8 +103,9 @@ export default function OnboardingWizard() {
       setEmp((s) => ({ ...s, position_id: r.data.id }));
       setNewPos('');
       setShowAddPos(false);
+      setError('');
     } catch (err) {
-      alert(err.response?.data?.error || 'Gagal menambah jabatan');
+      fail(err.response?.data?.error || 'Gagal menambah jabatan.');
     }
   };
 
@@ -93,113 +122,148 @@ export default function OnboardingWizard() {
   };
 
   // Persist the employee (create once, then update on subsequent passes) when
-  // leaving the Bank step, so the Documents step has an employee id to attach to.
+  // leaving the Bank step, so the Documents step has an employee id to attach
+  // to. Returns the id — reading empId straight after setEmpId would still see
+  // the previous render's value.
   const saveEmployee = async () => {
     setSaving(true);
     setError('');
     try {
       if (empId) {
         await updateEmployee(empId, emp);
-      } else {
-        const r = await createEmployee(emp);
-        setEmpId(r.data.id);
+        return empId;
       }
-      return true;
+      const r = await createEmployee(emp);
+      setEmpId(r.data.id);
+      // Pick up server-assigned fields, notably the generated employee code.
+      setEmp((s) => ({ ...s, employee_code: r.data.employee_code || s.employee_code }));
+      return r.data.id;
     } catch (err) {
-      setError(err.response?.data?.error || 'Gagal menyimpan data karyawan.');
-      return false;
+      fail(err.response?.data?.error || 'Gagal menyimpan data karyawan.');
+      return null;
     } finally {
       setSaving(false);
     }
   };
 
-  const next = async () => {
-    const v = validateStep();
-    if (v) { setError(v); return; }
-    setError('');
-    if (step === 2) {
-      const ok = await saveEmployee();
-      if (!ok) return;
-      if (empId) {
-        getEmployeeDocuments(empId).then((r) => setDocs(r.data)).catch(() => {});
-      }
-    }
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  const goTo = (target) => {
+    setDirection(target < step ? 'back' : 'next');
+    setStep(target);
   };
 
-  const back = () => { setError(''); setStep((s) => Math.max(s - 1, 0)); };
+  const next = async () => {
+    const v = validateStep();
+    if (v) { fail(v); return; }
+    setError('');
+    if (step === DOC_STEP - 1) {
+      const id = await saveEmployee();
+      if (!id) return;
+      getEmployeeDocuments(id).then((r) => setDocs(r.data)).catch(() => {});
+    }
+    goTo(Math.min(step + 1, STEPS.length - 1));
+  };
+
+  const back = () => { setError(''); goTo(Math.max(step - 1, 0)); };
 
   const uploadDoc = async () => {
-    if (!docForm.file) { setError('Pilih file terlebih dahulu.'); return; }
-    if (!empId) { setError('Karyawan belum tersimpan.'); return; }
+    if (!docForm.file) { fail('Pilih berkas terlebih dahulu.'); return; }
+    if (docForm.file.size > MAX_UPLOAD_MB * 1048576) {
+      fail(`Ukuran berkas melebihi ${MAX_UPLOAD_MB} MB.`);
+      return;
+    }
+    if (!empId) { fail('Data karyawan belum tersimpan.'); return; }
     setUploading(true);
     setError('');
     try {
       const fd = new FormData();
       fd.append('file', docForm.file);
       fd.append('doc_type', docForm.doc_type);
-      fd.append('title', docForm.title || DOC_TYPES.find((d) => d[0] === docForm.doc_type)?.[1] || docForm.file.name);
+      fd.append('title', docForm.title.trim() || docTypeLabel(docForm.doc_type));
       fd.append('notes', docForm.notes);
       const r = await uploadEmployeeDocument(empId, fd);
       setDocs((d) => [r.data, ...d]);
       setDocForm({ doc_type: 'ktp', title: '', notes: '', file: null });
+      if (fileRef.current) fileRef.current.value = '';
     } catch (err) {
-      setError(err.response?.data?.error || 'Gagal mengunggah dokumen.');
+      fail(err.response?.data?.error || 'Gagal mengunggah dokumen.');
     } finally {
       setUploading(false);
     }
   };
 
-  const removeDoc = async (docId) => {
-    if (!confirm('Hapus dokumen ini?')) return;
+  const removeDoc = async (doc) => {
+    if (!confirm(`Hapus dokumen "${doc.title}"?`)) return;
     try {
-      await deleteEmployeeDocument(empId, docId);
-      setDocs((d) => d.filter((x) => x.id !== docId));
+      await deleteEmployeeDocument(empId, doc.id);
+      setDocs((d) => d.filter((x) => x.id !== doc.id));
     } catch {
-      alert('Gagal menghapus dokumen');
+      fail('Gagal menghapus dokumen.');
     }
   };
 
-  const posName = positions.find((p) => p.id === emp.position_id)?.name || '—';
-  const brName = branches.find((b) => b.id === emp.branch_id)?.name || '—';
+  // Leaving mid-flow before the employee is saved loses everything typed so far.
+  const exit = () => {
+    const dirty = !empId && (emp.full_name.trim() || emp.national_id.trim() || emp.phone.trim());
+    if (dirty && !confirm('Keluar dari onboarding? Data yang sudah diisi akan hilang.')) return;
+    navigate('/hr/employees');
+  };
+
+  const posName = positions.find((p) => p.id === emp.position_id)?.name || '';
+  const brName = branches.find((b) => b.id === emp.branch_id)?.name || '';
+  const stepInfo = STEPS[step];
 
   return (
     <>
       <div className="page-header">
         <h1>Onboarding Karyawan Baru</h1>
-        <button className="btn btn-secondary" onClick={() => navigate('/hr/employees')}>Keluar</button>
+        <button className="btn btn-secondary" onClick={exit}>Keluar</button>
       </div>
 
-      {/* Stepper */}
-      <div className="onb-stepper">
+      <p className="onb-step-count">Langkah {step + 1} dari {STEPS.length}</p>
+
+      {/* Stepper. Completed steps are clickable so a correction doesn't require
+          walking the whole flow backwards. */}
+      <ol className="onb-stepper">
         {STEPS.map((s, i) => {
           const state = i < step ? 'done' : i === step ? 'active' : 'todo';
+          const reachable = i < step && step !== DONE_STEP;
           return (
-            <div key={s.key} className={`onb-step-item ${state}`}>
-              <div className="onb-dot">{i < step ? '✓' : s.icon}</div>
-              <div className="onb-step-label">
-                <span className="onb-step-title">{s.title}</span>
-                <span className="onb-step-desc">{s.desc}</span>
-              </div>
-              {i < STEPS.length - 1 && <div className={`onb-line ${i < step ? 'filled' : ''}`} />}
-            </div>
+            <li key={s.key} className={`onb-step-item ${state}`}>
+              <button
+                type="button"
+                className="onb-step-btn"
+                aria-disabled={!reachable}
+                aria-current={i === step ? 'step' : undefined}
+                onClick={reachable ? () => goTo(i) : undefined}
+              >
+                <span className="onb-dot" aria-hidden="true">{i < step ? '✓' : s.icon}</span>
+                <span className="onb-step-label">
+                  <span className="onb-step-title">{s.title}</span>
+                  <span className="onb-step-desc">{s.desc}</span>
+                </span>
+              </button>
+            </li>
           );
         })}
+      </ol>
+
+      <div ref={errorRef} aria-live="polite">
+        {error && <div className="error-msg" style={{ margin: '1rem 0' }}>{error}</div>}
       </div>
 
-      {error && <div className="error-msg" style={{ margin: '1rem 0' }}>{error}</div>}
-
-      {/* Animated step panel; key remounts to replay the slide-in animation. */}
-      <div key={step} className="onb-panel card">
-        <div className="card-header"><h2>{STEPS[step].icon} {STEPS[step].title}</h2></div>
+      {/* key remounts the panel so the slide-in replays on each step change. */}
+      <div key={step} className={`onb-panel card${direction === 'back' ? ' back' : ''}`}>
+        <div className="card-header"><h2>{stepInfo.icon} {stepInfo.title}</h2></div>
 
         {step === 0 && (
           <div style={grid}>
-            <Field label="Kode Karyawan"><input value={emp.employee_code} onChange={set('employee_code')} placeholder="Otomatis (mis. EMP-0001)" /></Field>
-            <Field label="Nama Lengkap *"><input value={emp.full_name} onChange={set('full_name')} /></Field>
-            <Field label="NIK / KTP"><input value={emp.national_id} onChange={set('national_id')} /></Field>
+            <Field label="Nama Lengkap *"><input value={emp.full_name} onChange={set('full_name')} autoFocus /></Field>
+            <Field label="Kode Karyawan" hint="Kosongkan untuk penomoran otomatis.">
+              <input value={emp.employee_code} onChange={set('employee_code')} placeholder="mis. EMP-0001" />
+            </Field>
+            <Field label="NIK / KTP"><input value={emp.national_id} onChange={set('national_id')} inputMode="numeric" /></Field>
             <Field label="Tanggal Lahir"><input type="date" value={emp.dob} onChange={set('dob')} /></Field>
-            <Field label="Telepon"><input value={emp.phone} onChange={set('phone')} /></Field>
+            <Field label="Telepon"><input value={emp.phone} onChange={set('phone')} inputMode="tel" placeholder="08…" /></Field>
             <Field label="Email"><input type="email" value={emp.email} onChange={set('email')} /></Field>
             <Field label="Alamat" full><textarea value={emp.address} onChange={set('address')} /></Field>
           </div>
@@ -213,11 +277,16 @@ export default function OnboardingWizard() {
                   <option value="">Pilih jabatan</option>
                   {positions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowAddPos((v) => !v)}>+ Baru</button>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowAddPos((v) => !v)}
+                  aria-expanded={showAddPos}>
+                  {showAddPos ? 'Batal' : '+ Baru'}
+                </button>
               </div>
               {showAddPos && (
                 <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
-                  <input value={newPos} onChange={(e) => setNewPos(e.target.value)} placeholder="Nama jabatan baru" style={{ flex: 1 }} />
+                  <input value={newPos} onChange={(e) => setNewPos(e.target.value)} placeholder="Nama jabatan baru"
+                    style={{ flex: 1 }} autoFocus
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPosition(); } }} />
                   <button type="button" className="btn btn-primary btn-sm" onClick={addPosition}>Simpan</button>
                 </div>
               )}
@@ -251,82 +320,103 @@ export default function OnboardingWizard() {
         )}
 
         {step === 2 && (
-          <div style={grid}>
-            <Field label="Nama Bank"><input value={emp.bank_name} onChange={set('bank_name')} placeholder="mis. BCA / Mandiri" /></Field>
-            <Field label="Nomor Rekening"><input value={emp.bank_account_number} onChange={set('bank_account_number')} /></Field>
-            <Field label="Nama Pemilik Rekening"><input value={emp.bank_account_holder} onChange={set('bank_account_holder')} /></Field>
-            <p style={{ gridColumn: '1 / -1', color: 'var(--ink-3)', fontSize: '0.85rem', margin: 0 }}>
-              Setelah langkah ini, data karyawan akan disimpan sehingga Anda dapat mengunggah dokumen yang telah ditandatangani.
+          <>
+            <div style={grid}>
+              <Field label="Nama Bank"><input value={emp.bank_name} onChange={set('bank_name')} placeholder="mis. BCA / Mandiri" /></Field>
+              <Field label="Nomor Rekening"><input value={emp.bank_account_number} onChange={set('bank_account_number')} inputMode="numeric" /></Field>
+              <Field label="Nama Pemilik Rekening" hint="Isi bila berbeda dengan nama karyawan.">
+                <input value={emp.bank_account_holder} onChange={set('bank_account_holder')} placeholder={emp.full_name} />
+              </Field>
+            </div>
+            <p style={{ color: 'var(--ink-3)', fontSize: '0.85rem', margin: '0.4rem 0 0' }}>
+              Menekan “Simpan &amp; Lanjut” akan menyimpan data karyawan, sehingga dokumen yang telah ditandatangani dapat diunggah.
             </p>
-          </div>
+          </>
         )}
 
-        {step === 3 && (
+        {step === DOC_STEP && (
           <div>
-            <div style={{ ...grid, alignItems: 'end' }}>
+            <div style={{ ...grid, gap: '0 1rem' }}>
               <Field label="Jenis Dokumen">
                 <select value={docForm.doc_type} onChange={(e) => setDocForm((s) => ({ ...s, doc_type: e.target.value }))}>
                   {DOC_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
               </Field>
-              <Field label="Judul (opsional)"><input value={docForm.title} onChange={(e) => setDocForm((s) => ({ ...s, title: e.target.value }))} /></Field>
-              <Field label="Berkas (pdf, jpg, png, docx)">
-                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={(e) => setDocForm((s) => ({ ...s, file: e.target.files?.[0] || null }))} />
+              <Field label="Judul" hint={`Kosongkan untuk memakai “${docTypeLabel(docForm.doc_type)}”.`}>
+                <input value={docForm.title} onChange={(e) => setDocForm((s) => ({ ...s, title: e.target.value }))} />
               </Field>
-              <Field label="Catatan (opsional)"><input value={docForm.notes} onChange={(e) => setDocForm((s) => ({ ...s, notes: e.target.value }))} /></Field>
-              <div className="form-group">
-                <button className="btn btn-primary" disabled={uploading} onClick={uploadDoc}>{uploading ? 'Mengunggah…' : '⬆ Unggah'}</button>
-              </div>
+              <Field label="Berkas" hint={`PDF, JPG, PNG, atau DOCX. Maksimal ${MAX_UPLOAD_MB} MB.`}>
+                <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                  onChange={(e) => setDocForm((s) => ({ ...s, file: e.target.files?.[0] || null }))} />
+              </Field>
+              <Field label="Catatan"><input value={docForm.notes} onChange={(e) => setDocForm((s) => ({ ...s, notes: e.target.value }))} /></Field>
             </div>
+            <button className="btn btn-primary" disabled={uploading || !docForm.file} onClick={uploadDoc}>
+              {uploading ? 'Mengunggah…' : '⬆ Unggah Dokumen'}
+            </button>
 
-            <div style={{ marginTop: '1rem' }}>
+            <div style={{ marginTop: '1.4rem' }}>
               <h3 style={{ fontSize: '0.95rem', marginBottom: '0.6rem' }}>Dokumen Terunggah ({docs.length})</h3>
-              {docs.length === 0 && <p style={{ color: 'var(--ink-3)', fontSize: '0.9rem' }}>Belum ada dokumen. Unggah KTP, ijazah, kontrak yang ditandatangani, dan berkas lainnya.</p>}
-              {docs.map((d) => (
+              {docs.length === 0 ? (
+                <p className="onb-doc-empty">
+                  Belum ada dokumen. Unggah KTP, ijazah, kontrak yang telah ditandatangani, dan berkas lainnya.
+                  Langkah ini boleh dilewati dan dilengkapi nanti dari halaman karyawan.
+                </p>
+              ) : docs.map((d) => (
                 <div key={d.id} className="onb-doc-row">
-                  <span style={{ fontSize: '1.2rem' }}>📄</span>
+                  <span aria-hidden="true" style={{ fontSize: '1.2rem' }}>📄</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600 }}>{d.title}</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--ink-3)' }}>{d.doc_type} · {d.original_name}</div>
+                    <div className="onb-doc-name">{d.title}</div>
+                    <div className="onb-doc-meta">
+                      {docTypeLabel(d.doc_type)} · {d.original_name}{d.size_bytes ? ` · ${formatBytes(d.size_bytes)}` : ''}
+                    </div>
                   </div>
-                  <button className="btn btn-secondary btn-sm" onClick={() => removeDoc(d.id)}>Hapus</button>
+                  <button className="btn btn-secondary btn-sm" onClick={() => removeDoc(d)}
+                    aria-label={`Hapus dokumen ${d.title}`}>Hapus</button>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {step === 4 && (
+        {step === DONE_STEP && (
           <div className="onb-summary">
-            <div style={{ textAlign: 'center', padding: '0.6rem 0 1rem' }}>
-              <div className="onb-check-badge">✓</div>
-              <h2 style={{ margin: '0.6rem 0 0.2rem' }}>{emp.full_name} berhasil di-onboarding!</h2>
-              <p style={{ color: 'var(--ink-3)', margin: 0 }}>Data karyawan dan {docs.length} dokumen telah tersimpan.</p>
+            <div style={{ textAlign: 'center', padding: '0.6rem 0 1.4rem' }}>
+              <div className="onb-check-badge" aria-hidden="true">✓</div>
+              <h2 style={{ margin: '0.6rem 0 0.2rem' }}>{emp.full_name} berhasil di-onboarding</h2>
+              <p style={{ color: 'var(--ink-3)', margin: 0 }}>
+                Data karyawan dan {docs.length} dokumen telah tersimpan.
+              </p>
             </div>
-            <div style={grid}>
-              <div><strong>Jabatan</strong><div>{posName}</div></div>
-              <div><strong>Cabang</strong><div>{brName}</div></div>
-              <div><strong>Tipe</strong><div>{emp.employment_type === 'contract' ? 'Kontrak (PKWT)' : 'Tetap (PKWTT)'}</div></div>
-              <div><strong>Tgl. Bergabung</strong><div>{emp.join_date}</div></div>
-              <div><strong>Dokumen</strong><div>{docs.length} berkas</div></div>
-            </div>
+            <dl style={grid}>
+              <Summary label="Kode Karyawan" value={emp.employee_code} />
+              <Summary label="Jabatan" value={posName} />
+              <Summary label="Cabang" value={brName} />
+              <Summary label="Tipe" value={emp.employment_type === 'contract' ? 'Kontrak (PKWT)' : 'Tetap (PKWTT)'} />
+              <Summary label="Tgl. Bergabung" value={emp.join_date} />
+              <Summary label="Dokumen" value={`${docs.length} berkas`} />
+            </dl>
           </div>
         )}
       </div>
 
-      {/* Nav bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1.2rem', gap: '0.8rem' }}>
-        <button className="btn btn-secondary" onClick={back} disabled={step === 0 || saving}>← Kembali</button>
-        {step < 3 && (
+      <div className="onb-actions">
+        {step > 0 && step < DONE_STEP
+          ? <button className="btn btn-secondary" onClick={back} disabled={saving}>← Kembali</button>
+          : <span />}
+
+        {step < DOC_STEP && (
           <button className="btn btn-primary" onClick={next} disabled={saving}>
-            {saving ? 'Menyimpan…' : (step === 2 ? 'Simpan & Lanjut →' : 'Lanjut →')}
+            {saving ? 'Menyimpan…' : (step === DOC_STEP - 1 ? 'Simpan & Lanjut →' : 'Lanjut →')}
           </button>
         )}
-        {step === 3 && (
-          <button className="btn btn-primary" onClick={() => setStep(4)}>Selesai →</button>
+        {step === DOC_STEP && (
+          <button className="btn btn-primary" onClick={() => goTo(DONE_STEP)}>
+            {docs.length === 0 ? 'Lewati & Selesai →' : 'Selesai →'}
+          </button>
         )}
-        {step === 4 && (
-          <div style={{ display: 'flex', gap: '0.6rem' }}>
+        {step === DONE_STEP && (
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" onClick={() => navigate('/hr/employees')}>Ke Daftar Karyawan</button>
             <button className="btn btn-primary" onClick={() => navigate(`/hr/employees/${empId}`)}>Lihat Karyawan</button>
           </div>

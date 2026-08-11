@@ -132,7 +132,7 @@ func (q *Queries) DeleteInvoiceItems(ctx context.Context, invoiceID pgtype.UUID)
 const getInvoiceByID = `-- name: GetInvoiceByID :one
 SELECT
     i.id, i.invoice_number, i.date, i.due_date, i.invoice_type,
-    i.payment_method, i.payment_status, i.amount_paid, i.reference_number,
+    i.payment_method, i.payment_status, i.amount_paid, i.payment_date, i.reference_number,
     i.photo_path, i.created_at, i.account_id,
     i.vendor_id, v.name AS vendor_name,
     i.warehouse_id, w.name AS warehouse_name,
@@ -158,6 +158,7 @@ type GetInvoiceByIDRow struct {
 	PaymentMethod       pgtype.Text        `json:"payment_method"`
 	PaymentStatus       string             `json:"payment_status"`
 	AmountPaid          int64              `json:"amount_paid"`
+	PaymentDate         pgtype.Date        `json:"payment_date"`
 	ReferenceNumber     pgtype.Text        `json:"reference_number"`
 	PhotoPath           pgtype.Text        `json:"photo_path"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
@@ -187,6 +188,7 @@ func (q *Queries) GetInvoiceByID(ctx context.Context, id pgtype.UUID) (*GetInvoi
 		&i.PaymentMethod,
 		&i.PaymentStatus,
 		&i.AmountPaid,
+		&i.PaymentDate,
 		&i.ReferenceNumber,
 		&i.PhotoPath,
 		&i.CreatedAt,
@@ -491,15 +493,16 @@ func (q *Queries) UpdateInvoice(ctx context.Context, arg *UpdateInvoiceParams) (
 
 const updateInvoicePayment = `-- name: UpdateInvoicePayment :one
 UPDATE invoices
-SET amount_paid = $1, payment_status = $2, account_id = $3
-WHERE id = $4
-RETURNING id, invoice_number, amount_paid, payment_status
+SET amount_paid = $1, payment_status = $2, account_id = $3, payment_date = $4
+WHERE id = $5
+RETURNING id, invoice_number, amount_paid, payment_status, payment_date
 `
 
 type UpdateInvoicePaymentParams struct {
 	AmountPaid    int64       `json:"amount_paid"`
 	PaymentStatus string      `json:"payment_status"`
 	AccountID     pgtype.UUID `json:"account_id"`
+	PaymentDate   pgtype.Date `json:"payment_date"`
 	ID            pgtype.UUID `json:"id"`
 }
 
@@ -508,6 +511,7 @@ type UpdateInvoicePaymentRow struct {
 	InvoiceNumber string      `json:"invoice_number"`
 	AmountPaid    int64       `json:"amount_paid"`
 	PaymentStatus string      `json:"payment_status"`
+	PaymentDate   pgtype.Date `json:"payment_date"`
 }
 
 func (q *Queries) UpdateInvoicePayment(ctx context.Context, arg *UpdateInvoicePaymentParams) (*UpdateInvoicePaymentRow, error) {
@@ -515,6 +519,7 @@ func (q *Queries) UpdateInvoicePayment(ctx context.Context, arg *UpdateInvoicePa
 		arg.AmountPaid,
 		arg.PaymentStatus,
 		arg.AccountID,
+		arg.PaymentDate,
 		arg.ID,
 	)
 	var i UpdateInvoicePaymentRow
@@ -523,6 +528,7 @@ func (q *Queries) UpdateInvoicePayment(ctx context.Context, arg *UpdateInvoicePa
 		&i.InvoiceNumber,
 		&i.AmountPaid,
 		&i.PaymentStatus,
+		&i.PaymentDate,
 	)
 	return &i, err
 }

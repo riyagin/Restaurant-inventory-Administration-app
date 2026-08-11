@@ -319,7 +319,14 @@ func (h *PayslipHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Singleton row missing (e.g. deleted). Return defaults instead of 500 so
 		// the settings page loads; UpdateSettings will re-create the row on save.
-		respondJSON(w, http.StatusOK, &db.HrSetting{ID: 1, AbsenceGraceDays: 4})
+		respondJSON(w, http.StatusOK, &db.HrSetting{
+			ID:                 1,
+			AbsenceGraceDays:   4,
+			SignatoryPosition:  "Direktur",
+			DocNumberFormat:    service.DefaultDocNumberFormat,
+			DocNumberCounter:   1,
+			DocProbationMonths: 3,
+		})
 		return
 	}
 	if err != nil {
@@ -334,6 +341,21 @@ type hrSettingsBody struct {
 	Address          string `json:"address"`
 	PayslipFooter    string `json:"payslip_footer"`
 	AbsenceGraceDays *int32 `json:"absence_grace_days"`
+
+	// Defaults for generated HR documents. All optional: a nil pointer keeps the
+	// stored value, so a client that only knows about the payslip fields (or only
+	// about the document fields) can PUT its own subset without clearing the rest.
+	CompanyPhone        *string `json:"company_phone"`
+	CompanyEmail        *string `json:"company_email"`
+	CompanyCity         *string `json:"company_city"`
+	SignatoryName       *string `json:"signatory_name"`
+	SignatoryPosition   *string `json:"signatory_position"`
+	SignatoryNationalID *string `json:"signatory_national_id"`
+	DocNumberFormat     *string `json:"doc_number_format"`
+	DocNumberCounter    *int32  `json:"doc_number_counter"`
+	DocWorkingHours     *string `json:"doc_working_hours"`
+	DocPaymentInfo      *string `json:"doc_payment_info"`
+	DocProbationMonths  *int32  `json:"doc_probation_months"`
 }
 
 // UpdateSettings — PUT /api/hr/settings
@@ -344,27 +366,79 @@ func (h *PayslipHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// absence_grace_days is optional in the request; when omitted keep the stored
-	// value (or the schema default of 4 when no row exists yet). When present it
-	// must be >= 0.
-	grace := int32(4)
-	if current, err := h.queries.GetHRSettings(r.Context()); err == nil && current != nil {
-		grace = current.AbsenceGraceDays
+	// Start from whatever is stored (or the schema defaults when no row exists
+	// yet) so every optional field left out of the request survives the write.
+	params := db.UpdateHRSettingsParams{
+		AbsenceGraceDays:   4,
+		SignatoryPosition:  "Direktur",
+		DocNumberFormat:    service.DefaultDocNumberFormat,
+		DocNumberCounter:   1,
+		DocProbationMonths: 3,
 	}
+	if current, err := h.queries.GetHRSettings(r.Context()); err == nil && current != nil {
+		params = db.UpdateHRSettingsParams{
+			AbsenceGraceDays:    current.AbsenceGraceDays,
+			CompanyPhone:        current.CompanyPhone,
+			CompanyEmail:        current.CompanyEmail,
+			CompanyCity:         current.CompanyCity,
+			SignatoryName:       current.SignatoryName,
+			SignatoryPosition:   current.SignatoryPosition,
+			SignatoryNationalID: current.SignatoryNationalID,
+			DocNumberFormat:     current.DocNumberFormat,
+			DocNumberCounter:    current.DocNumberCounter,
+			DocWorkingHours:     current.DocWorkingHours,
+			DocPaymentInfo:      current.DocPaymentInfo,
+			DocProbationMonths:  current.DocProbationMonths,
+		}
+	}
+
+	params.CompanyName = strings.TrimSpace(body.CompanyName)
+	params.Address = strings.TrimSpace(body.Address)
+	params.PayslipFooter = strings.TrimSpace(body.PayslipFooter)
+
 	if body.AbsenceGraceDays != nil {
 		if *body.AbsenceGraceDays < 0 {
 			respondError(w, http.StatusBadRequest, "toleransi absen tidak boleh negatif")
 			return
 		}
-		grace = *body.AbsenceGraceDays
+		params.AbsenceGraceDays = *body.AbsenceGraceDays
 	}
 
-	settings, err := h.queries.UpdateHRSettings(r.Context(), &db.UpdateHRSettingsParams{
-		CompanyName:      strings.TrimSpace(body.CompanyName),
-		Address:          strings.TrimSpace(body.Address),
-		PayslipFooter:    strings.TrimSpace(body.PayslipFooter),
-		AbsenceGraceDays: grace,
-	})
+	assignText := func(dst *string, src *string) {
+		if src != nil {
+			*dst = strings.TrimSpace(*src)
+		}
+	}
+	assignText(&params.CompanyPhone, body.CompanyPhone)
+	assignText(&params.CompanyEmail, body.CompanyEmail)
+	assignText(&params.CompanyCity, body.CompanyCity)
+	assignText(&params.SignatoryName, body.SignatoryName)
+	assignText(&params.SignatoryPosition, body.SignatoryPosition)
+	assignText(&params.SignatoryNationalID, body.SignatoryNationalID)
+	assignText(&params.DocNumberFormat, body.DocNumberFormat)
+	assignText(&params.DocWorkingHours, body.DocWorkingHours)
+	assignText(&params.DocPaymentInfo, body.DocPaymentInfo)
+
+	if params.DocNumberFormat == "" {
+		params.DocNumberFormat = service.DefaultDocNumberFormat
+	}
+
+	if body.DocNumberCounter != nil {
+		if *body.DocNumberCounter < 1 {
+			respondError(w, http.StatusBadRequest, "nomor urut dokumen minimal 1")
+			return
+		}
+		params.DocNumberCounter = *body.DocNumberCounter
+	}
+	if body.DocProbationMonths != nil {
+		if *body.DocProbationMonths < 0 || *body.DocProbationMonths > 3 {
+			respondError(w, http.StatusBadRequest, "masa percobaan maksimal 3 bulan")
+			return
+		}
+		params.DocProbationMonths = *body.DocProbationMonths
+	}
+
+	settings, err := h.queries.UpdateHRSettings(r.Context(), &params)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengaturan HR")
 		return

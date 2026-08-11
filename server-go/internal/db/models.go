@@ -75,11 +75,81 @@ type AttendanceRecord struct {
 }
 
 type Branch struct {
-	ID               pgtype.UUID        `json:"id"`
-	Name             string             `json:"name"`
-	RevenueAccountID pgtype.UUID        `json:"revenue_account_id"`
-	ExpenseAccountID pgtype.UUID        `json:"expense_account_id"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	ID                 pgtype.UUID        `json:"id"`
+	Name               string             `json:"name"`
+	RevenueAccountID   pgtype.UUID        `json:"revenue_account_id"`
+	ExpenseAccountID   pgtype.UUID        `json:"expense_account_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	PettyCashAccountID pgtype.UUID        `json:"petty_cash_account_id"`
+}
+
+type CashDeposit struct {
+	ID            pgtype.UUID        `json:"id"`
+	Number        string             `json:"number"`
+	Date          pgtype.Date        `json:"date"`
+	BranchID      pgtype.UUID        `json:"branch_id"`
+	MovementType  string             `json:"movement_type"`
+	FromAccountID pgtype.UUID        `json:"from_account_id"`
+	ToAccountID   pgtype.UUID        `json:"to_account_id"`
+	Amount        int64              `json:"amount"`
+	Reference     string             `json:"reference"`
+	HandedTo      string             `json:"handed_to"`
+	Notes         string             `json:"notes"`
+	PhotoPath     pgtype.Text        `json:"photo_path"`
+	Status        string             `json:"status"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CancelledBy   pgtype.UUID        `json:"cancelled_by"`
+	CancelledAt   pgtype.Timestamptz `json:"cancelled_at"`
+	CancelReason  string             `json:"cancel_reason"`
+}
+
+type DailyPurchase struct {
+	ID                 pgtype.UUID        `json:"id"`
+	Number             string             `json:"number"`
+	Date               pgtype.Date        `json:"date"`
+	BranchID           pgtype.UUID        `json:"branch_id"`
+	DivisionID         pgtype.UUID        `json:"division_id"`
+	WarehouseID        pgtype.UUID        `json:"warehouse_id"`
+	ExpenseCategoryID  pgtype.UUID        `json:"expense_category_id"`
+	PettyCashAccountID pgtype.UUID        `json:"petty_cash_account_id"`
+	VendorID           pgtype.UUID        `json:"vendor_id"`
+	TotalAmount        int64              `json:"total_amount"`
+	Notes              string             `json:"notes"`
+	PhotoPath          pgtype.Text        `json:"photo_path"`
+	Status             string             `json:"status"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	CancelledBy        pgtype.UUID        `json:"cancelled_by"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CancelReason       string             `json:"cancel_reason"`
+}
+
+type DailyPurchaseItem struct {
+	ID               pgtype.UUID    `json:"id"`
+	PurchaseID       pgtype.UUID    `json:"purchase_id"`
+	ItemID           pgtype.UUID    `json:"item_id"`
+	Description      string         `json:"description"`
+	Quantity         pgtype.Numeric `json:"quantity"`
+	UnitIndex        pgtype.Int4    `json:"unit_index"`
+	Price            int64          `json:"price"`
+	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+}
+
+type PettyCashCount struct {
+	ID              pgtype.UUID        `json:"id"`
+	BranchID        pgtype.UUID        `json:"branch_id"`
+	CountDate       pgtype.Date        `json:"count_date"`
+	OpeningAmount   int64              `json:"opening_amount"`
+	OpeningBy       pgtype.UUID        `json:"opening_by"`
+	OpeningAt       pgtype.Timestamptz `json:"opening_at"`
+	ClosingAmount   pgtype.Int8        `json:"closing_amount"`
+	ClosingBy       pgtype.UUID        `json:"closing_by"`
+	ClosingAt       pgtype.Timestamptz `json:"closing_at"`
+	ExpectedClosing pgtype.Int8        `json:"expected_closing"`
+	Variance        pgtype.Int8        `json:"variance"`
+	VarianceNote    string             `json:"variance_note"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type Dispatch struct {
@@ -220,6 +290,20 @@ type HrSetting struct {
 	PayslipFooter    string             `json:"payslip_footer"`
 	AbsenceGraceDays int32              `json:"absence_grace_days"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	// Company-level defaults for generated HR documents (PKWT/PKWTT/SP/
+	// Paklaring). Configured once in HR settings instead of being retyped on
+	// every letter — see migration 056.
+	CompanyPhone        string `json:"company_phone"`
+	CompanyEmail        string `json:"company_email"`
+	CompanyCity         string `json:"company_city"`
+	SignatoryName       string `json:"signatory_name"`
+	SignatoryPosition   string `json:"signatory_position"`
+	SignatoryNationalID string `json:"signatory_national_id"`
+	DocNumberFormat     string `json:"doc_number_format"`
+	DocNumberCounter    int32  `json:"doc_number_counter"`
+	DocWorkingHours     string `json:"doc_working_hours"`
+	DocPaymentInfo      string `json:"doc_payment_info"`
+	DocProbationMonths  int32  `json:"doc_probation_months"`
 }
 
 type Inventory struct {
@@ -241,6 +325,7 @@ type Invoice struct {
 	PaymentMethod     pgtype.Text        `json:"payment_method"`
 	PaymentStatus     string             `json:"payment_status"`
 	AmountPaid        int64              `json:"amount_paid"`
+	PaymentDate       pgtype.Date        `json:"payment_date"`
 	AccountID         pgtype.UUID        `json:"account_id"`
 	WarehouseID       pgtype.UUID        `json:"warehouse_id"`
 	BranchID          pgtype.UUID        `json:"branch_id"`
@@ -626,6 +711,18 @@ type Vendor struct {
 	ID        pgtype.UUID `json:"id"`
 	Name      string      `json:"name"`
 	AccountID pgtype.UUID `json:"account_id"`
+}
+
+type VendorBankAccount struct {
+	ID            pgtype.UUID        `json:"id"`
+	VendorID      pgtype.UUID        `json:"vendor_id"`
+	BankName      string             `json:"bank_name"`
+	AccountNumber string             `json:"account_number"`
+	AccountHolder string             `json:"account_holder"`
+	BankBranch    string             `json:"bank_branch"`
+	IsPrimary     bool               `json:"is_primary"`
+	Note          string             `json:"note"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 type WageComponent struct {

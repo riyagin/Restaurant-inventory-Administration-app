@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   getEmployee, createEmployee, updateEmployee,
   getBranches, getPositions, createPosition,
-  uploadEmployeePhoto, deleteEmployeePhoto,
+  uploadEmployeePhoto, deleteEmployeePhoto, getUsers,
 } from '../../api';
+import SearchSelect from '../../components/SearchSelect';
 
 const SERVER = 'http://localhost:5000';
 
@@ -14,6 +15,7 @@ const empty = {
   phone: '', email: '', address: '', national_id: '',
   bank_name: '', bank_account_number: '', bank_account_holder: '',
   status: 'active', employment_type: 'permanent', contract_end_date: '',
+  user_id: '',
 };
 
 const toDateInput = (d) => d ? new Date(d).toISOString().slice(0, 10) : '';
@@ -25,6 +27,7 @@ export default function EmployeeForm() {
 
   const [form, setForm]         = useState(empty);
   const [branches, setBranches] = useState([]);
+  const [users, setUsers] = useState([]);
   const [positions, setPositions] = useState([]);
   const [photoPath, setPhotoPath] = useState('');
   const [error, setError]       = useState('');
@@ -37,6 +40,7 @@ export default function EmployeeForm() {
   useEffect(() => {
     getBranches().then(r => setBranches(r.data)).catch(() => {});
     getPositions().then(r => setPositions(r.data)).catch(() => {});
+    getUsers().then(r => setUsers(r.data || [])).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -60,12 +64,18 @@ export default function EmployeeForm() {
         status: e.status || 'active',
         employment_type: e.employment_type || 'permanent',
         contract_end_date: toDateInput(e.contract_end_date),
+        user_id: e.user_id || '',
       });
       setPhotoPath(e.photo_path || '');
     }).catch(() => setError('Gagal memuat data karyawan'));
   }, [id, isEdit]);
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  const userOptions = useMemo(
+    () => users.map(u => ({ value: u.id, label: u.username, sub: u.role })),
+    [users],
+  );
 
   const handleAddPosition = async () => {
     const name = newPosName.trim();
@@ -234,6 +244,27 @@ export default function EmployeeForm() {
             <div className="form-group" style={{ gridColumn: '1 / -1' }}>
               <label>Alamat</label>
               <textarea value={form.address} onChange={set('address')} rows={2} />
+            </div>
+          </div>
+        </div>
+
+        {/* Linking an employee to a login is what makes per-person KPI
+            attribution possible — the daily-task board records the username who
+            did the work, and this is how that reaches an employee record. Most
+            employees never touch the system and stay unlinked. */}
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <div className="card-header"><h2>Akun Pengguna</h2></div>
+          <div className="form-group" style={{ maxWidth: 420 }}>
+            <label>Akun Login</label>
+            <SearchSelect
+              options={userOptions}
+              value={form.user_id}
+              onChange={(v) => setForm(f => ({ ...f, user_id: v }))}
+              placeholder="Cari username…"
+              emptyText="Akun tidak ditemukan"
+            />
+            <div style={{ fontSize: '0.78rem', color: 'var(--ink-3)', marginTop: 4 }}>
+              Opsional. Diperlukan agar tugas harian yang dikerjakan akun ini terhitung sebagai KPI karyawan.
             </div>
           </div>
         </div>

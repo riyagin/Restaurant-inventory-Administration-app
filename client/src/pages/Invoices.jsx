@@ -1,10 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions, getVendors } from '../api';
-
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-}
+import { isAdminRole } from '../roles';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -26,6 +23,13 @@ function StatusBadge({ status }) {
 
 const PAGE_SIZE = 25;
 const todayStr = new Date().toISOString().split('T')[0];
+// Today in the *browser's* zone. `todayStr` is UTC, which in WIB (UTC+7) is still
+// yesterday until 07:00 — fine for a rough overdue check, not for a date that
+// becomes the journal date of a payment.
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 
 // Order the picker top-to-bottom by how often you actually want them: the two
@@ -123,8 +127,7 @@ function StatusFilter({ hidden, onChange }) {
 }
 
 export default function Invoices() {
-  const currentUser = getUser();
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = isAdminRole();
 
   // The dashboard links here with ?status=unpaid — honour it as the initial filter.
   const [searchParams] = useSearchParams();
@@ -139,7 +142,7 @@ export default function Invoices() {
 
   const [accounts, setAccounts]           = useState([]);
   const [payTarget, setPayTarget]         = useState(null); // invoice being paid
-  const [payForm, setPayForm]             = useState({ cash_account_id: '', amount: '' });
+  const [payForm, setPayForm]             = useState({ cash_account_id: '', amount: '', payment_date: '' });
   const [paying, setPaying]               = useState(false);
   const [payError, setPayError]           = useState('');
 
@@ -206,7 +209,7 @@ export default function Invoices() {
     const invTotal = Number(inv.total_amount);
     const amountPaid = Number(inv.amount_paid ?? 0);
     setPayTarget(inv);
-    setPayForm({ cash_account_id: '', amount: String(invTotal - amountPaid) });
+    setPayForm({ cash_account_id: '', amount: String(invTotal - amountPaid), payment_date: localToday() });
     setPayError('');
   };
 
@@ -218,6 +221,7 @@ export default function Invoices() {
       await payInvoice(payTarget.id, {
         cash_account_id: payForm.cash_account_id,
         amount: Number(payForm.amount),
+        payment_date: payForm.payment_date,
       });
       setPayTarget(null);
       load();
@@ -374,7 +378,12 @@ export default function Invoices() {
                     </span>
                   )}
                 </td>
-                <td style={{whiteSpace:'nowrap'}}><StatusBadge status={inv.payment_status} /></td>
+                <td style={{whiteSpace:'nowrap'}}>
+                  <StatusBadge status={inv.payment_status} />
+                  {inv.payment_date && (inv.payment_status === 'paid' || inv.payment_status === 'partial') && (
+                    <span className="cell-sub">{fmtDate(inv.payment_date)}</span>
+                  )}
+                </td>
                 <td style={{whiteSpace:'nowrap'}}>
                   <div className="actions">
                     <Link to={`/invoices/view/${inv.id}`} className="btn btn-secondary btn-sm">Lihat</Link>
@@ -442,6 +451,17 @@ export default function Invoices() {
               </div>
               {payError && <div className="error-msg" style={{ marginBottom: '1rem' }}>{payError}</div>}
               <form onSubmit={handlePay}>
+                <div className="form-group">
+                  <label>Tanggal Pembayaran</label>
+                  <input
+                    type="date"
+                    value={payForm.payment_date}
+                    onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))}
+                    max={localToday()}
+                    required
+                  />
+                  <small className="form-hint">Tanggal uang benar-benar keluar — ini yang dicatat di jurnal, bukan hari input.</small>
+                </div>
                 <div className="form-group">
                   <label>Akun Kas / Bank</label>
                   <select

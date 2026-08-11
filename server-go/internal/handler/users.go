@@ -13,14 +13,22 @@ import (
 	"inventory-app/server-go/internal/middleware"
 )
 
-// validUserRoles enumerates the roles an admin may assign. store_manager is a
-// limited role scoped to HR attendance (record entry/correction) — see
-// middleware.RequireAttendanceAccess; it has no access to other modules.
+// validUserRoles enumerates the roles an admin may assign.
+//
+//   - superuser       — every capability, approvals included (middleware.hasRole
+//     bypasses each gate for it).
+//   - admin / manager — full access; only manager may approve requests.
+//   - staff           — same reach as admin except reports and the activity log.
+//   - hr              — confined to the HR module (middleware.RestrictHRRole).
+//   - store_manager   — scoped to HR attendance record entry/correction only,
+//     see middleware.RequireAttendanceAccess.
 var validUserRoles = map[string]bool{
-	"admin":         true,
-	"manager":       true,
-	"staff":         true,
-	"store_manager": true,
+	middleware.RoleSuperuser:    true,
+	middleware.RoleAdmin:        true,
+	middleware.RoleManager:      true,
+	middleware.RoleStaff:        true,
+	middleware.RoleHR:           true,
+	middleware.RoleStoreManager: true,
 }
 
 type UsersHandler struct {
@@ -59,7 +67,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validUserRoles[body.Role] {
-		respondError(w, http.StatusBadRequest, "role harus admin, manager, staff, atau store_manager")
+		respondError(w, http.StatusBadRequest, "role harus superuser, admin, manager, staff, hr, atau store_manager")
 		return
 	}
 
@@ -108,7 +116,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validUserRoles[body.Role] {
-		respondError(w, http.StatusBadRequest, "role harus admin, manager, staff, atau store_manager")
+		respondError(w, http.StatusBadRequest, "role harus superuser, admin, manager, staff, hr, atau store_manager")
 		return
 	}
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getActivityLog, deleteActivityLog, exportActivityLog } from '../api';
+import { isAdminRole } from '../roles';
 
 const ACTION_STYLE = {
   create:   { background: '#e6f9f0', color: '#27ae60' },
@@ -91,13 +92,8 @@ const ACTION_LABEL = {
 
 const PAGE_SIZE = 50;
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-}
-
 export default function ActivityLog() {
-  const currentUser = getUser();
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = isAdminRole();
 
   const [logs, setLogs]       = useState([]);
   const [total, setTotal]     = useState(0);

@@ -210,7 +210,7 @@ func (h *OvertimeHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // Delete — DELETE /api/hr/overtime/:id (admin only)
 func (h *OvertimeHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if middleware.RoleFromCtx(r.Context()) != "admin" {
+	if !middleware.HasRole(r.Context(), middleware.RoleAdmin) {
 		respondError(w, http.StatusForbidden, "hanya admin yang dapat menghapus permintaan lembur")
 		return
 	}

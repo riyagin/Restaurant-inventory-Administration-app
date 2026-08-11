@@ -42,19 +42,25 @@ func (q *Queries) CreateAccountForBranch(ctx context.Context, arg *CreateAccount
 }
 
 const createBranch = `-- name: CreateBranch :one
-INSERT INTO branches (id, name, revenue_account_id, expense_account_id)
-VALUES (gen_random_uuid(), $1, $2, $3)
-RETURNING id, name, revenue_account_id, expense_account_id, created_at
+INSERT INTO branches (id, name, revenue_account_id, expense_account_id, petty_cash_account_id)
+VALUES (gen_random_uuid(), $1, $2, $3, $4)
+RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id
 `
 
 type CreateBranchParams struct {
-	Name             string      `json:"name"`
-	RevenueAccountID pgtype.UUID `json:"revenue_account_id"`
-	ExpenseAccountID pgtype.UUID `json:"expense_account_id"`
+	Name               string      `json:"name"`
+	RevenueAccountID   pgtype.UUID `json:"revenue_account_id"`
+	ExpenseAccountID   pgtype.UUID `json:"expense_account_id"`
+	PettyCashAccountID pgtype.UUID `json:"petty_cash_account_id"`
 }
 
 func (q *Queries) CreateBranch(ctx context.Context, arg *CreateBranchParams) (*Branch, error) {
-	row := q.db.QueryRow(ctx, createBranch, arg.Name, arg.RevenueAccountID, arg.ExpenseAccountID)
+	row := q.db.QueryRow(ctx, createBranch,
+		arg.Name,
+		arg.RevenueAccountID,
+		arg.ExpenseAccountID,
+		arg.PettyCashAccountID,
+	)
 	var i Branch
 	err := row.Scan(
 		&i.ID,
@@ -62,8 +68,28 @@ func (q *Queries) CreateBranch(ctx context.Context, arg *CreateBranchParams) (*B
 		&i.RevenueAccountID,
 		&i.ExpenseAccountID,
 		&i.CreatedAt,
+		&i.PettyCashAccountID,
 	)
 	return &i, err
+}
+
+const createPettyCashAccountForBranch = `-- name: CreatePettyCashAccountForBranch :one
+INSERT INTO accounts (id, name, account_number, account_type, parent_id, balance, is_system)
+VALUES (gen_random_uuid(), $1, $2, 'asset', $3, 0, false)
+RETURNING id
+`
+
+type CreatePettyCashAccountForBranchParams struct {
+	Name          string      `json:"name"`
+	AccountNumber pgtype.Int4 `json:"account_number"`
+	ParentID      pgtype.UUID `json:"parent_id"`
+}
+
+func (q *Queries) CreatePettyCashAccountForBranch(ctx context.Context, arg *CreatePettyCashAccountForBranchParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createPettyCashAccountForBranch, arg.Name, arg.AccountNumber, arg.ParentID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const deleteBranch = `-- name: DeleteBranch :exec
@@ -79,21 +105,27 @@ const getBranchByID = `-- name: GetBranchByID :one
 SELECT
     b.id, b.name, b.created_at,
     b.revenue_account_id, ra.name AS revenue_account_name,
-    b.expense_account_id, ea.name AS expense_account_name
+    b.expense_account_id, ea.name AS expense_account_name,
+    b.petty_cash_account_id, pa.name AS petty_cash_account_name,
+    COALESCE(pa.balance, 0)::bigint AS petty_cash_balance
 FROM branches b
 LEFT JOIN accounts ra ON ra.id = b.revenue_account_id
 LEFT JOIN accounts ea ON ea.id = b.expense_account_id
+LEFT JOIN accounts pa ON pa.id = b.petty_cash_account_id
 WHERE b.id = $1
 `
 
 type GetBranchByIDRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	Name               string             `json:"name"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	RevenueAccountID   pgtype.UUID        `json:"revenue_account_id"`
-	RevenueAccountName pgtype.Text        `json:"revenue_account_name"`
-	ExpenseAccountID   pgtype.UUID        `json:"expense_account_id"`
-	ExpenseAccountName pgtype.Text        `json:"expense_account_name"`
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	RevenueAccountID     pgtype.UUID        `json:"revenue_account_id"`
+	RevenueAccountName   pgtype.Text        `json:"revenue_account_name"`
+	ExpenseAccountID     pgtype.UUID        `json:"expense_account_id"`
+	ExpenseAccountName   pgtype.Text        `json:"expense_account_name"`
+	PettyCashAccountID   pgtype.UUID        `json:"petty_cash_account_id"`
+	PettyCashAccountName pgtype.Text        `json:"petty_cash_account_name"`
+	PettyCashBalance     int64              `json:"petty_cash_balance"`
 }
 
 func (q *Queries) GetBranchByID(ctx context.Context, id pgtype.UUID) (*GetBranchByIDRow, error) {
@@ -107,8 +139,22 @@ func (q *Queries) GetBranchByID(ctx context.Context, id pgtype.UUID) (*GetBranch
 		&i.RevenueAccountName,
 		&i.ExpenseAccountID,
 		&i.ExpenseAccountName,
+		&i.PettyCashAccountID,
+		&i.PettyCashAccountName,
+		&i.PettyCashBalance,
 	)
 	return &i, err
+}
+
+const getBranchPettyCashAccountID = `-- name: GetBranchPettyCashAccountID :one
+SELECT petty_cash_account_id FROM branches WHERE id = $1
+`
+
+func (q *Queries) GetBranchPettyCashAccountID(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getBranchPettyCashAccountID, id)
+	var petty_cash_account_id pgtype.UUID
+	err := row.Scan(&petty_cash_account_id)
+	return petty_cash_account_id, err
 }
 
 const getBranchExpenseAccountID = `-- name: GetBranchExpenseAccountID :one
@@ -145,6 +191,18 @@ func (q *Queries) GetNextExpenseAccountNumber(ctx context.Context) (int32, error
 	return next_number, err
 }
 
+const getNextPettyCashAccountNumber = `-- name: GetNextPettyCashAccountNumber :one
+SELECT COALESCE(MAX(account_number), 11099) + 1 AS next_number
+FROM accounts WHERE account_number BETWEEN 11100 AND 11199
+`
+
+func (q *Queries) GetNextPettyCashAccountNumber(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, getNextPettyCashAccountNumber)
+	var next_number int32
+	err := row.Scan(&next_number)
+	return next_number, err
+}
+
 const getNextRevenueAccountNumber = `-- name: GetNextRevenueAccountNumber :one
 SELECT COALESCE(MAX(account_number), 39999) + 1 AS next_number
 FROM accounts WHERE account_number BETWEEN 40000 AND 49999
@@ -157,25 +215,76 @@ func (q *Queries) GetNextRevenueAccountNumber(ctx context.Context) (int32, error
 	return next_number, err
 }
 
+const listBranchPettyCash = `-- name: ListBranchPettyCash :many
+SELECT
+    b.id AS branch_id, b.name AS branch_name,
+    b.petty_cash_account_id,
+    pa.name AS account_name,
+    COALESCE(pa.balance, 0)::bigint AS balance
+FROM branches b
+LEFT JOIN accounts pa ON pa.id = b.petty_cash_account_id
+ORDER BY b.name
+`
+
+type ListBranchPettyCashRow struct {
+	BranchID           pgtype.UUID `json:"branch_id"`
+	BranchName         string      `json:"branch_name"`
+	PettyCashAccountID pgtype.UUID `json:"petty_cash_account_id"`
+	AccountName        pgtype.Text `json:"account_name"`
+	Balance            int64       `json:"balance"`
+}
+
+func (q *Queries) ListBranchPettyCash(ctx context.Context) ([]*ListBranchPettyCashRow, error) {
+	rows, err := q.db.Query(ctx, listBranchPettyCash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListBranchPettyCashRow
+	for rows.Next() {
+		var i ListBranchPettyCashRow
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.BranchName,
+			&i.PettyCashAccountID,
+			&i.AccountName,
+			&i.Balance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBranches = `-- name: ListBranches :many
 SELECT
     b.id, b.name, b.created_at,
     b.revenue_account_id, ra.name AS revenue_account_name,
-    b.expense_account_id, ea.name AS expense_account_name
+    b.expense_account_id, ea.name AS expense_account_name,
+    b.petty_cash_account_id, pa.name AS petty_cash_account_name,
+    COALESCE(pa.balance, 0)::bigint AS petty_cash_balance
 FROM branches b
 LEFT JOIN accounts ra ON ra.id = b.revenue_account_id
 LEFT JOIN accounts ea ON ea.id = b.expense_account_id
+LEFT JOIN accounts pa ON pa.id = b.petty_cash_account_id
 ORDER BY b.name
 `
 
 type ListBranchesRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	Name               string             `json:"name"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	RevenueAccountID   pgtype.UUID        `json:"revenue_account_id"`
-	RevenueAccountName pgtype.Text        `json:"revenue_account_name"`
-	ExpenseAccountID   pgtype.UUID        `json:"expense_account_id"`
-	ExpenseAccountName pgtype.Text        `json:"expense_account_name"`
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	RevenueAccountID     pgtype.UUID        `json:"revenue_account_id"`
+	RevenueAccountName   pgtype.Text        `json:"revenue_account_name"`
+	ExpenseAccountID     pgtype.UUID        `json:"expense_account_id"`
+	ExpenseAccountName   pgtype.Text        `json:"expense_account_name"`
+	PettyCashAccountID   pgtype.UUID        `json:"petty_cash_account_id"`
+	PettyCashAccountName pgtype.Text        `json:"petty_cash_account_name"`
+	PettyCashBalance     int64              `json:"petty_cash_balance"`
 }
 
 func (q *Queries) ListBranches(ctx context.Context) ([]*ListBranchesRow, error) {
@@ -195,6 +304,9 @@ func (q *Queries) ListBranches(ctx context.Context) ([]*ListBranchesRow, error) 
 			&i.RevenueAccountName,
 			&i.ExpenseAccountID,
 			&i.ExpenseAccountName,
+			&i.PettyCashAccountID,
+			&i.PettyCashAccountName,
+			&i.PettyCashBalance,
 		); err != nil {
 			return nil, err
 		}
@@ -206,9 +318,23 @@ func (q *Queries) ListBranches(ctx context.Context) ([]*ListBranchesRow, error) 
 	return items, nil
 }
 
+const setBranchPettyCashAccountID = `-- name: SetBranchPettyCashAccountID :exec
+UPDATE branches SET petty_cash_account_id = $1 WHERE id = $2
+`
+
+type SetBranchPettyCashAccountIDParams struct {
+	PettyCashAccountID pgtype.UUID `json:"petty_cash_account_id"`
+	ID                 pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetBranchPettyCashAccountID(ctx context.Context, arg *SetBranchPettyCashAccountIDParams) error {
+	_, err := q.db.Exec(ctx, setBranchPettyCashAccountID, arg.PettyCashAccountID, arg.ID)
+	return err
+}
+
 const updateBranch = `-- name: UpdateBranch :one
 UPDATE branches SET name = $1 WHERE id = $2
-RETURNING id, name, revenue_account_id, expense_account_id, created_at
+RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id
 `
 
 type UpdateBranchParams struct {
@@ -225,6 +351,7 @@ func (q *Queries) UpdateBranch(ctx context.Context, arg *UpdateBranchParams) (*B
 		&i.RevenueAccountID,
 		&i.ExpenseAccountID,
 		&i.CreatedAt,
+		&i.PettyCashAccountID,
 	)
 	return &i, err
 }

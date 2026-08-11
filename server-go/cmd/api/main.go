@@ -156,6 +156,10 @@ func main() {
 	stockOpnameHandler := handler.NewStockOpnameHandler(pool, queries)
 	invoicesHandler := handler.NewInvoicesHandler(pool, queries)
 	invoicesHandler.SetUploadsDir(cfg.UploadsDir)
+	dailyPurchasesHandler := handler.NewDailyPurchasesHandler(pool, queries)
+	dailyPurchasesHandler.SetUploadsDir(cfg.UploadsDir)
+	pettyCashHandler := handler.NewPettyCashHandler(pool, queries)
+	cashDepositsHandler := handler.NewCashDepositsHandler(pool, queries)
 	dispatchesHandler := handler.NewDispatchesHandler(pool, queries)
 	dispatchTemplatesHandler := handler.NewDispatchTemplatesHandler(pool, queries)
 	enumerationsHandler := handler.NewEnumerationsHandler(pool, queries)
@@ -168,6 +172,7 @@ func main() {
 	reportsHandler := handler.NewReportsHandler(pool, queries)
 	analyticsHandler := handler.NewAnalyticsHandler(pool, queries)
 	statsHandler := handler.NewStatsHandler(pool)
+	tasksHandler := handler.NewTasksHandler(pool, queries)
 	hrEmployeesHandler := handler.NewHREmployeesHandler(pool, queries)
 	hrEmployeesHandler.SetUploadsDir(cfg.UploadsDir)
 	hrWagesHandler := handler.NewHRWagesHandler(pool, queries)
@@ -234,6 +239,10 @@ func main() {
 	// Protected routes
 	r.Group(func(r chi.Router) {
 		r.Use(appmiddleware.Authenticate(queries, cfg.JWTSecret))
+		// The HR-only role is confined to /api/hr/* (plus the shared master data
+		// its screens read). Applied once here rather than per-route, because most
+		// routes below are deliberately open to every authenticated user.
+		r.Use(appmiddleware.RestrictHRRole)
 		r.Post("/api/auth/logout", authHandler.Logout)
 
 		// Users — all authenticated
@@ -254,6 +263,12 @@ func main() {
 		r.Post("/api/vendors", vendorsHandler.Create)
 		r.Put("/api/vendors/{id}", vendorsHandler.Update)
 		r.Delete("/api/vendors/{id}", vendorsHandler.Delete)
+
+		// Vendor transfer accounts — a vendor may be paid to several numbers
+		r.Get("/api/vendors/{id}/bank-accounts", vendorsHandler.ListBankAccounts)
+		r.Post("/api/vendors/{id}/bank-accounts", vendorsHandler.CreateBankAccount)
+		r.Put("/api/vendors/{id}/bank-accounts/{bankId}", vendorsHandler.UpdateBankAccount)
+		r.Delete("/api/vendors/{id}/bank-accounts/{bankId}", vendorsHandler.DeleteBankAccount)
 
 		// Items — all authenticated
 		r.Get("/api/items", itemsHandler.List)
@@ -277,7 +292,7 @@ func main() {
 		// Owner capital deposits — the supported way to put money into the
 		// business, including cash carried over from a previous system. Admin
 		// only: it moves equity.
-		r.With(appmiddleware.RequireAdmin).Post("/api/accounts/capital-injection", accountsHandler.CapitalInjection)
+		r.With(appmiddleware.RequireCoreAccess).Post("/api/accounts/capital-injection", accountsHandler.CapitalInjection)
 
 		// Invoice Templates — all authenticated
 		r.Get("/api/invoice-templates", templatesHandler.List)
@@ -347,6 +362,37 @@ func main() {
 		r.Delete("/api/invoices/{id}/photo", invoicesHandler.DeletePhoto)
 		r.Delete("/api/invoices/{id}", invoicesHandler.Delete)
 
+		// Pembelanjaan Harian — recording a spend is the same reach as recording
+		// an invoice, so admin and staff both do it. Cancelling reverses stock and
+		// the ledger, which is an admin decision.
+		r.Get("/api/daily-purchases", dailyPurchasesHandler.List)
+		r.Get("/api/daily-purchases/{id}", dailyPurchasesHandler.Get)
+		r.Post("/api/daily-purchases", dailyPurchasesHandler.Create)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Post("/api/daily-purchases/{id}/cancel", dailyPurchasesHandler.Cancel)
+		})
+
+		// Petty cash — everyone can see the board (staff need to know what is in
+		// the box before they spend from it), but only admin records the counts.
+		r.Get("/api/petty-cash", pettyCashHandler.Day)
+		r.Get("/api/petty-cash/history", pettyCashHandler.History)
+		r.Get("/api/petty-cash/accounts", pettyCashHandler.Accounts)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Post("/api/petty-cash/opening", pettyCashHandler.RecordOpening)
+			r.Post("/api/petty-cash/closing", pettyCashHandler.RecordClosing)
+		})
+
+		// Setoran — moving cash between the box, the till and the owner's bank.
+		// Recording one moves real money, so it is admin-only on both ends.
+		r.Get("/api/cash-deposits", cashDepositsHandler.List)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Post("/api/cash-deposits", cashDepositsHandler.Create)
+			r.Post("/api/cash-deposits/{id}/cancel", cashDepositsHandler.Cancel)
+		})
+
 		// Dispatches — all authenticated
 		r.Get("/api/dispatches", dispatchesHandler.List)
 		r.Get("/api/dispatches/{id}", dispatchesHandler.Get)
@@ -388,10 +434,16 @@ func main() {
 		r.Get("/api/pos-import", posImportHandler.List)
 		r.Delete("/api/pos-import/{id}", posImportHandler.Delete)
 
-		// Activity Log & Account Adjustments — all authenticated
-		r.Get("/api/activity-log", activityLogHandler.List)
-		r.Get("/api/activity-log/export", activityLogHandler.Export)
-		r.Delete("/api/activity-log", activityLogHandler.DeleteOld)
+		// Activity Log — admin/manager. Staff runs the operation but does not get
+		// to read (or prune) the audit trail of who did what.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireReportsAccess)
+			r.Get("/api/activity-log", activityLogHandler.List)
+			r.Get("/api/activity-log/export", activityLogHandler.Export)
+			r.Delete("/api/activity-log", activityLogHandler.DeleteOld)
+		})
+
+		// Account Adjustments — all authenticated
 		r.Get("/api/account-adjustments", adjustmentsHandler.List)
 		r.Post("/api/account-adjustments", adjustmentsHandler.Create)
 		r.Post("/api/account-adjustments/transfer", adjustmentsHandler.Transfer)
@@ -402,9 +454,9 @@ func main() {
 		r.Get("/api/hr/employees/contract-alerts", hrEmployeesHandler.ContractAlerts)
 		r.Get("/api/hr/employees/{id}", hrEmployeesHandler.Get)
 		r.Get("/api/hr/positions", hrEmployeesHandler.ListPositions)
-		// Mutations require admin or manager.
+		// Mutations require HR access (admin, manager, staff, hr).
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Post("/api/hr/employees", hrEmployeesHandler.Create)
 			r.Put("/api/hr/employees/{id}", hrEmployeesHandler.Update)
 			r.Post("/api/hr/employees/{id}/transition-permanent", hrEmployeesHandler.TransitionToPermanent)
@@ -419,19 +471,27 @@ func main() {
 
 		// HR Documents — generation (PKWT/PKWTT/Surat Peringatan/Paklaring as
 		// DOCX/PDF) and the per-employee signed-document store used by onboarding.
-		// Admin/manager only.
+		// Company-level fields (letterhead, signatory, numbering) come from HR
+		// settings, not from the request.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Post("/api/hr/documents/generate", hrDocumentsHandler.Generate)
+			r.Get("/api/hr/documents/next-number", hrDocumentsHandler.PeekDocumentNumber)
+			// Reusable PKWT/PKWTT condition presets, applied to the generator form.
+			r.Get("/api/hr/contract-templates", hrDocumentsHandler.ListContractTemplates)
+			r.Post("/api/hr/contract-templates", hrDocumentsHandler.CreateContractTemplate)
+			r.Put("/api/hr/contract-templates/{id}", hrDocumentsHandler.UpdateContractTemplate)
+			r.Delete("/api/hr/contract-templates/{id}", hrDocumentsHandler.DeleteContractTemplate)
+			r.Post("/api/hr/documents/next-number", hrDocumentsHandler.ReserveDocumentNumber)
 			r.Get("/api/hr/employees/{id}/documents", hrDocumentsHandler.ListEmployeeDocuments)
 			r.Post("/api/hr/employees/{id}/documents", hrDocumentsHandler.UploadEmployeeDocument)
 			r.Get("/api/hr/employees/{id}/documents/{docId}/download", hrDocumentsHandler.DownloadEmployeeDocument)
 			r.Delete("/api/hr/employees/{id}/documents/{docId}", hrDocumentsHandler.DeleteEmployeeDocument)
 		})
 
-		// HR Wage module — admin/manager only (staff has NO access).
+		// HR Wage module.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			// Wage component catalog
 			r.Get("/api/hr/wage-components", hrWagesHandler.ListComponents)
 			r.Post("/api/hr/wage-components", hrWagesHandler.CreateComponent)
@@ -443,9 +503,9 @@ func main() {
 			r.Post("/api/hr/employees/{id}/wage", hrWagesHandler.CreateWageVersion)
 		})
 
-		// HR bulk import (employees + initial wage structures) — admin/manager only.
+		// HR bulk import (employees + initial wage structures).
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Get("/api/hr/import/template", hrImportHandler.Template)
 			r.Get("/api/hr/import/export", hrImportHandler.Export)
 			r.Post("/api/hr/import/parse", hrImportHandler.Parse)
@@ -467,9 +527,9 @@ func main() {
 			r.Post("/api/hr/attendance/{id}/present-no-punch", attendanceHandler.MarkPresentNoPunch)
 			r.Delete("/api/hr/attendance/{id}/present-no-punch", attendanceHandler.ClearPresentNoPunch)
 		})
-		// Attendance configuration & batch operations require admin/manager.
+		// Attendance configuration & batch operations require HR access.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Post("/api/hr/attendance/reconcile", attendanceHandler.Reconcile)
 			// Face enrollment coverage + device fleet health (web dashboard).
 			r.Get("/api/hr/attendance/face/overview", attendanceHandler.FaceOverview)
@@ -493,9 +553,9 @@ func main() {
 			r.Delete("/api/hr/attendance/devices/{id}", attendanceHandler.DeleteDevice)
 		})
 
-		// HR Performance scoring — admin/manager only.
+		// HR Performance scoring.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			// Policies (CRUD; delete deactivates when referenced)
 			r.Get("/api/hr/performance/policies", performanceHandler.ListPolicies)
 			r.Post("/api/hr/performance/policies", performanceHandler.CreatePolicy)
@@ -519,9 +579,9 @@ func main() {
 		// HR Leave management.
 		// Manpower planning viewable by all authenticated (including staff).
 		r.Get("/api/hr/manpower-planning", leaveHandler.GetManpowerPlanning)
-		// Most endpoints admin/manager; approval/rejection are manager-only.
+		// Most endpoints need HR access; approval/rejection are manager-only.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			// Leave types (CRUD; delete deactivates when referenced)
 			r.Get("/api/hr/leave-types", leaveHandler.ListLeaveTypes)
 			r.Post("/api/hr/leave-types", leaveHandler.CreateLeaveType)
@@ -548,9 +608,9 @@ func main() {
 		// HR Kasbon (cash advance) — list and detail viewable by all authenticated.
 		r.Get("/api/hr/kasbons", kasbonHandler.List)
 		r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
-		// Mutations require admin/manager.
+		// Mutations require HR access.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Post("/api/hr/kasbons", kasbonHandler.Create)
 			r.Put("/api/hr/kasbons/{id}", kasbonHandler.Update)
 			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
@@ -563,9 +623,9 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/reject", kasbonHandler.Reject)
 		})
 
-		// HR Overtime requests — read/create/cancel: admin/manager.
+		// HR Overtime requests — read/create/cancel: HR access.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Get("/api/hr/overtime", overtimeHandler.List)
 			r.Post("/api/hr/overtime", overtimeHandler.Create)
 			r.Post("/api/hr/overtime/{id}/cancel", overtimeHandler.Cancel)
@@ -578,9 +638,9 @@ func main() {
 			r.Post("/api/hr/overtime/{id}/reject", overtimeHandler.Reject)
 		})
 
-		// HR Payroll (penggajian) — admin/manager only.
+		// HR Payroll (penggajian).
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdminOrManager)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Get("/api/hr/payroll/periods", payrollHandler.ListPeriods)
 			r.Post("/api/hr/payroll/periods", payrollHandler.CreatePeriod)
 			r.Get("/api/hr/payroll/periods/{id}", payrollHandler.GetPeriod)
@@ -617,27 +677,61 @@ func main() {
 			r.Get("/api/hr/thr/lines/{id}/payslip", thrHandler.DownloadPayslip)
 			r.Get("/api/hr/thr/runs/{id}/payslips", thrHandler.DownloadRunPayslips)
 
-			// HR settings — read is admin/manager (header info needed to preview).
+			// HR settings — read needs HR access (header info needed to preview).
 			r.Get("/api/hr/settings", payslipHandler.GetSettings)
+
+			// Staff KPIs — measured against the daily task board, managed from
+			// HR settings because they are a people-performance instrument.
+			r.Get("/api/hr/kpi", tasksHandler.ListKPIs)
+			r.Post("/api/hr/kpi", tasksHandler.CreateKPI)
+			r.Put("/api/hr/kpi/{id}", tasksHandler.UpdateKPI)
+			r.Delete("/api/hr/kpi/{id}", tasksHandler.DeleteKPI)
+			r.Get("/api/hr/kpi/scores", tasksHandler.KPIScores)
 		})
 
-		// HR settings mutations — admin only (company-level configuration).
+		// HR settings mutations — HR access. This is where the company data that
+		// feeds payslips and generated documents lives, so whoever runs HR needs
+		// to be able to change it.
 		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireAdmin)
+			r.Use(appmiddleware.RequireHRAccess)
 			r.Put("/api/hr/settings", payslipHandler.UpdateSettings)
 			r.Post("/api/hr/settings/logo", payslipHandler.UploadLogo)
 		})
 
-		// Reports & Stats — all authenticated
-		r.Get("/api/reports/financial", reportsHandler.Financial)
-		r.Get("/api/reports/profit-loss-by-branch", reportsHandler.ProfitLossByBranch)
-		r.Get("/api/reports/cash-summary", reportsHandler.CashSummary)
-		r.Get("/api/reports/daily", reportsHandler.Daily)
-		r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
-		r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
-		r.Get("/api/expense-report", reportsHandler.ExpenseReport)
-		r.Get("/api/reports/price-changes", analyticsHandler.PriceChanges)
-		r.Get("/api/reports/usage-trend", analyticsHandler.UsageTrend)
+		// Reports — admin/manager only. This is the one part of the operational
+		// app staff does not get: the org-wide financial picture.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireReportsAccess)
+			r.Get("/api/reports/financial", reportsHandler.Financial)
+			r.Get("/api/reports/profit-loss-by-branch", reportsHandler.ProfitLossByBranch)
+			r.Get("/api/reports/cash-summary", reportsHandler.CashSummary)
+			r.Get("/api/reports/daily", reportsHandler.Daily)
+			r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
+			r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
+			r.Get("/api/expense-report", reportsHandler.ExpenseReport)
+			r.Get("/api/reports/price-changes", analyticsHandler.PriceChanges)
+			r.Get("/api/reports/usage-trend", analyticsHandler.UsageTrend)
+		})
+
+		// Daily tasks & notifications.
+		//
+		// The bell feed is per-user by role and always available; the task board
+		// and its definitions are the operational desk's, so the HR-only role is
+		// already excluded from them by RestrictHRRole.
+		r.Get("/api/notifications", tasksHandler.Notifications)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireCoreAccess)
+			r.Get("/api/tasks/daily", tasksHandler.Board)
+			r.Get("/api/tasks/pending", tasksHandler.Pending)
+			r.Post("/api/tasks/daily/complete", tasksHandler.CompleteTask)
+			r.Get("/api/tasks/definitions", tasksHandler.ListDefinitions)
+			r.Post("/api/tasks/definitions", tasksHandler.CreateDefinition)
+			r.Put("/api/tasks/definitions/{id}", tasksHandler.UpdateDefinition)
+			r.Delete("/api/tasks/definitions/{id}", tasksHandler.DeleteDefinition)
+		})
+
+		// Stats — all authenticated. These back the dashboard tiles and charts,
+		// not the reporting screens, so staff keeps them.
 		r.Get("/api/stats", statsHandler.GeneralStats)
 		r.Get("/api/stats/daily-sales", statsHandler.DailySales)
 		r.Get("/api/stats/stock-flow", statsHandler.StockFlow)

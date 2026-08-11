@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getInvoice, deleteInvoicePhoto, payInvoice, getAccounts } from '../api';
+import { isAdminRole } from '../roles';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 const todayStr = new Date().toISOString().split('T')[0];
+// Today in the *browser's* zone. `todayStr` is UTC, which in WIB (UTC+7) is still
+// yesterday until 07:00 — fine for a rough overdue check, not for a date that
+// becomes the journal date of a payment.
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
 
 const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian', dispatched: 'Pengiriman' };
 const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
@@ -13,22 +21,17 @@ const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: 
 
 const SERVER = 'http://localhost:5000';
 
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-}
-
 export default function InvoiceDetail() {
   const { id } = useParams();
   const [invoice, setInvoice]       = useState(null);
   const [loading, setLoading]       = useState(true);
   const [accounts, setAccounts]     = useState([]);
   const [showPayModal, setShowPayModal] = useState(false);
-  const [payForm, setPayForm]       = useState({ cash_account_id: '', amount: '' });
+  const [payForm, setPayForm]       = useState({ cash_account_id: '', amount: '', payment_date: '' });
   const [paying, setPaying]         = useState(false);
   const [payError, setPayError]     = useState('');
 
-  const currentUser = getUser();
-  const isAdmin = currentUser?.role === 'admin';
+  const isAdmin = isAdminRole();
 
   const reload = () => getInvoice(id).then(r => { setInvoice(r.data); setLoading(false); });
 
@@ -42,7 +45,7 @@ export default function InvoiceDetail() {
   };
 
   const openPayModal = (remaining) => {
-    setPayForm({ cash_account_id: '', amount: String(remaining) });
+    setPayForm({ cash_account_id: '', amount: String(remaining), payment_date: localToday() });
     setPayError('');
     setShowPayModal(true);
   };
@@ -55,6 +58,7 @@ export default function InvoiceDetail() {
       await payInvoice(id, {
         cash_account_id: payForm.cash_account_id,
         amount: Number(payForm.amount),
+        payment_date: payForm.payment_date,
       });
       setShowPayModal(false);
       reload();
@@ -111,6 +115,14 @@ export default function InvoiceDetail() {
               {STATUS_LABEL[invoice.payment_status] ?? invoice.payment_status}
             </span>
           </div>
+          {invoice.payment_date && (invoice.payment_status === 'paid' || invoice.payment_status === 'partial') && (
+            <div>
+              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>
+                {invoice.payment_status === 'partial' ? 'Pembayaran Terakhir' : 'Tanggal Dibayar'}
+              </div>
+              <div style={{ fontWeight: 600, color: '#27ae60' }}>{fmt(invoice.payment_date)}</div>
+            </div>
+          )}
           {invoice.due_date && (() => {
             const isOverdue = invoice.payment_status !== 'paid' && invoice.due_date.split('T')[0] < todayStr;
             return (
@@ -247,6 +259,19 @@ export default function InvoiceDetail() {
               </div>
               {payError && <div className="error-msg" style={{ marginBottom: '1rem' }}>{payError}</div>}
               <form onSubmit={handlePay}>
+                <div className="form-group">
+                  <label>Tanggal Pembayaran</label>
+                  <input
+                    type="date"
+                    value={payForm.payment_date}
+                    onChange={e => setPayForm(f => ({ ...f, payment_date: e.target.value }))}
+                    max={localToday()}
+                    required
+                  />
+                  <small style={{ color: '#888', marginTop: '0.25rem', display: 'block' }}>
+                    Tanggal uang benar-benar keluar — ini yang dicatat di jurnal, bukan hari input.
+                  </small>
+                </div>
                 <div className="form-group">
                   <label>Akun Kas / Bank</label>
                   <select

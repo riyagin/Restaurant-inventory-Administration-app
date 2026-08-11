@@ -29,6 +29,15 @@ const (
 	SourceVendorMerge = "vendor_merge"
 	SourceOpening     = "opening_balance"
 	SourceCapital     = "capital_injection"
+	// SourceDailyPurchase is Pembelanjaan Harian — a branch's daily shopping,
+	// paid on the spot out of its petty cash box.
+	SourceDailyPurchase = "daily_purchase"
+	// SourceCashDeposit is Setoran — moving cash between the branch box, the
+	// main till and the owner's bank.
+	SourceCashDeposit = "cash_deposit"
+	// SourcePettyCashVariance is the difference between the counted closing
+	// balance and what the ledger says should be in the box.
+	SourcePettyCashVariance = "petty_cash_variance"
 )
 
 // OwnerCapitalAccountNumber is the equity account owner deposits are credited

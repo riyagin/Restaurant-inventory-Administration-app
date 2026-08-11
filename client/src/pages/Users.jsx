@@ -3,6 +3,24 @@ import { getUsers, createUser, updateUser, deleteUser } from '../api';
 
 const currentUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
 
+// Roles as offered in the UI. store_manager exists on the server too but is
+// provisioned for attendance devices' operators, not from this screen.
+const ROLES = [
+  ['staff', 'Staff'],
+  ['hr', 'HR'],
+  ['manager', 'Manajer'],
+  ['admin', 'Admin'],
+  ['superuser', 'Superuser'],
+];
+
+const ROLE_NOTES = {
+  staff: 'Akses penuh operasional & HR, kecuali laporan dan log aktivitas. Tidak dapat menyetujui pengajuan.',
+  hr: 'Hanya modul HR, dengan dasbor sendiri. Tidak dapat menyetujui pengajuan.',
+  manager: 'Akses penuh, termasuk menyetujui kasbon, cuti, dan lembur.',
+  admin: 'Akses penuh kecuali persetujuan pengajuan.',
+  superuser: 'Seluruh akses tanpa terkecuali, termasuk persetujuan pengajuan. Navigasi ditandai merah tua saat login. Berikan hanya kepada pemilik.',
+};
+
 const emptyCreate = { username: '', password: '', confirm: '', role: 'staff' };
 const emptyEdit   = { username: '', role: 'staff' };
 const emptyPw     = { old_password: '', password: '', confirm: '' };
@@ -117,7 +135,7 @@ export default function Users() {
                   {u.username}
                   {u.id === me.id && <span style={{ marginLeft: '0.4rem', fontSize: '0.75rem', color: '#4f8ef7' }}>(kamu)</span>}
                 </td>
-                <td><span className="badge">{u.role}</span></td>
+                <td><span className={`badge${u.role === 'superuser' ? ' badge-superuser' : ''}`}>{u.role}</span></td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmt(u.created_at)}</td>
                 <td>
                   <div className="actions">
@@ -144,10 +162,9 @@ export default function Users() {
             <div className="form-group">
               <label>Peran</label>
               <select value={createForm.role} onChange={e => setCreateForm(f => ({ ...f, role: e.target.value }))}>
-                <option value="staff">Staff</option>
-                <option value="manager">Manajer</option>
-                <option value="admin">Admin</option>
+                {ROLES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+              <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.35rem' }}>{ROLE_NOTES[createForm.role]}</div>
             </div>
             <div className="form-group">
               <label>Password</label>
@@ -179,10 +196,9 @@ export default function Users() {
             <div className="form-group">
               <label>Peran</label>
               <select value={editForm.role} onChange={e => setEditForm(f => ({ ...f, role: e.target.value }))}>
-                <option value="staff">Staff</option>
-                <option value="manager">Manajer</option>
-                <option value="admin">Admin</option>
+                {ROLES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+              <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.35rem' }}>{ROLE_NOTES[editForm.role]}</div>
             </div>
             <ModalActions>
               <button type="submit" className="btn btn-primary" disabled={submitting} style={{ flex: 1, justifyContent: 'center' }}>

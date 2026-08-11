@@ -39,6 +39,7 @@ type invoiceListRow struct {
 	PaymentMethod   pgtype.Text        `json:"payment_method"`
 	PaymentStatus   string             `json:"payment_status"`
 	AmountPaid      int64              `json:"amount_paid"`
+	PaymentDate     pgtype.Date        `json:"payment_date"`
 	ReferenceNumber pgtype.Text        `json:"reference_number"`
 	PhotoPath       pgtype.Text        `json:"photo_path"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
@@ -172,7 +173,7 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 	sqlQuery := fmt.Sprintf(`
 		WITH filtered AS (
 			SELECT inv.id, inv.invoice_number, inv.date, inv.due_date, inv.invoice_type,
-			       inv.payment_method, inv.payment_status, inv.amount_paid, inv.reference_number,
+			       inv.payment_method, inv.payment_status, inv.amount_paid, inv.payment_date, inv.reference_number,
 			       inv.photo_path, inv.created_at,
 			       inv.vendor_id, v.name AS vendor_name,
 			       inv.warehouse_id, w.name AS warehouse_name,
@@ -211,7 +212,7 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 		var tc int
 		if err := rows.Scan(
 			&row.ID, &row.InvoiceNumber, &row.Date, &row.DueDate, &row.InvoiceType,
-			&row.PaymentMethod, &row.PaymentStatus, &row.AmountPaid, &row.ReferenceNumber,
+			&row.PaymentMethod, &row.PaymentStatus, &row.AmountPaid, &row.PaymentDate, &row.ReferenceNumber,
 			&row.PhotoPath, &row.CreatedAt,
 			&row.VendorID, &row.VendorName,
 			&row.WarehouseID, &row.WarehouseName,
@@ -320,6 +321,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		VendorID          string             `json:"vendor_id"`
 		ReferenceNumber   string             `json:"reference_number"`
 		ExpenseCategoryID string             `json:"expense_category_id"`
+		PaymentDate       string             `json:"payment_date"`
 		Items             []invoiceItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
@@ -401,6 +403,17 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal membuat faktur")
 		return
+	}
+
+	// Attribution for the daily-task board and staff KPIs: who actually recorded
+	// this purchase. Written as its own statement so the sqlc-generated
+	// CreateInvoice stays untouched (see the note on sqlc in CLAUDE.md).
+	if uid := middleware.UserIDFromCtx(ctx); uid != uuid.Nil {
+		if _, err := tx.Exec(ctx, `UPDATE invoices SET created_by = $2 WHERE id = $1`,
+			invoice.ID, pgtype.UUID{Bytes: uid, Valid: true}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan pembuat faktur")
+			return
+		}
 	}
 
 	invoiceID := invoice.ID.Bytes
@@ -545,6 +558,17 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "account_id tidak valid")
 			return
 		}
+		// An invoice keyed in as already-settled defaults to being settled on its own
+		// date, which is what it meant before payment_date existed; a request that
+		// names a date wins, since the two genuinely can differ.
+		payDate := invoiceDate
+		if body.PaymentDate != "" {
+			payDate, err = parsePaymentDate(body.PaymentDate)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		cashAcct, err := qtx.GetAccountByID(ctx, pgtype.UUID{Bytes: cashAcctID, Valid: true})
 		if err != nil {
 			respondError(w, http.StatusBadRequest, "akun pembayaran tidak ditemukan")
@@ -561,7 +585,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// and it balances, but AP and cash are both overstated for partial
 		// invoices until the request grows an amount field.
 		if _, err := service.Post(ctx, qtx, service.Entry{
-			Date:        invoiceDate,
+			Date:        payDate,
 			SourceType:  service.SourceInvoicePay,
 			SourceID:    invoiceID,
 			Description: fmt.Sprintf("Pembayaran faktur %s", invoiceNumber),
@@ -578,6 +602,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 			AmountPaid:    grandTotal,
 			PaymentStatus: body.PaymentStatus,
 			AccountID:     pgtype.UUID{Bytes: cashAcctID, Valid: true},
+			PaymentDate:   pgtype.Date{Time: payDate, Valid: true},
 			ID:            invoice.ID,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal memperbarui status pembayaran")
@@ -1089,6 +1114,7 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CashAccountID string  `json:"cash_account_id"`
 		Amount        float64 `json:"amount"`
+		PaymentDate   string  `json:"payment_date"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -1101,6 +1127,15 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 	cashAcctID, err := parseUUID(body.CashAccountID)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "cash_account_id tidak valid")
+		return
+	}
+
+	// The cash left on the day it left, which is rarely the day someone gets round
+	// to keying it in. The journal entry carries this date, so a payment recorded
+	// late still lands in the period it belongs to. Omitted means today.
+	payDate, err := parsePaymentDate(body.PaymentDate)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -1158,7 +1193,7 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := service.Post(ctx, qtx, service.Entry{
-		Date:        time.Now(),
+		Date:        payDate,
 		SourceType:  service.SourceInvoicePay,
 		SourceID:    id,
 		Description: fmt.Sprintf("Pembayaran faktur %s", inv.InvoiceNumber),
@@ -1182,6 +1217,7 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 		AmountPaid:    newAmountPaid,
 		PaymentStatus: newStatus,
 		AccountID:     pgtype.UUID{Bytes: cashAcctID, Valid: true},
+		PaymentDate:   pgtype.Date{Time: payDate, Valid: true},
 		ID:            invoiceUUID,
 	})
 	if err != nil {
@@ -1202,7 +1238,7 @@ func (h *InvoicesHandler) Pay(w http.ResponseWriter, r *http.Request) {
 		Action:      "UPDATE",
 		EntityType:  "Invoice",
 		EntityID:    id,
-		Description: fmt.Sprintf("Bayar faktur %s sebesar %d via \"%s\"", inv.InvoiceNumber, payAmount, cashAcct.Name),
+		Description: fmt.Sprintf("Bayar faktur %s sebesar %d via \"%s\" tanggal %s", inv.InvoiceNumber, payAmount, cashAcct.Name, payDate.Format("2006-01-02")),
 	})
 
 	respondJSON(w, http.StatusOK, updated)
@@ -1294,6 +1330,24 @@ func parseInvoiceUUIDs(warehouseStr, branchStr, divisionStr, vendorStr string) (
 }
 
 // parseInvoiceDates parses the date and due_date strings; defaults date to today.
+// parsePaymentDate reads the date a settlement actually happened, defaulting to
+// today when the caller sends none. A future date is refused: cash that has not
+// moved yet must not be posted, and the usual cause is a mistyped year.
+func parsePaymentDate(s string) (time.Time, error) {
+	if s == "" {
+		return time.Now(), nil
+	}
+	d, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("format tanggal pembayaran tidak valid")
+	}
+	now := time.Now()
+	if d.After(time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, d.Location())) {
+		return time.Time{}, fmt.Errorf("tanggal pembayaran tidak boleh di masa depan")
+	}
+	return d, nil
+}
+
 func parseInvoiceDates(dateStr, dueDateStr string) (invoiceDate time.Time, dueDate pgtype.Date, err error) {
 	invoiceDate = time.Now()
 	if dateStr != "" {

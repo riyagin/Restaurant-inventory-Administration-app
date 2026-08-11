@@ -18,6 +18,9 @@ import ActivityLog from './pages/ActivityLog';
 import StockTransfers from './pages/StockTransfers';
 import Sales from './pages/Sales';
 import Branches from './pages/Branches';
+import DailyPurchases from './pages/DailyPurchases';
+import PettyCash from './pages/PettyCash';
+import Setoran from './pages/Setoran';
 import Dispatch from './pages/Dispatch';
 import StockHistoryPage from './pages/StockHistoryPage';
 import StockOpname from './pages/StockOpname';
@@ -70,11 +73,12 @@ import HRSettings from './pages/hr/HRSettings';
 import ManpowerPlanning from './pages/hr/ManpowerPlanning';
 import DocumentGenerator from './pages/hr/DocumentGenerator';
 import OnboardingWizard from './pages/hr/OnboardingWizard';
+import HRDashboard from './pages/hr/HRDashboard';
+import StaffDashboard from './pages/StaffDashboard';
+import StaffKPI from './pages/hr/StaffKPI';
+import NotificationBell from './components/NotificationBell';
+import { getUser, canUseHR, canViewReports, canUseCore, isHROnly, isStaffDesk, isSuperuser } from './roles';
 import './App.css';
-
-function getUser() {
-  try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-}
 
 function RequireAuth({ children }) {
   const token = localStorage.getItem('token');
@@ -82,16 +86,18 @@ function RequireAuth({ children }) {
   return children;
 }
 
-function RequireAdmin({ children }) {
-  const user = getUser();
-  if (user?.role !== 'admin') return <Navigate to="/" replace />;
-  return children;
+// Route guards. Each mirrors a server-side middleware; the redirect just spares
+// the user a screen full of 403s.
+function RequireHR({ children }) {
+  return canUseHR() ? children : <Navigate to="/" replace />;
 }
 
-function RequireManagerOrAdmin({ children }) {
-  const user = getUser();
-  if (user?.role !== 'admin' && user?.role !== 'manager') return <Navigate to="/" replace />;
-  return children;
+function RequireReports({ children }) {
+  return canViewReports() ? children : <Navigate to="/" replace />;
+}
+
+function RequireCore({ children }) {
+  return canUseCore() ? children : <Navigate to="/" replace />;
 }
 
 function NavDropdown({ label, paths, children }) {
@@ -144,12 +150,140 @@ function MobileSection({ label, paths, children }) {
   );
 }
 
+// ── Navigation model ────────────────────────────────────────────────────────
+// One description of the menu, rendered twice (desktop dropdowns and the mobile
+// drawer) so the two can't drift apart. A group is { label, links }, a link is
+// [path, label], 'divider' inserts a rule, and { heading } labels a section
+// inside a long menu.
+const DIV = 'divider';
+const head = (text) => ({ heading: text });
+
+// The HR module, grouped by **how often you touch it** rather than by subsystem.
+// It had grown to twenty-odd flat entries, which is unscannable; cadence is the
+// axis that actually predicts what someone is looking for when they open the
+// menu. The HR-only role gets these four as its whole navbar.
+const HR_GROUPS = [
+  { label: 'Karyawan', links: [
+    ['/hr/employees', 'Karyawan'],
+    ['/hr/onboarding', 'Onboarding Karyawan'],
+    ['/hr/documents', 'Dokumen HR'],
+    ['/hr/manpower', 'Rencana Tenaga Kerja'],
+  ] },
+  // Every working day.
+  { label: 'Harian', links: [
+    ['/hr/attendance', 'Absensi'],
+    ['/hr/attendance/corrections', 'Koreksi Kehadiran'],
+    DIV,
+    ['/hr/requests', 'Pengajuan'],
+    ['/hr/approvals', 'Persetujuan'],
+    ['/hr/kasbon', 'Kasbon'],
+  ] },
+  // Once a month, or once a year.
+  { label: 'Berkala', links: [
+    ['/hr/payroll', 'Penggajian'],
+    ['/hr/thr', 'THR'],
+    DIV,
+    ['/hr/performance', 'Evaluasi'],
+    ['/hr/kpi', 'KPI & Tugas Harian'],
+  ] },
+  // Set up once, revisited rarely.
+  { label: 'Pengaturan', links: [
+    ['/hr/settings', 'Pengaturan HR'],
+    ['/hr/positions', 'Jabatan'],
+    ['/hr/wage-components', 'Komponen Gaji'],
+    ['/hr/performance/policies', 'Kebijakan Kinerja'],
+    ['/hr/attendance/settings', 'Pengaturan Absensi'],
+    DIV,
+    ['/hr/face', 'Wajah & Perangkat'],
+    ['/hr/attendance/import', 'Impor Sidik Jari'],
+    ['/hr/import', 'Impor Karyawan'],
+  ] },
+];
+
+// For the operational navbar HR is one dropdown among many, so the same groups
+// are flattened into it — but with their names kept as headings. A twenty-item
+// list is only navigable if it tells you where you are in it.
+const HR_COMBINED = HR_GROUPS.flatMap((g, i) => [
+  ...(i === 0 ? [] : [DIV]),
+  head(g.label),
+  ...g.links.filter((l) => l !== DIV),
+]);
+
+function buildNav({ hrOnly, hr, reports }) {
+  if (hrOnly) return HR_GROUPS;
+  const groups = [
+    { label: 'Inventaris', links: [
+      ['/inventory', 'Inventaris'],
+      ['/transfers', 'Transfer Gudang'],
+      ['/dispatch', 'Pengiriman ke Cabang'],
+      ['/stock-opname', 'Stok Opname'],
+      ['/enumerations', 'Pencacahan'],
+      DIV,
+      ['/recipes', 'Resep Produksi'],
+      ['/productions', 'Produksi'],
+    ] },
+    { label: 'Invoice', to: '/invoices' },
+    // The cash side of the branch: what it spent from the box, what was counted
+    // in the box, and what moved in or out of it. One dropdown because the three
+    // are only meaningful together — a spend is checked against a count, and a
+    // count only balances if the top-ups were recorded.
+    { label: 'Kas Cabang', links: [
+      ['/daily-purchases', 'Pembelanjaan Harian'],
+      ['/petty-cash', 'Kas Kecil'],
+      ['/setoran', 'Setoran'],
+    ] },
+    { label: 'Penjualan', links: [
+      ['/sales', 'Catatan Penjualan'],
+      ['/sales/import', 'Import dari POS'],
+    ] },
+  ];
+  if (hr) groups.push({ label: 'HR', links: HR_COMBINED });
+  if (reports) {
+    groups.push({ label: 'Laporan', links: [
+      ['/reports/daily', 'Laporan Harian'],
+      ['/reports/financial', 'Laporan Keuangan'],
+      ['/reports/statement', 'Dokumen Laporan Keuangan'],
+      ['/expense-report', 'Laporan Pengeluaran'],
+      ['/reports/inventory-value', 'Nilai Inventaris'],
+      DIV,
+      ['/reports/price-changes', 'Perubahan Harga'],
+      ['/reports/usage-trend', 'Perubahan Pemakaian'],
+    ] });
+  }
+  groups.push({ label: 'Administrasi', links: [
+    ['/items', 'Barang'],
+    ['/warehouses', 'Gudang'],
+    ['/vendors', 'Vendor'],
+    ['/accounts', 'Akun'],
+    DIV,
+    ['/branches', 'Cabang & Divisi'],
+    ['/invoice-templates', 'Template Invoice'],
+    ['/dispatch-templates', 'Template Pengiriman'],
+    ['/account-adjustments', 'Jurnal Manual'],
+    DIV,
+    ['/users', 'Pengguna'],
+    // The activity log rides with reports: same audience, same restriction.
+    ...(reports ? [['/activity', 'Log Aktivitas']] : []),
+  ] });
+  return groups;
+}
+
+const isLink = (l) => Array.isArray(l);
+const groupPaths = (g) => (g.to ? [g.to] : g.links.filter(isLink).map(([to]) => to));
+
 function Nav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const user = getUser();
-  const isAdminOrManager = user?.role === 'admin' || user?.role === 'manager';
-  const isStaff = user?.role === 'staff';
+  const hrOnly = isHROnly(user?.role);
+  // The dark red bar is the standing reminder that this session can do
+  // anything, approvals included — worth noticing before you act, not after.
+  const superuser = isSuperuser(user?.role);
+  const groups = buildNav({
+    hrOnly,
+    hr: canUseHR(user?.role),
+    reports: canViewReports(user?.role),
+  });
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isActive = (to) => to === '/' ? pathname === '/' : pathname.startsWith(to);
 
@@ -168,9 +302,13 @@ function Nav() {
   const link = (to, label) => (
     <Link to={to} className={isActive(to) ? 'active' : ''} aria-current={isActive(to) ? 'page' : undefined}>{label}</Link>
   );
-  const menuLink = (to, label) => (
-    <Link to={to} className={isActive(to) ? 'active' : ''}>{label}</Link>
-  );
+
+  // Within a group, only the most specific matching entry lights up — otherwise
+  // /sales/import would also mark /sales as the current page.
+  const activeIn = (group, to) => {
+    if (!pathname.startsWith(to)) return false;
+    return !groupPaths(group).some((p) => p !== to && p.startsWith(to) && pathname.startsWith(p));
+  };
 
   const logout = async () => {
     try {
@@ -188,7 +326,7 @@ function Nav() {
   };
 
   return (
-    <nav className="navbar" ref={drawerRef} aria-label="Navigasi utama">
+    <nav className={`navbar${superuser ? ' navbar-superuser' : ''}`} ref={drawerRef} aria-label="Navigasi utama">
       <Link to="/" className="brand">
         <span className="brand-mark" aria-hidden="true">IP</span>
         <span className="brand-word">Inventory<b>Pro</b></span>
@@ -196,69 +334,25 @@ function Nav() {
 
       {/* Desktop nav */}
       <div className="nav-links nav-links-desktop">
-        {link('/', 'Dasbor')}
-
-        <NavDropdown label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
-          {menuLink('/inventory', 'Inventaris')}
-          {menuLink('/transfers', 'Transfer Gudang')}
-          {menuLink('/dispatch', 'Pengiriman ke Cabang')}
-          {menuLink('/stock-opname', 'Stok Opname')}
-          {menuLink('/enumerations', 'Pencacahan')}
-          <div className="nav-dropdown-divider" />
-          {menuLink('/recipes', 'Resep Produksi')}
-          {menuLink('/productions', 'Produksi')}
-        </NavDropdown>
-
-        {link('/invoices', 'Invoice')}
-        <NavDropdown label="Penjualan" paths={['/sales']}>
-          {menuLink('/sales', 'Catatan Penjualan')}
-          {menuLink('/sales/import', 'Import dari POS')}
-        </NavDropdown>
-
-        {(isAdminOrManager || isStaff) && (
-          <NavDropdown label="HR" paths={['/hr']}>
-            {isAdminOrManager && menuLink('/hr/onboarding', 'Onboarding Karyawan')}
-            {isAdminOrManager && menuLink('/hr/documents', 'Dokumen HR')}
-            {menuLink('/hr/attendance', 'Absensi')}
-            {isAdminOrManager && menuLink('/hr/attendance/corrections', 'Koreksi Kehadiran')}
-            {isAdminOrManager && menuLink('/hr/face', 'Wajah & Perangkat')}
-            {isAdminOrManager && menuLink('/hr/performance', 'Evaluasi')}
-            {isAdminOrManager && menuLink('/hr/requests', 'Pengajuan')}
-            {isAdminOrManager && menuLink('/hr/approvals', 'Persetujuan')}
-            {menuLink('/hr/manpower', 'Rencana Tenaga Kerja')}
-            {menuLink('/hr/kasbon', 'Kasbon')}
-            {isAdminOrManager && menuLink('/hr/payroll', 'Penggajian')}
-            {isAdminOrManager && menuLink('/hr/thr', 'THR')}
-            {isAdminOrManager && menuLink('/hr/settings', 'Pengaturan')}
+        {link('/', hrOnly ? 'Dasbor HR' : 'Dasbor')}
+        {groups.map((g) => (g.to ? (
+          <Link key={g.label} to={g.to} className={isActive(g.to) ? 'active' : ''}
+            aria-current={isActive(g.to) ? 'page' : undefined}>{g.label}</Link>
+        ) : (
+          <NavDropdown key={g.label} label={g.label} paths={groupPaths(g)}>
+            {g.links.map((l, i) => {
+              if (l === DIV) return <div key={`div-${i}`} className="nav-dropdown-divider" />;
+              if (l.heading) return <div key={`h-${i}`} className="nav-dropdown-heading">{l.heading}</div>;
+              return <Link key={l[0]} to={l[0]} className={activeIn(g, l[0]) ? 'active' : ''}>{l[1]}</Link>;
+            })}
           </NavDropdown>
-        )}
-
-        <NavDropdown label="Laporan" paths={['/expense-report', '/reports']}>
-          {menuLink('/reports/daily', 'Laporan Harian')}
-          {menuLink('/reports/financial', 'Laporan Keuangan')}
-          {menuLink('/reports/statement', 'Dokumen Laporan Keuangan')}
-          {menuLink('/expense-report', 'Laporan Pengeluaran')}
-          {menuLink('/reports/inventory-value', 'Nilai Inventaris')}
-          <div className="nav-dropdown-divider" />
-          {menuLink('/reports/price-changes', 'Perubahan Harga')}
-          {menuLink('/reports/usage-trend', 'Perubahan Pemakaian')}
-        </NavDropdown>
-
-        <NavDropdown label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates', '/dispatch-templates']}>
-          {menuLink('/items', 'Barang')}
-          {menuLink('/warehouses', 'Gudang')}
-          {menuLink('/vendors', 'Vendor')}
-          {menuLink('/accounts', 'Akun')}
-          <div className="nav-dropdown-divider" />
-          {menuLink('/branches', 'Cabang & Divisi')}
-          {menuLink('/invoice-templates', 'Template Invoice')}
-          {menuLink('/dispatch-templates', 'Template Pengiriman')}
-          {menuLink('/account-adjustments', 'Jurnal Manual')}
-          <div className="nav-dropdown-divider" />
-          {menuLink('/users', 'Pengguna')}
-          {menuLink('/activity', 'Log Aktivitas')}
-        </NavDropdown>
+        )))}
       </div>
+
+      {/* Bell sits immediately left of the user block on desktop, and left of
+          the burger on mobile — same place either way, and it must not vanish
+          on the screen size most likely to be checking for pending work. */}
+      {user && <div className="nav-bell"><NotificationBell /></div>}
 
       {user && (
         <div className="nav-user nav-user-desktop">
@@ -280,64 +374,18 @@ function Nav() {
       {/* Mobile drawer */}
       {drawerOpen && (
         <div className="mobile-drawer">
-          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>Dasbor</Link>
+          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>{hrOnly ? 'Dasbor HR' : 'Dasbor'}</Link>
 
-          <MobileSection label="Inventaris" paths={['/inventory', '/transfers', '/dispatch', '/stock-opname', '/enumerations', '/recipes', '/productions']}>
-            <Link to="/inventory" className={isActive('/inventory') ? 'active' : ''}>Inventaris</Link>
-            <Link to="/transfers" className={isActive('/transfers') ? 'active' : ''}>Transfer Gudang</Link>
-            <Link to="/dispatch" className={isActive('/dispatch') ? 'active' : ''}>Pengiriman ke Cabang</Link>
-            <Link to="/stock-opname" className={isActive('/stock-opname') ? 'active' : ''}>Stok Opname</Link>
-            <Link to="/enumerations" className={isActive('/enumerations') ? 'active' : ''}>Pencacahan</Link>
-            <Link to="/recipes" className={isActive('/recipes') ? 'active' : ''}>Resep Produksi</Link>
-            <Link to="/productions" className={isActive('/productions') ? 'active' : ''}>Produksi</Link>
-          </MobileSection>
-
-          <Link to="/invoices" className={`mobile-link${isActive('/invoices') ? ' active' : ''}`}>Invoice</Link>
-
-          <MobileSection label="Penjualan" paths={['/sales']}>
-            <Link to="/sales" className={isActive('/sales') && !isActive('/sales/import') ? 'active' : ''}>Catatan Penjualan</Link>
-            <Link to="/sales/import" className={isActive('/sales/import') ? 'active' : ''}>Import dari POS</Link>
-          </MobileSection>
-
-          {(isAdminOrManager || isStaff) && (
-            <MobileSection label="HR" paths={['/hr']}>
-              {isAdminOrManager && <Link to="/hr/onboarding" className={isActive('/hr/onboarding') ? 'active' : ''}>Onboarding Karyawan</Link>}
-              {isAdminOrManager && <Link to="/hr/documents" className={isActive('/hr/documents') ? 'active' : ''}>Dokumen HR</Link>}
-              <Link to="/hr/attendance" className={isActive('/hr/attendance') ? 'active' : ''}>Absensi</Link>
-              {isAdminOrManager && <Link to="/hr/face" className={isActive('/hr/face') ? 'active' : ''}>Wajah &amp; Perangkat</Link>}
-              {isAdminOrManager && <Link to="/hr/performance" className={isActive('/hr/performance') ? 'active' : ''}>Evaluasi</Link>}
-              {isAdminOrManager && <Link to="/hr/requests" className={isActive('/hr/requests') ? 'active' : ''}>Pengajuan</Link>}
-              {isAdminOrManager && <Link to="/hr/approvals" className={isActive('/hr/approvals') ? 'active' : ''}>Persetujuan</Link>}
-              <Link to="/hr/manpower" className={isActive('/hr/manpower') ? 'active' : ''}>Rencana Tenaga Kerja</Link>
-              <Link to="/hr/kasbon" className={isActive('/hr/kasbon') ? 'active' : ''}>Kasbon</Link>
-              {isAdminOrManager && <Link to="/hr/payroll" className={isActive('/hr/payroll') ? 'active' : ''}>Penggajian</Link>}
-              {isAdminOrManager && <Link to="/hr/thr" className={isActive('/hr/thr') ? 'active' : ''}>THR</Link>}
-              {isAdminOrManager && <Link to="/hr/settings" className={isActive('/hr/settings') ? 'active' : ''}>Pengaturan</Link>}
+          {groups.map((g) => (g.to ? (
+            <Link key={g.label} to={g.to} className={`mobile-link${isActive(g.to) ? ' active' : ''}`}>{g.label}</Link>
+          ) : (
+            <MobileSection key={g.label} label={g.label} paths={groupPaths(g)}>
+              {g.links.filter((l) => l !== DIV).map((l, i) => (l.heading
+                ? <div key={`h-${i}`} className="mobile-section-heading">{l.heading}</div>
+                : <Link key={l[0]} to={l[0]} className={activeIn(g, l[0]) ? 'active' : ''}>{l[1]}</Link>
+              ))}
             </MobileSection>
-          )}
-
-          <MobileSection label="Laporan" paths={['/expense-report', '/reports']}>
-            <Link to="/reports/daily" className={isActive('/reports/daily') ? 'active' : ''}>Laporan Harian</Link>
-            <Link to="/reports/financial" className={isActive('/reports/financial') ? 'active' : ''}>Laporan Keuangan</Link>
-            <Link to="/reports/statement" className={isActive('/reports/statement') ? 'active' : ''}>Dokumen Laporan Keuangan</Link>
-            <Link to="/expense-report" className={isActive('/expense-report') ? 'active' : ''}>Laporan Pengeluaran</Link>
-            <Link to="/reports/inventory-value" className={isActive('/reports/inventory-value') ? 'active' : ''}>Nilai Inventaris</Link>
-            <Link to="/reports/price-changes" className={isActive('/reports/price-changes') ? 'active' : ''}>Perubahan Harga</Link>
-            <Link to="/reports/usage-trend" className={isActive('/reports/usage-trend') ? 'active' : ''}>Perubahan Pemakaian</Link>
-          </MobileSection>
-
-          <MobileSection label="Administrasi" paths={['/items', '/warehouses', '/vendors', '/accounts', '/branches', '/users', '/activity', '/account-adjustments', '/invoice-templates', '/dispatch-templates']}>
-            <Link to="/items" className={isActive('/items') ? 'active' : ''}>Barang</Link>
-            <Link to="/warehouses" className={isActive('/warehouses') ? 'active' : ''}>Gudang</Link>
-            <Link to="/vendors" className={isActive('/vendors') ? 'active' : ''}>Vendor</Link>
-            <Link to="/accounts" className={isActive('/accounts') ? 'active' : ''}>Akun</Link>
-            <Link to="/branches" className={isActive('/branches') ? 'active' : ''}>Cabang & Divisi</Link>
-            <Link to="/invoice-templates" className={isActive('/invoice-templates') ? 'active' : ''}>Template Invoice</Link>
-            <Link to="/dispatch-templates" className={isActive('/dispatch-templates') ? 'active' : ''}>Template Pengiriman</Link>
-            <Link to="/account-adjustments" className={isActive('/account-adjustments') ? 'active' : ''}>Jurnal Manual</Link>
-            <Link to="/users" className={isActive('/users') ? 'active' : ''}>Pengguna</Link>
-            <Link to="/activity" className={isActive('/activity') ? 'active' : ''}>Log Aktivitas</Link>
-          </MobileSection>
+          )))}
 
           {user && (
             <div className="mobile-drawer-footer">
@@ -379,80 +427,84 @@ export default function App() {
           <RequireAuth>
             <Layout>
               <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/items" element={<Items />} />
-                <Route path="/items/new" element={<ItemForm />} />
-                <Route path="/items/edit/:id" element={<ItemForm />} />
-                <Route path="/items/history/:id" element={<NonStockItemDetail />} />
-                <Route path="/items/stock/:id" element={<StockItemDetail />} />
-                <Route path="/inventory" element={<Inventory />} />
-                <Route path="/inventory/new" element={<InventoryForm />} />
-                <Route path="/inventory/edit/:id" element={<InventoryForm />} />
-                <Route path="/inventory/history/:itemId" element={<StockHistoryPage />} />
-                <Route path="/invoices" element={<Invoices />} />
-                <Route path="/invoices/new" element={<InvoiceForm />} />
-                <Route path="/invoices/edit/:id" element={<InvoiceForm />} />
-                <Route path="/invoices/view/:id" element={<InvoiceDetail />} />
-                <Route path="/sales" element={<Sales />} />
-                <Route path="/sales/import" element={<SalesImport />} />
-                <Route path="/expense-report" element={<ExpenseReport />} />
-                <Route path="/reports/inventory-value" element={<InventoryValueReport />} />
-                <Route path="/reports/price-changes" element={<PriceChangeReport />} />
-                <Route path="/reports/usage-trend" element={<UsageTrendReport />} />
-                <Route path="/reports/financial" element={<FinancialReport />} />
-                <Route path="/reports/statement" element={<FinancialStatement />} />
-                <Route path="/reports/daily" element={<DailyReport />} />
-                <Route path="/account-adjustments" element={<AccountAdjustments />} />
-                <Route path="/transfers" element={<StockTransfers />} />
-                <Route path="/transfers/group/:id" element={<TransferDetail />} />
-                <Route path="/dispatch" element={<Dispatch />} />
-                <Route path="/dispatches/:id" element={<DispatchDetail />} />
-                <Route path="/stock-opname" element={<StockOpname />} />
-                <Route path="/stock-opname/detail/:id" element={<StockOpnameDetail />} />
-                <Route path="/recipes" element={<Recipes />} />
-                <Route path="/productions" element={<Productions />} />
-                <Route path="/enumerations" element={<Enumerations />} />
-                <Route path="/warehouses" element={<Warehouses />} />
-                <Route path="/vendors" element={<Vendors />} />
-                <Route path="/vendors/:id/history" element={<VendorHistory />} />
-                <Route path="/accounts" element={<Accounts />} />
-                <Route path="/branches" element={<Branches />} />
-                <Route path="/invoice-templates" element={<InvoiceTemplates />} />
-                <Route path="/dispatch-templates" element={<DispatchTemplates />} />
-                <Route path="/users" element={<Users />} />
-                <Route path="/activity" element={<ActivityLog />} />
+                <Route path="/" element={isHROnly() ? <HRDashboard /> : isStaffDesk() ? <StaffDashboard /> : <Dashboard />} />
+                <Route path="/items" element={<RequireCore><Items /></RequireCore>} />
+                <Route path="/items/new" element={<RequireCore><ItemForm /></RequireCore>} />
+                <Route path="/items/edit/:id" element={<RequireCore><ItemForm /></RequireCore>} />
+                <Route path="/items/history/:id" element={<RequireCore><NonStockItemDetail /></RequireCore>} />
+                <Route path="/items/stock/:id" element={<RequireCore><StockItemDetail /></RequireCore>} />
+                <Route path="/inventory" element={<RequireCore><Inventory /></RequireCore>} />
+                <Route path="/inventory/new" element={<RequireCore><InventoryForm /></RequireCore>} />
+                <Route path="/inventory/edit/:id" element={<RequireCore><InventoryForm /></RequireCore>} />
+                <Route path="/inventory/history/:itemId" element={<RequireCore><StockHistoryPage /></RequireCore>} />
+                <Route path="/invoices" element={<RequireCore><Invoices /></RequireCore>} />
+                <Route path="/invoices/new" element={<RequireCore><InvoiceForm /></RequireCore>} />
+                <Route path="/invoices/edit/:id" element={<RequireCore><InvoiceForm /></RequireCore>} />
+                <Route path="/invoices/view/:id" element={<RequireCore><InvoiceDetail /></RequireCore>} />
+                <Route path="/daily-purchases" element={<RequireCore><DailyPurchases /></RequireCore>} />
+                <Route path="/petty-cash" element={<RequireCore><PettyCash /></RequireCore>} />
+                <Route path="/setoran" element={<RequireCore><Setoran /></RequireCore>} />
+                <Route path="/sales" element={<RequireCore><Sales /></RequireCore>} />
+                <Route path="/sales/import" element={<RequireCore><SalesImport /></RequireCore>} />
+                <Route path="/expense-report" element={<RequireReports><ExpenseReport /></RequireReports>} />
+                <Route path="/reports/inventory-value" element={<RequireReports><InventoryValueReport /></RequireReports>} />
+                <Route path="/reports/price-changes" element={<RequireReports><PriceChangeReport /></RequireReports>} />
+                <Route path="/reports/usage-trend" element={<RequireReports><UsageTrendReport /></RequireReports>} />
+                <Route path="/reports/financial" element={<RequireReports><FinancialReport /></RequireReports>} />
+                <Route path="/reports/statement" element={<RequireReports><FinancialStatement /></RequireReports>} />
+                <Route path="/reports/daily" element={<RequireReports><DailyReport /></RequireReports>} />
+                <Route path="/account-adjustments" element={<RequireCore><AccountAdjustments /></RequireCore>} />
+                <Route path="/transfers" element={<RequireCore><StockTransfers /></RequireCore>} />
+                <Route path="/transfers/group/:id" element={<RequireCore><TransferDetail /></RequireCore>} />
+                <Route path="/dispatch" element={<RequireCore><Dispatch /></RequireCore>} />
+                <Route path="/dispatches/:id" element={<RequireCore><DispatchDetail /></RequireCore>} />
+                <Route path="/stock-opname" element={<RequireCore><StockOpname /></RequireCore>} />
+                <Route path="/stock-opname/detail/:id" element={<RequireCore><StockOpnameDetail /></RequireCore>} />
+                <Route path="/recipes" element={<RequireCore><Recipes /></RequireCore>} />
+                <Route path="/productions" element={<RequireCore><Productions /></RequireCore>} />
+                <Route path="/enumerations" element={<RequireCore><Enumerations /></RequireCore>} />
+                <Route path="/warehouses" element={<RequireCore><Warehouses /></RequireCore>} />
+                <Route path="/vendors" element={<RequireCore><Vendors /></RequireCore>} />
+                <Route path="/vendors/:id/history" element={<RequireCore><VendorHistory /></RequireCore>} />
+                <Route path="/accounts" element={<RequireCore><Accounts /></RequireCore>} />
+                <Route path="/branches" element={<RequireCore><Branches /></RequireCore>} />
+                <Route path="/invoice-templates" element={<RequireCore><InvoiceTemplates /></RequireCore>} />
+                <Route path="/dispatch-templates" element={<RequireCore><DispatchTemplates /></RequireCore>} />
+                <Route path="/users" element={<RequireCore><Users /></RequireCore>} />
+                <Route path="/activity" element={<RequireReports><ActivityLog /></RequireReports>} />
                 <Route path="/profile" element={<Profile />} />
-                <Route path="/hr/onboarding" element={<RequireManagerOrAdmin><OnboardingWizard /></RequireManagerOrAdmin>} />
-                <Route path="/hr/documents" element={<RequireManagerOrAdmin><DocumentGenerator /></RequireManagerOrAdmin>} />
+                <Route path="/hr/onboarding" element={<RequireHR><OnboardingWizard /></RequireHR>} />
+                <Route path="/hr/documents" element={<RequireHR><DocumentGenerator /></RequireHR>} />
                 <Route path="/hr/employees" element={<Employees />} />
-                <Route path="/hr/employees/new" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
+                <Route path="/hr/employees/new" element={<RequireHR><EmployeeForm /></RequireHR>} />
                 <Route path="/hr/employees/:id" element={<EmployeeDetail />} />
-                <Route path="/hr/employees/:id/edit" element={<RequireManagerOrAdmin><EmployeeForm /></RequireManagerOrAdmin>} />
-                <Route path="/hr/import" element={<RequireManagerOrAdmin><HRImport /></RequireManagerOrAdmin>} />
-                <Route path="/hr/positions" element={<RequireManagerOrAdmin><Positions /></RequireManagerOrAdmin>} />
-                <Route path="/hr/wage-components" element={<RequireManagerOrAdmin><WageComponents /></RequireManagerOrAdmin>} />
+                <Route path="/hr/employees/:id/edit" element={<RequireHR><EmployeeForm /></RequireHR>} />
+                <Route path="/hr/import" element={<RequireHR><HRImport /></RequireHR>} />
+                <Route path="/hr/positions" element={<RequireHR><Positions /></RequireHR>} />
+                <Route path="/hr/wage-components" element={<RequireHR><WageComponents /></RequireHR>} />
                 <Route path="/hr/attendance" element={<AttendanceDashboard />} />
-                <Route path="/hr/attendance/corrections" element={<RequireManagerOrAdmin><AttendanceCorrections /></RequireManagerOrAdmin>} />
-                <Route path="/hr/attendance/import" element={<RequireManagerOrAdmin><FingerprintImport /></RequireManagerOrAdmin>} />
-                <Route path="/hr/attendance/settings" element={<RequireManagerOrAdmin><AttendanceSettings /></RequireManagerOrAdmin>} />
-                <Route path="/hr/face" element={<RequireManagerOrAdmin><FaceDashboard /></RequireManagerOrAdmin>} />
-                <Route path="/hr/face/unregistered" element={<RequireManagerOrAdmin><FaceUnregistered /></RequireManagerOrAdmin>} />
-                <Route path="/hr/performance" element={<RequireManagerOrAdmin><PerformanceDashboard /></RequireManagerOrAdmin>} />
-                <Route path="/hr/performance/policies" element={<RequireManagerOrAdmin><PerformancePolicies /></RequireManagerOrAdmin>} />
-                <Route path="/hr/requests" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
-                <Route path="/hr/approvals" element={<RequireManagerOrAdmin><Approvals /></RequireManagerOrAdmin>} />
+                <Route path="/hr/attendance/corrections" element={<RequireHR><AttendanceCorrections /></RequireHR>} />
+                <Route path="/hr/attendance/import" element={<RequireHR><FingerprintImport /></RequireHR>} />
+                <Route path="/hr/attendance/settings" element={<RequireHR><AttendanceSettings /></RequireHR>} />
+                <Route path="/hr/face" element={<RequireHR><FaceDashboard /></RequireHR>} />
+                <Route path="/hr/face/unregistered" element={<RequireHR><FaceUnregistered /></RequireHR>} />
+                <Route path="/hr/performance" element={<RequireHR><PerformanceDashboard /></RequireHR>} />
+                <Route path="/hr/performance/policies" element={<RequireHR><PerformancePolicies /></RequireHR>} />
+                <Route path="/hr/requests" element={<RequireHR><Requests /></RequireHR>} />
+                <Route path="/hr/approvals" element={<RequireHR><Approvals /></RequireHR>} />
                 {/* back-compat: old leave/overtime links land on the merged requests screen */}
-                <Route path="/hr/leave" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
+                <Route path="/hr/leave" element={<RequireHR><Requests /></RequireHR>} />
                 <Route path="/hr/manpower" element={<ManpowerPlanning />} />
                 <Route path="/hr/kasbon" element={<KasbonDashboard />} />
-                <Route path="/hr/kasbon/new" element={<RequireManagerOrAdmin><KasbonForm /></RequireManagerOrAdmin>} />
+                <Route path="/hr/kasbon/new" element={<RequireHR><KasbonForm /></RequireHR>} />
                 <Route path="/hr/kasbon/:id" element={<KasbonDetail />} />
-                <Route path="/hr/overtime" element={<RequireManagerOrAdmin><Requests /></RequireManagerOrAdmin>} />
-                <Route path="/hr/payroll" element={<RequireManagerOrAdmin><PayrollDashboard /></RequireManagerOrAdmin>} />
-                <Route path="/hr/payroll/:id" element={<RequireManagerOrAdmin><PayrollPeriodDetail /></RequireManagerOrAdmin>} />
-                <Route path="/hr/thr" element={<RequireManagerOrAdmin><ThrDashboard /></RequireManagerOrAdmin>} />
-                <Route path="/hr/thr/:id" element={<RequireManagerOrAdmin><ThrRunDetail /></RequireManagerOrAdmin>} />
-                <Route path="/hr/settings" element={<RequireManagerOrAdmin><HRSettings /></RequireManagerOrAdmin>} />
+                <Route path="/hr/overtime" element={<RequireHR><Requests /></RequireHR>} />
+                <Route path="/hr/payroll" element={<RequireHR><PayrollDashboard /></RequireHR>} />
+                <Route path="/hr/payroll/:id" element={<RequireHR><PayrollPeriodDetail /></RequireHR>} />
+                <Route path="/hr/thr" element={<RequireHR><ThrDashboard /></RequireHR>} />
+                <Route path="/hr/thr/:id" element={<RequireHR><ThrRunDetail /></RequireHR>} />
+                <Route path="/hr/settings" element={<RequireHR><HRSettings /></RequireHR>} />
+                <Route path="/hr/kpi" element={<RequireHR><StaffKPI /></RequireHR>} />
               </Routes>
             </Layout>
           </RequireAuth>
