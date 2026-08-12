@@ -435,6 +435,19 @@ export default function FinancialReport() {
         <h1>Laporan Keuangan</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <Link to="/account-adjustments" className="btn btn-secondary">Jurnal Manual</Link>
+          <Link to="/reports/profit-loss" className="btn btn-secondary">Perbandingan Periode</Link>
+          {/* The printable statement is this report in document form, so it is
+              reached from here and inherits whatever period is on screen —
+              rather than sitting in the menu with its own date pickers that
+              start from a different default. */}
+          <Link
+            to={isPeriod
+              ? `/reports/statement?start_date=${startDate}&end_date=${endDate}`
+              : '/reports/statement'}
+            className="btn btn-secondary"
+          >
+            Dokumen / Cetak
+          </Link>
           {byBranch && (
             <button
               className="btn btn-secondary"

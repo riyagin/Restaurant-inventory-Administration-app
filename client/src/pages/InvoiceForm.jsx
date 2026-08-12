@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates, getExpenseCategories } from '../api';
+import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates, getExpenseCategories, uploadUrl } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 import UnitConversion from '../components/UnitConversion';
 import { isBaseUnit } from '../units';
@@ -329,7 +329,15 @@ export default function InvoiceForm() {
         try {
           await uploadInvoicePhoto(savedId, photoFile);
         } catch (photoErr) {
-          alert(`Faktur berhasil disimpan, tetapi upload foto gagal: ${photoErr.response?.data?.error || 'kesalahan tidak diketahui'}`);
+          // The invoice itself is saved; only the file failed. Navigating away
+          // with an alert threw the attachment on the floor and left no way back
+          // to it, so stay on the (now existing) invoice and let them retry.
+          setError(`Faktur tersimpan, tetapi bukti gagal diunggah: `
+            + `${photoErr.response?.data?.error || 'kesalahan tidak diketahui'}. `
+            + `Coba unggah ulang dari halaman ini.`);
+          setSaving(false);
+          if (!isEdit) navigate(`/invoices/edit/${savedId}`, { replace: true });
+          return;
         }
       }
       navigate('/invoices');
@@ -696,18 +704,27 @@ export default function InvoiceForm() {
           <label>Foto Bukti <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
           {existingPhoto && (
             <div style={{ marginBottom: '0.5rem' }}>
-              <img
-                src={`http://localhost:5000${existingPhoto}`}
-                alt="Current receipt"
-                style={{ maxHeight: '120px', maxWidth: '200px', borderRadius: '6px', border: '1px solid #e0e0e0', objectFit: 'contain' }}
-              />
-              <div style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.25rem' }}>Foto saat ini — unggah foto baru untuk menggantinya</div>
+              {/* The upload endpoint accepts PDFs, so the preview has to cope
+                  with one — an <img> pointed at a PDF renders as a broken
+                  image, which reads as a failed upload. */}
+              {/\.pdf$/i.test(existingPhoto) ? (
+                <a href={uploadUrl(existingPhoto)} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">
+                  Lihat PDF saat ini
+                </a>
+              ) : (
+                <img
+                  src={uploadUrl(existingPhoto)}
+                  alt="Current receipt"
+                  style={{ maxHeight: '120px', maxWidth: '200px', borderRadius: '6px', border: '1px solid #e0e0e0', objectFit: 'contain' }}
+                />
+              )}
+              <div style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.25rem' }}>Bukti saat ini — unggah file baru untuk menggantinya</div>
             </div>
           )}
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,.pdf"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
             onChange={e => setPhotoFile(e.target.files[0] ?? null)}
           />
           {photoFile && (

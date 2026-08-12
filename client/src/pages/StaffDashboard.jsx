@@ -16,7 +16,7 @@ const SHORTCUTS = [
   { to: '/transfers', icon: '🔄', label: 'Transfer Gudang', desc: 'Pindahkan stok antar gudang',
     secondary: [['/stock-opname', 'Stok opname']] },
   { to: '/dispatch', icon: '🚚', label: 'Pengiriman ke Cabang', desc: 'Kirim barang ke cabang & divisi',
-    secondary: [['/dispatch-templates', 'Template pengiriman']] },
+    secondary: [['/templates?tab=pengiriman', 'Template pengiriman']] },
 ];
 
 const DAYS_SHOWN = 7;

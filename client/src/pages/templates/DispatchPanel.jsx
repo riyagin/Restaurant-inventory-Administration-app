@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   getDispatchTemplates, createDispatchTemplate, updateDispatchTemplate, deleteDispatchTemplate,
-  getItems, getWarehouses, getBranches, getDivisions,
-} from '../api';
+  getDivisions,
+} from '../../api';
+import { PanelToolbar, FormCard, EmptyRow, Muted } from './shared';
+
+// Dispatch templates: source warehouse, destination, and the goods usually sent.
+// Quantity is never stored — same rule as the other two: a remembered quantity
+// is a number nobody re-reads.
 
 const emptyRow = () => ({ item_id: '', unit_index: '0' });
 
@@ -27,28 +32,25 @@ function TemplateForm({ initial, items, warehouses, branches, onSave, onCancel }
 
   // Divisions belong to a branch, so the list follows the selected branch.
   useEffect(() => {
-    if (!branchId) { setDivisions([]); return; }
-    getDivisions({ branch_id: branchId }).then(r => setDivisions(r.data));
+    let alive = true;
+    const pending = branchId ? getDivisions({ branch_id: branchId }) : Promise.resolve({ data: [] });
+    pending
+      .then(r => { if (alive) setDivisions(r.data || []); })
+      .catch(() => { if (alive) setDivisions([]); });
+    return () => { alive = false; };
   }, [branchId]);
-
-  const handleBranchChange = (val) => {
-    setBranchId(val);
-    setDivisionId('');
-  };
 
   const updateRow = (index, updated) => setRows(rs => rs.map((r, i) => i === index ? updated : r));
   const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index));
-  const addRow = () => setRows(rs => [...rs, emptyRow()]);
 
   const setRowField = (index, field) => (e) => {
     const val = e.target.value;
-    const row = rows[index];
     if (field === 'item_id') {
       // Default to the item's base unit (the last entry in items.units).
       const item = items.find(it => it.id === val);
       updateRow(index, { item_id: val, unit_index: item ? String(item.units.length - 1) : '0' });
     } else {
-      updateRow(index, { ...row, [field]: val });
+      updateRow(index, { ...rows[index], [field]: val });
     }
   };
 
@@ -58,11 +60,7 @@ function TemplateForm({ initial, items, warehouses, branches, onSave, onCancel }
     if (!name.trim()) { setError('Nama template wajib diisi'); return; }
     const payloadItems = rows
       .filter(r => r.item_id)
-      .map((r, idx) => ({
-        item_id: r.item_id,
-        unit_index: Number(r.unit_index),
-        sort_order: idx,
-      }));
+      .map((r, idx) => ({ item_id: r.item_id, unit_index: Number(r.unit_index), sort_order: idx }));
     setSaving(true);
     try {
       await onSave({
@@ -84,85 +82,69 @@ function TemplateForm({ initial, items, warehouses, branches, onSave, onCancel }
     <form onSubmit={handleSubmit}>
       {error && <div className="error-msg" style={{ marginBottom: '0.75rem' }}>{error}</div>}
 
-      <div className="form-row" style={{ marginBottom: '1rem' }}>
-        <div className="form-group" style={{ margin: 0, flex: 2 }}>
+      <div className="tpl-form-grid">
+        <div className="form-group">
           <label>Nama Template</label>
-          <input
-            value={name}
-            onChange={e => setName(e.target.value)}
-            placeholder="Contoh: Kirim Harian Dapur"
-            required
-          />
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Contoh: Kirim Harian Dapur" required />
         </div>
-        <div className="form-group" style={{ margin: 0, flex: 1 }}>
-          <label>Gudang Asal <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+        <div className="form-group">
+          <label>Gudang Asal <Muted>(opsional)</Muted></label>
           <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>
-            <option value="">Pilih gudang...</option>
+            <option value="">Pilih gudang…</option>
             {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
         </div>
-      </div>
-
-      <div className="form-row" style={{ marginBottom: '1rem' }}>
-        <div className="form-group" style={{ margin: 0 }}>
-          <label>Cabang Tujuan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
-          <select value={branchId} onChange={e => handleBranchChange(e.target.value)}>
-            <option value="">Pilih cabang...</option>
+        <div className="form-group">
+          <label>Cabang Tujuan <Muted>(opsional)</Muted></label>
+          <select value={branchId} onChange={e => { setBranchId(e.target.value); setDivisionId(''); }}>
+            <option value="">Pilih cabang…</option>
             {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
         </div>
-        <div className="form-group" style={{ margin: 0 }}>
-          <label>Divisi Tujuan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
+        <div className="form-group">
+          <label>Divisi Tujuan <Muted>(opsional)</Muted></label>
           <select value={divisionId} onChange={e => setDivisionId(e.target.value)} disabled={!branchId}>
-            <option value="">{branchId ? 'Pilih divisi...' : 'Pilih cabang terlebih dahulu'}</option>
+            <option value="">{branchId ? 'Pilih divisi…' : 'Pilih cabang terlebih dahulu'}</option>
             {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
         </div>
-        <div className="form-group" style={{ margin: 0 }}>
-          <label>Catatan Bawaan <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
-          <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Alasan atau deskripsi..." />
+        <div className="form-group">
+          <label>Catatan Bawaan <Muted>(opsional)</Muted></label>
+          <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Alasan atau deskripsi…" />
         </div>
       </div>
 
-      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: '#444', marginBottom: '0.25rem' }}>
-        Barang Bawaan Template <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional — bisa ditambah saat input pengiriman)</span>
+      <div className="tpl-lines-head">
+        Barang Bawaan Template <Muted>(opsional — bisa ditambah saat input pengiriman)</Muted>
       </div>
-      <div style={{ fontSize: '0.78rem', color: '#888', marginBottom: '0.5rem' }}>
-        Jumlah tidak disimpan di template — diisi setiap kali membuat pengiriman.
-      </div>
+      <p className="tpl-lines-note">Jumlah tidak disimpan di template — diisi setiap kali membuat pengiriman.</p>
 
       <div style={{ overflowX: 'auto', marginBottom: '0.75rem' }}>
         <table className="invoice-items-table">
           <thead>
-            <tr>
-              <th>Barang</th>
-              <th>Satuan</th>
-              <th></th>
-            </tr>
+            <tr><th>Barang</th><th>Satuan</th><th></th></tr>
           </thead>
           <tbody>
             {rows.map((row, i) => {
               const selectedItem = items.find(it => it.id === row.item_id);
               return (
                 <tr key={i} style={{ verticalAlign: 'top' }}>
-                  <td style={{ paddingTop: '0.3rem', minWidth: '220px' }}>
+                  <td style={{ minWidth: '220px' }}>
                     <select value={row.item_id} onChange={setRowField(i, 'item_id')} style={{ width: '100%' }}>
-                      <option value="">Pilih barang...</option>
+                      <option value="">Pilih barang…</option>
                       {items.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
                     </select>
                   </td>
-                  <td style={{ paddingTop: '0.3rem', minWidth: '110px' }}>
+                  <td style={{ minWidth: '110px' }}>
                     {selectedItem ? (
                       <select value={row.unit_index} onChange={setRowField(i, 'unit_index')} style={{ width: '100%' }}>
-                        {selectedItem.units.map((u, ui) => (
-                          <option key={ui} value={String(ui)}>{u.name}</option>
-                        ))}
+                        {selectedItem.units.map((u, ui) => <option key={ui} value={String(ui)}>{u.name}</option>)}
                       </select>
                     ) : (
                       <select disabled style={{ width: '100%' }}><option>—</option></select>
                     )}
                   </td>
-                  <td style={{ paddingTop: '0.3rem', width: '40px', textAlign: 'center' }}>
+                  <td style={{ width: '40px', textAlign: 'center' }}>
                     <button type="button" onClick={() => removeRow(i)} className="btn btn-danger btn-sm" title="Hapus baris">✕</button>
                   </td>
                 </tr>
@@ -172,7 +154,7 @@ function TemplateForm({ initial, items, warehouses, branches, onSave, onCancel }
         </table>
       </div>
 
-      <button type="button" onClick={addRow} className="btn btn-secondary btn-sm" style={{ marginBottom: '1.25rem' }}>
+      <button type="button" onClick={() => setRows(rs => [...rs, emptyRow()])} className="btn btn-secondary btn-sm">
         + Tambah Baris
       </button>
 
@@ -186,33 +168,28 @@ function TemplateForm({ initial, items, warehouses, branches, onSave, onCancel }
   );
 }
 
-export default function DispatchTemplates() {
+export default function DispatchPanel({ master, onCount }) {
+  const { items, warehouses, branches } = master;
   const [templates, setTemplates] = useState([]);
-  const [items, setItems] = useState([]);
-  const [warehouses, setWarehouses] = useState([]);
-  const [branches, setBranches] = useState([]);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
   const [error, setError] = useState('');
 
-  const load = () => getDispatchTemplates().then(r => setTemplates(r.data));
+  // Only stock items can be dispatched — a non-stock item has no lots to move.
+  const stockItems = useMemo(() => items.filter(i => i.is_stock !== false), [items]);
 
-  useEffect(() => {
-    load();
-    getItems({ is_stock: 'true' }).then(r => setItems(r.data));
-    getWarehouses().then(r => setWarehouses(r.data));
-    getBranches().then(r => setBranches(r.data));
-  }, []);
+  const load = () => getDispatchTemplates()
+    .then(r => { setTemplates(r.data || []); onCount(r.data?.length || 0); })
+    .catch(() => setError('Gagal memuat template'));
 
-  const handleCreate = async (data) => {
-    await createDispatchTemplate(data);
-    setCreating(false);
-    load();
-  };
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleUpdate = async (data) => {
-    await updateDispatchTemplate(editing.id, data);
-    setEditing(null);
+  const close = () => { setCreating(false); setEditing(null); };
+
+  const handleSave = async (data) => {
+    if (editing) await updateDispatchTemplate(editing.id, data);
+    else await createDispatchTemplate(data);
+    close();
     load();
   };
 
@@ -227,69 +204,54 @@ export default function DispatchTemplates() {
     }
   };
 
-  if (creating || editing) {
-    return (
-      <div className="card" style={{ maxWidth: '800px' }}>
-        <h2 style={{ marginBottom: '1.5rem' }}>
-          {editing ? `Edit Template — ${editing.name}` : 'Template Baru'}
-        </h2>
-        <TemplateForm
-          initial={editing ?? undefined}
-          items={items}
-          warehouses={warehouses}
-          branches={branches}
-          onSave={editing ? handleUpdate : handleCreate}
-          onCancel={() => { setCreating(false); setEditing(null); }}
-        />
-      </div>
-    );
-  }
+  const formOpen = creating || !!editing;
 
   return (
     <>
-      <div className="page-header">
-        <h1>Template Pengiriman</h1>
-        <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Template Baru</button>
-      </div>
+      <PanelToolbar
+        hint="Pintasan yang muncul saat membuat pengiriman baru — mengisi otomatis gudang asal, tujuan, dan daftar barang bawaan."
+        open={formOpen}
+        onNew={() => (formOpen ? close() : setCreating(true))}
+      />
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
 
-      <div className="card">
-        <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '1.25rem' }}>
-          Template menentukan tombol pintasan yang muncul saat membuat pengiriman baru. Setiap template bisa mengisi otomatis gudang asal, tujuan, dan daftar barang bawaan.
-        </p>
+      {formOpen && (
+        <FormCard title={editing ? `Edit Template — ${editing.name}` : 'Template Pengiriman Baru'}>
+          <TemplateForm
+            key={editing?.id || 'new'}
+            initial={editing ?? undefined}
+            items={stockItems}
+            warehouses={warehouses}
+            branches={branches}
+            onSave={handleSave}
+            onCancel={close}
+          />
+        </FormCard>
+      )}
 
-        {templates.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada template</div>
-        ) : (
+      <div className="card">
+        <div style={{ overflowX: 'auto' }}>
           <table>
             <thead>
-              <tr>
-                <th>Nama Template</th>
-                <th>Gudang Asal</th>
-                <th>Tujuan</th>
-                <th>Barang Bawaan</th>
-                <th></th>
-              </tr>
+              <tr><th>Nama Template</th><th>Gudang Asal</th><th>Tujuan</th><th>Barang Bawaan</th><th></th></tr>
             </thead>
             <tbody>
-              {templates.map(tpl => (
+              {templates.length === 0 ? <EmptyRow cols={5} /> : templates.map(tpl => (
                 <tr key={tpl.id}>
                   <td style={{ fontWeight: 600 }}>{tpl.name}</td>
-                  <td style={{ color: '#555' }}>{tpl.warehouse_name || <span style={{ color: '#bbb' }}>—</span>}</td>
-                  <td style={{ color: '#555' }}>
+                  <td style={{ color: 'var(--ink-2)' }}>{tpl.warehouse_name || <Muted>—</Muted>}</td>
+                  <td style={{ color: 'var(--ink-2)' }}>
                     {tpl.branch_name
                       ? `${tpl.branch_name}${tpl.division_name ? ` / ${tpl.division_name}` : ''}`
-                      : <span style={{ color: '#bbb' }}>—</span>}
+                      : <Muted>—</Muted>}
                   </td>
-                  <td style={{ color: '#666', fontSize: '0.85rem' }}>
-                    {tpl.items?.length
-                      ? tpl.items.map(it => it.item_name || '—').join(', ')
-                      : <span style={{ color: '#bbb' }}>—</span>}
+                  <td style={{ color: 'var(--ink-2)', fontSize: '0.85rem' }}>
+                    {tpl.items?.length ? tpl.items.map(it => it.item_name || '—').join(', ') : <Muted>—</Muted>}
                   </td>
                   <td>
                     <div className="actions">
-                      <button onClick={() => setEditing(tpl)} className="btn btn-secondary btn-sm">Edit</button>
+                      <button onClick={() => { setCreating(false); setEditing(tpl); }} className="btn btn-secondary btn-sm">Edit</button>
                       <button onClick={() => handleDelete(tpl.id, tpl.name)} className="btn btn-danger btn-sm">Hapus</button>
                     </div>
                   </td>
@@ -297,7 +259,7 @@ export default function DispatchTemplates() {
               ))}
             </tbody>
           </table>
-        )}
+        </div>
       </div>
     </>
   );

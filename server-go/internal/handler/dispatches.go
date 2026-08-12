@@ -298,7 +298,10 @@ func (h *DispatchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		baseQty := conv.BaseQty(it.Quantity)
 
-		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, baseQty)
+		// Attributed so the lot's own page can say where these goods went, not
+		// merely that they left.
+		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, baseQty,
+			service.LotSource{Type: service.SourceDispatch, ID: dispatchID, Date: entryDate})
 		if err != nil {
 			if strings.Contains(err.Error(), "stok tidak mencukupi") {
 				respondError(w, http.StatusUnprocessableEntity, err.Error())

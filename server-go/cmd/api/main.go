@@ -159,6 +159,7 @@ func main() {
 	dailyPurchasesHandler := handler.NewDailyPurchasesHandler(pool, queries)
 	dailyPurchasesHandler.SetUploadsDir(cfg.UploadsDir)
 	pettyCashHandler := handler.NewPettyCashHandler(pool, queries)
+	cashTrackingHandler := handler.NewCashTrackingHandler(pool, queries)
 	cashDepositsHandler := handler.NewCashDepositsHandler(pool, queries)
 	dispatchesHandler := handler.NewDispatchesHandler(pool, queries)
 	dispatchTemplatesHandler := handler.NewDispatchTemplatesHandler(pool, queries)
@@ -221,6 +222,21 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "db": "connected"})
 	})
+
+	// Uploaded receipts, employee photos and the company logo.
+	//
+	// In production nginx serves this location directly and never reaches Go, so
+	// this route existing changes nothing there. In development nothing served it
+	// at all: every <img src="…/uploads/…"> 404'd, which looked exactly like a
+	// broken upload and is the likeliest thing anyone reporting "photos don't
+	// work" has actually been seeing.
+	//
+	// Deliberately unauthenticated, matching nginx: these URLs are already public
+	// in production, and putting a JWT gate on only the dev path would hide the
+	// difference rather than fix it. http.Dir refuses paths escaping the root, so
+	// a crafted ../ cannot walk out of the uploads directory.
+	r.Handle("/uploads/*", http.StripPrefix("/uploads/",
+		http.FileServer(http.Dir(cfg.UploadsDir))))
 
 	// Public auth routes
 	r.With(appmiddleware.LoginRateLimit()).Post("/api/auth/login", authHandler.Login)
@@ -327,6 +343,8 @@ func main() {
 		// Inventory — all authenticated
 		r.Get("/api/inventory", inventoryHandler.List)
 		r.Get("/api/inventory/count", inventoryHandler.Count)
+		// Registered before /{id} so "lots" is not swallowed as an ID.
+		r.Get("/api/inventory/lots/{id}/history", inventoryHandler.LotHistory)
 		r.Get("/api/inventory/{id}", inventoryHandler.Get)
 		r.Post("/api/inventory", inventoryHandler.Create)
 		r.Put("/api/inventory/{id}", inventoryHandler.Update)
@@ -373,6 +391,14 @@ func main() {
 			r.Post("/api/daily-purchases/{id}/cancel", dailyPurchasesHandler.Cancel)
 		})
 
+		// Templates for the repeating shopping runs. Same reach as the purchases
+		// themselves — whoever records the Tuesday market list should be able to
+		// fix the list when it changes.
+		r.Get("/api/daily-purchase-templates", dailyPurchasesHandler.ListTemplates)
+		r.Post("/api/daily-purchase-templates", dailyPurchasesHandler.CreateTemplate)
+		r.Put("/api/daily-purchase-templates/{id}", dailyPurchasesHandler.UpdateTemplate)
+		r.Delete("/api/daily-purchase-templates/{id}", dailyPurchasesHandler.DeleteTemplate)
+
 		// Petty cash — everyone can see the board (staff need to know what is in
 		// the box before they spend from it), but only admin records the counts.
 		r.Get("/api/petty-cash", pettyCashHandler.Day)
@@ -382,6 +408,20 @@ func main() {
 			r.Use(appmiddleware.RequireAdmin)
 			r.Post("/api/petty-cash/opening", pettyCashHandler.RecordOpening)
 			r.Post("/api/petty-cash/closing", pettyCashHandler.RecordClosing)
+		})
+
+		// Pelacakan Kas — the branch till, reconciled against POS cash takings.
+		// Read is open (staff need to see the day before they close it); the
+		// counts are admin-only, same rule as the petty cash box.
+		r.Get("/api/cash-tracking", cashTrackingHandler.Day)
+		r.Get("/api/cash-tracking/history", cashTrackingHandler.History)
+		r.Get("/api/cash-tracking/settlement", cashTrackingHandler.Settlement)
+		r.Get("/api/cash-tracking/drawer-accounts", cashTrackingHandler.DrawerAccounts)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Post("/api/cash-tracking/opening", cashTrackingHandler.RecordOpening)
+			r.Post("/api/cash-tracking/closing", cashTrackingHandler.RecordClosing)
+			r.Put("/api/cash-tracking/drawer-accounts/{id}", cashTrackingHandler.SetDrawerAccount)
 		})
 
 		// Setoran — moving cash between the box, the till and the owner's bank.
@@ -704,6 +744,7 @@ func main() {
 			r.Use(appmiddleware.RequireReportsAccess)
 			r.Get("/api/reports/financial", reportsHandler.Financial)
 			r.Get("/api/reports/profit-loss-by-branch", reportsHandler.ProfitLossByBranch)
+			r.Get("/api/reports/profit-loss-periodic", reportsHandler.ProfitLossPeriodic)
 			r.Get("/api/reports/cash-summary", reportsHandler.CashSummary)
 			r.Get("/api/reports/daily", reportsHandler.Daily)
 			r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)

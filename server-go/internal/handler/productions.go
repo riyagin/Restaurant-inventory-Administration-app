@@ -156,7 +156,8 @@ func (h *ProductionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		itemID := ing.ItemID.Bytes
 		needed := numericToFloat64(ing.Quantity) * body.Batches
 
-		deductedValue, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, needed)
+		deductedValue, err := service.FIFODeduct(ctx, qtx, itemID, warehouseID, needed,
+			service.LotSource{Type: "production", Date: productionDate})
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal mengurangi stok bahan")
 			return

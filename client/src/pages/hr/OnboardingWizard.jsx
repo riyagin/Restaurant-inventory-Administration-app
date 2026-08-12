@@ -4,15 +4,16 @@ import {
   createEmployee, updateEmployee, getBranches, getPositions, createPosition,
   getEmployeeDocuments, uploadEmployeeDocument, deleteEmployeeDocument,
 } from '../../api';
+import Icon from '../../components/Icon';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
 const STEPS = [
-  { key: 'pribadi',     title: 'Data Pribadi',  icon: '👤', desc: 'Identitas & kontak' },
-  { key: 'kepegawaian', title: 'Kepegawaian',   icon: '💼', desc: 'Jabatan & status' },
-  { key: 'bank',        title: 'Rekening Bank', icon: '🏦', desc: 'Info pembayaran' },
-  { key: 'dokumen',     title: 'Dokumen',       icon: '📎', desc: 'Unggah berkas' },
-  { key: 'selesai',     title: 'Selesai',       icon: '✅', desc: 'Ringkasan' },
+  { key: 'pribadi',     title: 'Data Pribadi',  icon: 'user',        desc: 'Identitas & kontak' },
+  { key: 'kepegawaian', title: 'Kepegawaian',   icon: 'briefcase',   desc: 'Jabatan & status' },
+  { key: 'bank',        title: 'Rekening Bank', icon: 'bank',        desc: 'Info pembayaran' },
+  { key: 'dokumen',     title: 'Dokumen',       icon: 'paperclip',   desc: 'Unggah berkas' },
+  { key: 'selesai',     title: 'Selesai',       icon: 'checkCircle', desc: 'Ringkasan' },
 ];
 
 const DOC_STEP = 3;
@@ -222,7 +223,11 @@ export default function OnboardingWizard() {
       <p className="onb-step-count">Langkah {step + 1} dari {STEPS.length}</p>
 
       {/* Stepper. Completed steps are clickable so a correction doesn't require
-          walking the whole flow backwards. */}
+          walking the whole flow backwards.
+          The icon sits above its label rather than beside it: side by side, the
+          label had to share a narrow column with the connector line and got
+          clipped as soon as the window narrowed. Stacked, each label owns the
+          full width of its column and wraps instead of truncating. */}
       <ol className="onb-stepper">
         {STEPS.map((s, i) => {
           const state = i < step ? 'done' : i === step ? 'active' : 'todo';
@@ -236,7 +241,9 @@ export default function OnboardingWizard() {
                 aria-current={i === step ? 'step' : undefined}
                 onClick={reachable ? () => goTo(i) : undefined}
               >
-                <span className="onb-dot" aria-hidden="true">{i < step ? '✓' : s.icon}</span>
+                <span className="onb-dot">
+                  <Icon name={i < step ? 'check' : s.icon} size={20} />
+                </span>
                 <span className="onb-step-label">
                   <span className="onb-step-title">{s.title}</span>
                   <span className="onb-step-desc">{s.desc}</span>
@@ -253,7 +260,13 @@ export default function OnboardingWizard() {
 
       {/* key remounts the panel so the slide-in replays on each step change. */}
       <div key={step} className={`onb-panel card${direction === 'back' ? ' back' : ''}`}>
-        <div className="card-header"><h2>{stepInfo.icon} {stepInfo.title}</h2></div>
+        <div className="card-header">
+          <h2 className="onb-panel-title">
+            <span className="onb-panel-icon"><Icon name={stepInfo.icon} size={18} /></span>
+            <span>{stepInfo.title}</span>
+            <span className="onb-panel-desc">{stepInfo.desc}</span>
+          </h2>
+        </div>
 
         {step === 0 && (
           <div style={grid}>
@@ -351,8 +364,8 @@ export default function OnboardingWizard() {
               </Field>
               <Field label="Catatan"><input value={docForm.notes} onChange={(e) => setDocForm((s) => ({ ...s, notes: e.target.value }))} /></Field>
             </div>
-            <button className="btn btn-primary" disabled={uploading || !docForm.file} onClick={uploadDoc}>
-              {uploading ? 'Mengunggah…' : '⬆ Unggah Dokumen'}
+            <button className="btn btn-primary onb-btn-icon" disabled={uploading || !docForm.file} onClick={uploadDoc}>
+              {uploading ? 'Mengunggah…' : <><Icon name="upload" size={16} />Unggah Dokumen</>}
             </button>
 
             <div style={{ marginTop: '1.4rem' }}>
@@ -364,7 +377,7 @@ export default function OnboardingWizard() {
                 </p>
               ) : docs.map((d) => (
                 <div key={d.id} className="onb-doc-row">
-                  <span aria-hidden="true" style={{ fontSize: '1.2rem' }}>📄</span>
+                  <span className="onb-doc-icon"><Icon name="file" size={18} /></span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="onb-doc-name">{d.title}</div>
                     <div className="onb-doc-meta">
@@ -382,7 +395,7 @@ export default function OnboardingWizard() {
         {step === DONE_STEP && (
           <div className="onb-summary">
             <div style={{ textAlign: 'center', padding: '0.6rem 0 1.4rem' }}>
-              <div className="onb-check-badge" aria-hidden="true">✓</div>
+              <div className="onb-check-badge"><Icon name="check" size={32} strokeWidth={2.6} /></div>
               <h2 style={{ margin: '0.6rem 0 0.2rem' }}>{emp.full_name} berhasil di-onboarding</h2>
               <p style={{ color: 'var(--ink-3)', margin: 0 }}>
                 Data karyawan dan {docs.length} dokumen telah tersimpan.
@@ -402,17 +415,17 @@ export default function OnboardingWizard() {
 
       <div className="onb-actions">
         {step > 0 && step < DONE_STEP
-          ? <button className="btn btn-secondary" onClick={back} disabled={saving}>← Kembali</button>
+          ? <button className="btn btn-secondary onb-btn-icon" onClick={back} disabled={saving}><Icon name="arrowLeft" size={16} />Kembali</button>
           : <span />}
 
         {step < DOC_STEP && (
-          <button className="btn btn-primary" onClick={next} disabled={saving}>
-            {saving ? 'Menyimpan…' : (step === DOC_STEP - 1 ? 'Simpan & Lanjut →' : 'Lanjut →')}
+          <button className="btn btn-primary onb-btn-icon" onClick={next} disabled={saving}>
+            {saving ? 'Menyimpan…' : <>{step === DOC_STEP - 1 ? 'Simpan & Lanjut' : 'Lanjut'}<Icon name="arrowRight" size={16} /></>}
           </button>
         )}
         {step === DOC_STEP && (
-          <button className="btn btn-primary" onClick={() => goTo(DONE_STEP)}>
-            {docs.length === 0 ? 'Lewati & Selesai →' : 'Selesai →'}
+          <button className="btn btn-primary onb-btn-icon" onClick={() => goTo(DONE_STEP)}>
+            {docs.length === 0 ? 'Lewati & Selesai' : 'Selesai'}<Icon name="arrowRight" size={16} />
           </button>
         )}
         {step === DONE_STEP && (

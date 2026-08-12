@@ -12,22 +12,38 @@ import (
 )
 
 const countInventory = `-- name: CountInventory :one
-SELECT COUNT(*)
-FROM inventory inv
-JOIN items i ON i.id = inv.item_id
-WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
-  AND ($2::uuid IS NULL OR inv.item_id = $2)
-  AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
-  AND ($4::date IS NULL OR inv.date >= $4)
-  AND ($5::date IS NULL OR inv.date <= $5)
+SELECT (
+    (SELECT COUNT(*)
+     FROM inventory inv
+     JOIN items i ON i.id = inv.item_id
+     WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
+       AND ($2::uuid IS NULL OR inv.item_id = $2)
+       AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+       AND ($4::date IS NULL OR inv.date >= $4)
+       AND ($5::date IS NULL OR inv.date <= $5)
+       AND ($6::bool OR inv.quantity > 0))
+  + (SELECT COUNT(*)
+     FROM items i
+     WHERE $6::bool
+       AND i.is_stock
+       AND ($2::uuid IS NULL OR i.id = $2)
+       AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+       AND $4::date IS NULL
+       AND $5::date IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM inventory x
+         WHERE x.item_id = i.id
+           AND ($1::uuid IS NULL OR x.warehouse_id = $1)))
+)::bigint AS count
 `
 
 type CountInventoryParams struct {
-	WarehouseID pgtype.UUID `json:"warehouse_id"`
-	ItemID      pgtype.UUID `json:"item_id"`
-	Search      pgtype.Text `json:"search"`
-	DateFrom    pgtype.Date `json:"date_from"`
-	DateTo      pgtype.Date `json:"date_to"`
+	WarehouseID  pgtype.UUID `json:"warehouse_id"`
+	ItemID       pgtype.UUID `json:"item_id"`
+	Search       pgtype.Text `json:"search"`
+	DateFrom     pgtype.Date `json:"date_from"`
+	DateTo       pgtype.Date `json:"date_to"`
+	IncludeEmpty bool        `json:"include_empty"`
 }
 
 func (q *Queries) CountInventory(ctx context.Context, arg *CountInventoryParams) (int64, error) {
@@ -37,6 +53,7 @@ func (q *Queries) CountInventory(ctx context.Context, arg *CountInventoryParams)
 		arg.Search,
 		arg.DateFrom,
 		arg.DateTo,
+		arg.IncludeEmpty,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -309,44 +326,84 @@ func (q *Queries) ListInventory(ctx context.Context, arg *ListInventoryParams) (
 }
 
 const listInventoryPage = `-- name: ListInventoryPage :many
-SELECT
-    inv.id, inv.item_id, inv.warehouse_id, inv.quantity,
-    inv.unit_index, inv.date,
-    i.name AS item_name, i.code AS item_code, i.units AS item_units,
-    w.name AS warehouse_name
-FROM inventory inv
-JOIN items i ON i.id = inv.item_id
-JOIN warehouses w ON w.id = inv.warehouse_id
-WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
-  AND ($2::uuid IS NULL OR inv.item_id = $2)
-  AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
-  AND ($4::date IS NULL OR inv.date >= $4)
-  AND ($5::date IS NULL OR inv.date <= $5)
-ORDER BY i.name, w.name, inv.date ASC
-LIMIT $7 OFFSET $6
+WITH lots AS (
+    SELECT
+        inv.id, inv.item_id, inv.warehouse_id, inv.quantity,
+        inv.unit_index, inv.date, inv.depleted_at,
+        i.name AS item_name, i.code AS item_code, i.units AS item_units,
+        w.name AS warehouse_name
+    FROM inventory inv
+    JOIN items i ON i.id = inv.item_id
+    JOIN warehouses w ON w.id = inv.warehouse_id
+    WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
+      AND ($2::uuid IS NULL OR inv.item_id = $2)
+      AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+      AND ($4::date IS NULL OR inv.date >= $4)
+      AND ($5::date IS NULL OR inv.date <= $5)
+      AND ($6::bool OR inv.quantity > 0)
+),
+empty_items AS (
+    SELECT
+        NULL::uuid AS id, i.id AS item_id, NULL::uuid AS warehouse_id, 0::numeric AS quantity,
+        0::int AS unit_index, NULL::date AS date, NULL::timestamptz AS depleted_at,
+        i.name AS item_name, i.code AS item_code, i.units AS item_units,
+        NULL::text AS warehouse_name
+    FROM items i
+    WHERE $6::bool
+      AND i.is_stock
+      AND ($2::uuid IS NULL OR i.id = $2)
+      AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
+      AND $4::date IS NULL
+      AND $5::date IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM inventory x
+        WHERE x.item_id = i.id
+          AND ($1::uuid IS NULL OR x.warehouse_id = $1)
+      )
+)
+SELECT id, item_id, warehouse_id, quantity, unit_index, date, depleted_at,
+       item_name, item_code, item_units, warehouse_name
+FROM (SELECT * FROM lots UNION ALL SELECT * FROM empty_items) rows
+ORDER BY
+    CASE WHEN $7::text = 'item'      AND $8::text = 'asc'  THEN item_name END ASC,
+    CASE WHEN $7::text = 'item'      AND $8::text = 'desc' THEN item_name END DESC,
+    CASE WHEN $7::text = 'code'      AND $8::text = 'asc'  THEN item_code END ASC,
+    CASE WHEN $7::text = 'code'      AND $8::text = 'desc' THEN item_code END DESC,
+    CASE WHEN $7::text = 'quantity'  AND $8::text = 'asc'  THEN quantity END ASC,
+    CASE WHEN $7::text = 'quantity'  AND $8::text = 'desc' THEN quantity END DESC,
+    CASE WHEN $7::text = 'warehouse' AND $8::text = 'asc'  THEN warehouse_name END ASC,
+    CASE WHEN $7::text = 'warehouse' AND $8::text = 'desc' THEN warehouse_name END DESC,
+    CASE WHEN $7::text = 'date'      AND $8::text = 'asc'  THEN date END ASC,
+    CASE WHEN $7::text = 'date'      AND $8::text = 'desc' THEN date END DESC,
+    item_name, warehouse_name NULLS LAST, date
+LIMIT $10 OFFSET $9
 `
 
 type ListInventoryPageParams struct {
-	WarehouseID pgtype.UUID `json:"warehouse_id"`
-	ItemID      pgtype.UUID `json:"item_id"`
-	Search      pgtype.Text `json:"search"`
-	DateFrom    pgtype.Date `json:"date_from"`
-	DateTo      pgtype.Date `json:"date_to"`
-	Offset      int32       `json:"offset"`
-	Limit       int32       `json:"limit"`
+	WarehouseID  pgtype.UUID `json:"warehouse_id"`
+	ItemID       pgtype.UUID `json:"item_id"`
+	Search       pgtype.Text `json:"search"`
+	DateFrom     pgtype.Date `json:"date_from"`
+	DateTo       pgtype.Date `json:"date_to"`
+	IncludeEmpty bool        `json:"include_empty"`
+	Sort         string      `json:"sort"`
+	Dir          string      `json:"dir"`
+	Offset       int32       `json:"offset"`
+	Limit        int32       `json:"limit"`
 }
 
 type ListInventoryPageRow struct {
-	ID            pgtype.UUID    `json:"id"`
-	ItemID        pgtype.UUID    `json:"item_id"`
-	WarehouseID   pgtype.UUID    `json:"warehouse_id"`
-	Quantity      pgtype.Numeric `json:"quantity"`
-	UnitIndex     int32          `json:"unit_index"`
-	Date          pgtype.Date    `json:"date"`
-	ItemName      string         `json:"item_name"`
-	ItemCode      string         `json:"item_code"`
-	ItemUnits     []byte         `json:"item_units"`
-	WarehouseName string         `json:"warehouse_name"`
+	ID            pgtype.UUID        `json:"id"`
+	ItemID        pgtype.UUID        `json:"item_id"`
+	WarehouseID   pgtype.UUID        `json:"warehouse_id"`
+	Quantity      pgtype.Numeric     `json:"quantity"`
+	UnitIndex     int32              `json:"unit_index"`
+	Date          pgtype.Date        `json:"date"`
+	DepletedAt    pgtype.Timestamptz `json:"depleted_at"`
+	ItemName      string             `json:"item_name"`
+	ItemCode      string             `json:"item_code"`
+	ItemUnits     []byte             `json:"item_units"`
+	WarehouseName pgtype.Text        `json:"warehouse_name"`
 }
 
 func (q *Queries) ListInventoryPage(ctx context.Context, arg *ListInventoryPageParams) ([]*ListInventoryPageRow, error) {
@@ -356,6 +413,9 @@ func (q *Queries) ListInventoryPage(ctx context.Context, arg *ListInventoryPageP
 		arg.Search,
 		arg.DateFrom,
 		arg.DateTo,
+		arg.IncludeEmpty,
+		arg.Sort,
+		arg.Dir,
 		arg.Offset,
 		arg.Limit,
 	)
@@ -373,6 +433,7 @@ func (q *Queries) ListInventoryPage(ctx context.Context, arg *ListInventoryPageP
 			&i.Quantity,
 			&i.UnitIndex,
 			&i.Date,
+			&i.DepletedAt,
 			&i.ItemName,
 			&i.ItemCode,
 			&i.ItemUnits,

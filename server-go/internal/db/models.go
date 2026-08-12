@@ -16,6 +16,9 @@ type Account struct {
 	AccountType   string      `json:"account_type"`
 	ParentID      pgtype.UUID `json:"parent_id"`
 	IsSystem      bool        `json:"is_system"`
+	// Physical cash that can be counted at the end of a day. Drives which POS
+	// payment methods Pelacakan Kas reconciles against a drawer count.
+	IsCashDrawer bool `json:"is_cash_drawer"`
 }
 
 type AccountAdjustment struct {
@@ -83,6 +86,26 @@ type Branch struct {
 	PettyCashAccountID pgtype.UUID        `json:"petty_cash_account_id"`
 }
 
+type CashDayCount struct {
+	ID              pgtype.UUID        `json:"id"`
+	BranchID        pgtype.UUID        `json:"branch_id"`
+	CountDate       pgtype.Date        `json:"count_date"`
+	OpeningAmount   int64              `json:"opening_amount"`
+	OpeningBy       pgtype.UUID        `json:"opening_by"`
+	OpeningAt       pgtype.Timestamptz `json:"opening_at"`
+	ClosingAmount   pgtype.Int8        `json:"closing_amount"`
+	ClosingBy       pgtype.UUID        `json:"closing_by"`
+	ClosingAt       pgtype.Timestamptz `json:"closing_at"`
+	ExpectedClosing pgtype.Int8        `json:"expected_closing"`
+	Variance        pgtype.Int8        `json:"variance"`
+	VarianceNote    string             `json:"variance_note"`
+	CashSales       int64              `json:"cash_sales"`
+	CashIn          int64              `json:"cash_in"`
+	CashOut         int64              `json:"cash_out"`
+	CashExpenses    int64              `json:"cash_expenses"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type CashDeposit struct {
 	ID            pgtype.UUID        `json:"id"`
 	Number        string             `json:"number"`
@@ -134,6 +157,28 @@ type DailyPurchaseItem struct {
 	UnitIndex        pgtype.Int4    `json:"unit_index"`
 	Price            int64          `json:"price"`
 	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+}
+
+type DailyPurchaseTemplate struct {
+	ID                pgtype.UUID        `json:"id"`
+	Name              string             `json:"name"`
+	BranchID          pgtype.UUID        `json:"branch_id"`
+	DivisionID        pgtype.UUID        `json:"division_id"`
+	WarehouseID       pgtype.UUID        `json:"warehouse_id"`
+	VendorID          pgtype.UUID        `json:"vendor_id"`
+	ExpenseCategoryID pgtype.UUID        `json:"expense_category_id"`
+	Notes             string             `json:"notes"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+}
+
+type DailyPurchaseTemplateItem struct {
+	ID          pgtype.UUID `json:"id"`
+	TemplateID  pgtype.UUID `json:"template_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	Description string      `json:"description"`
+	UnitIndex   int32       `json:"unit_index"`
+	SortOrder   int32       `json:"sort_order"`
 }
 
 type PettyCashCount struct {
@@ -307,13 +352,28 @@ type HrSetting struct {
 }
 
 type Inventory struct {
-	ID          pgtype.UUID    `json:"id"`
-	ItemID      pgtype.UUID    `json:"item_id"`
-	WarehouseID pgtype.UUID    `json:"warehouse_id"`
-	Quantity    pgtype.Numeric `json:"quantity"`
-	UnitIndex   int32          `json:"unit_index"`
-	Value       int64          `json:"value"`
-	Date        pgtype.Date    `json:"date"`
+	ID          pgtype.UUID        `json:"id"`
+	ItemID      pgtype.UUID        `json:"item_id"`
+	WarehouseID pgtype.UUID        `json:"warehouse_id"`
+	Quantity    pgtype.Numeric     `json:"quantity"`
+	UnitIndex   int32              `json:"unit_index"`
+	Value       int64              `json:"value"`
+	Date        pgtype.Date        `json:"date"`
+	DepletedAt  pgtype.Timestamptz `json:"depleted_at"`
+}
+
+type InventoryLotConsumption struct {
+	ID          pgtype.UUID        `json:"id"`
+	LotID       pgtype.UUID        `json:"lot_id"`
+	ItemID      pgtype.UUID        `json:"item_id"`
+	WarehouseID pgtype.UUID        `json:"warehouse_id"`
+	Quantity    pgtype.Numeric     `json:"quantity"`
+	Value       int64              `json:"value"`
+	SourceType  pgtype.Text        `json:"source_type"`
+	SourceID    pgtype.UUID        `json:"source_id"`
+	Reference   string             `json:"reference"`
+	Date        pgtype.Date        `json:"date"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Invoice struct {

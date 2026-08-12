@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,6 +58,12 @@ func NotificationsFor(ctx context.Context, pool *pgxpool.Pool, role string, toda
 			return nil, err
 		}
 		out = append(out, low...)
+
+		cash, err := cashVarianceNotifications(ctx, pool, today)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cash...)
 	}
 
 	// Approval is manager-only everywhere else in the app; the feed follows.
@@ -138,6 +145,79 @@ func lowStockNotification(ctx context.Context, pool *pgxpool.Pool) ([]Notificati
 		Link:     "/items?low_stock=true",
 		Count:    count,
 	}}, nil
+}
+
+// CashVarianceLookbackDays bounds how far back an unexplained cash difference
+// keeps being reported. Beyond a fortnight it is a question for the books, not
+// something anyone can still resolve by remembering the day.
+const CashVarianceLookbackDays = 14
+
+// cashVarianceNotifications reports days whose counted cash did not match what
+// the system says should have been there — the till and the petty cash box
+// alike, as two lines rather than one, because they are found and fixed in
+// different places.
+//
+// Only *closed* days count. A day with an opening and no closing yet is simply
+// not finished; nagging about it before the shift ends is noise, and the daily
+// task board already tracks the omission.
+func cashVarianceNotifications(ctx context.Context, pool *pgxpool.Pool, today time.Time) ([]Notification, error) {
+	from := today.AddDate(0, 0, -CashVarianceLookbackDays)
+
+	sources := []struct{ kind, table, title, link string }{
+		{"cash_variance", "cash_day_counts", "Selisih kas laci", "/cash-tracking"},
+		{"petty_cash_variance", "petty_cash_counts", "Selisih kas kecil", "/petty-cash"},
+	}
+
+	out := []Notification{}
+	for _, s := range sources {
+		var count int
+		var total int64
+		// #nosec G201 — table name comes from the closed literal list above.
+		err := pool.QueryRow(ctx, fmt.Sprintf(`
+			SELECT COUNT(*), COALESCE(SUM(ABS(variance)), 0)
+			FROM %s
+			WHERE variance IS NOT NULL AND variance <> 0
+			  AND count_date BETWEEN $1 AND $2`, s.table), from, today).Scan(&count, &total)
+		if err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			continue
+		}
+		out = append(out, Notification{
+			ID:       s.kind,
+			Kind:     s.kind,
+			Severity: SeverityWarn,
+			Title:    s.title,
+			Detail: fmt.Sprintf("%s dengan selisih, total Rp %s dalam %d hari terakhir",
+				plural(count, "hari"), formatThousands(total), CashVarianceLookbackDays),
+			Link:  s.link,
+			Count: count,
+		})
+	}
+	return out, nil
+}
+
+// formatThousands renders an amount with Indonesian thousand separators. The
+// notification feed is read at a glance, and "1.250.000" is legible where
+// "1250000" is not.
+func formatThousands(n int64) string {
+	s := fmt.Sprintf("%d", n)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte('.')
+		}
+		b.WriteRune(c)
+	}
+	if neg {
+		return "-" + b.String()
+	}
+	return b.String()
 }
 
 // approvalNotifications counts what is waiting on a manager's decision. Counts,

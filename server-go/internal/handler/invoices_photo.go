@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,60 @@ import (
 // SetUploadsDir injects the uploads directory into the handler.
 func (h *InvoicesHandler) SetUploadsDir(dir string) {
 	h.uploadsDir = dir
+}
+
+// receiptFileExt decides what to save a receipt upload as.
+//
+// Judging by filename extension alone rejected perfectly good uploads: a photo
+// taken in the app and posted as a blob arrives with no filename at all, and
+// Android share sheets routinely hand over "image.webp" or a HEIC from the
+// camera roll. So the part's declared content type is consulted first — it is
+// what the browser actually knows about the bytes — and the filename is only a
+// fallback for the browsers that send a generic octet-stream.
+//
+// The error names the format that was rejected. "format file tidak didukung"
+// with no subject leaves the operator guessing which of the three files they
+// just tried was the problem.
+func receiptFileExt(header *multipart.FileHeader) (string, error) {
+	byContentType := map[string]string{
+		"image/jpeg":      ".jpg",
+		"image/jpg":       ".jpg",
+		"image/png":       ".png",
+		"image/webp":      ".webp",
+		"image/heic":      ".heic",
+		"image/heif":      ".heic",
+		"application/pdf": ".pdf",
+	}
+	allowedExt := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true,
+		".webp": true, ".heic": true, ".heif": true, ".pdf": true,
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(
+		strings.SplitN(header.Header.Get("Content-Type"), ";", 2)[0]))
+	if ext, ok := byContentType[contentType]; ok {
+		return ext, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if allowedExt[ext] {
+		if ext == ".jpeg" {
+			return ".jpg", nil
+		}
+		if ext == ".heif" {
+			return ".heic", nil
+		}
+		return ext, nil
+	}
+
+	switch {
+	case ext != "":
+		return "", fmt.Errorf("format file %s tidak didukung — gunakan JPG, PNG, WEBP, HEIC atau PDF", ext)
+	case contentType != "":
+		return "", fmt.Errorf("jenis file %q tidak didukung — gunakan JPG, PNG, WEBP, HEIC atau PDF", contentType)
+	default:
+		return "", errors.New("jenis file tidak dikenali — gunakan JPG, PNG, WEBP, HEIC atau PDF")
+	}
 }
 
 // UploadPhoto — POST /api/invoices/:id/photo
@@ -43,11 +98,9 @@ func (h *InvoicesHandler) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".pdf":
-	default:
-		respondError(w, http.StatusBadRequest, "format file tidak didukung (jpg, jpeg, png, pdf)")
+	ext, err := receiptFileExt(header)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

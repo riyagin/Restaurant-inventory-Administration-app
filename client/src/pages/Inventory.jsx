@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { Fragment, useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { getInventory, getInventoryCount, getWarehouses, deleteInventoryRecord, getStockHistory } from '../api';
+import { getInventory, getInventoryCount, getWarehouses, deleteInventoryRecord, getLotHistory } from '../api';
 
 const PAGE_SIZES = [25, 50, 100, 200];
 
@@ -34,82 +34,137 @@ const TYPE_STYLE = {
   SO:                { background: '#fff3e0', color: '#f57c00' },
 };
 
-function HistoryPanel({ itemId, warehouseId }) {
-  const [rows, setRows] = useState(null);
+const SOURCE_LABEL = {
+  dispatch: 'Pengiriman',
+  stock_transfer: 'Transfer gudang',
+  production: 'Produksi',
+  stock_opname: 'Stok opname',
+  enumeration: 'Pencacahan',
+  invoice: 'Koreksi faktur',
+  daily_purchase: 'Koreksi pembelanjaan',
+};
+
+// One lot's life, not the item's.
+//
+// The old panel showed every movement of the item in that warehouse, so the
+// deliveries either side of this one were mixed into the same list and you could
+// not tell which usage came out of which batch. This shows the arrival, the
+// usages that actually consumed *this* lot, and whatever is still on the shelf.
+function LotHistoryPanel({ lotId }) {
+  const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    getStockHistory(itemId, { warehouse_id: warehouseId }).then(r => setRows(r.data));
-  }, [itemId, warehouseId]);
+    let alive = true;
+    getLotHistory(lotId)
+      .then(r => { if (alive) setData(r.data); })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [lotId]);
 
-  if (!rows) return (
-    <td colSpan={7} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
-      <span style={{color:'#999',fontSize:'0.85rem'}}>Memuat riwayat...</span>
-    </td>
-  );
-
-  if (!rows.length) return (
-    <td colSpan={7} style={{padding:'1rem 1.5rem',background:'#f8f9ff'}}>
-      <span style={{color:'#999',fontSize:'0.85rem'}}>Belum ada riwayat</span>
-    </td>
-  );
-
-  return (
+  const wrap = (children) => (
     <td colSpan={7} style={{padding:'0.75rem 1.5rem 1rem',background:'#f8f9ff',borderTop:'none'}}>
-      <div style={{fontSize:'0.78rem',fontWeight:600,color:'#666',marginBottom:'0.5rem',textTransform:'uppercase',letterSpacing:'0.4px'}}>
-        {rows.length} interaksi terakhir
-      </div>
-      <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
-        <thead>
-          <tr>
-            {['Tanggal','Tipe','Perubahan','Satuan','Nilai','Vendor','Gudang','Referensi'].map(h => (
-              <th key={h} style={{textAlign: h === 'Value' ? 'right' : 'left',padding:'0.3rem 0.6rem',color:'#888',fontWeight:600,borderBottom:'1px solid #e8e8e8',whiteSpace:'nowrap'}}>
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(r => {
-            const isPositive = Number(r.quantity_change) > 0;
-            const refPath = r.source_type && r.source_id ? SOURCE_PATH[r.source_type]?.(r.source_id) : null;
-            const val = r.value != null ? Number(r.value) : null;
-            return (
-              <tr key={r.id}>
-                <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{fmt(r.date)}</td>
-                <td style={{padding:'0.3rem 0.6rem'}}>
-                  <span style={{
-                    display:'inline-block',padding:'0.1rem 0.45rem',borderRadius:'4px',fontSize:'0.75rem',fontWeight:600,
-                    ...(TYPE_STYLE[r.type] ?? { background: '#eee', color: '#555' }),
-                  }}>
-                    {TYPE_LABEL[r.type] ?? r.type}
-                  </span>
-                </td>
-                <td style={{padding:'0.3rem 0.6rem',fontWeight:600,color: isPositive ? '#27ae60' : '#e74c3c'}}>
-                  {isPositive ? '+' : ''}{Number(r.quantity_change).toLocaleString('id-ID')}
-                </td>
-                <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{r.unit_name}</td>
-                <td style={{padding:'0.3rem 0.6rem',textAlign:'right',fontWeight:600,whiteSpace:'nowrap',color: val == null ? '#ccc' : val >= 0 ? '#27ae60' : '#e74c3c'}}>
-                  {val == null ? '—' : (val >= 0 ? '+' : '') + idr(val)}
-                </td>
-                <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{r.vendor ?? '—'}</td>
-                <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{r.warehouse_name}</td>
-                <td style={{padding:'0.3rem 0.6rem'}}>
-                  {refPath ? (
-                    <Link to={refPath} style={{color:'#4f8ef7',textDecoration:'none',fontWeight:500,fontSize:'0.82rem'}}>
-                      {r.reference ?? 'Lihat'}
-                    </Link>
-                  ) : (
-                    <span style={{color: r.reference ? '#888' : '#ccc', fontStyle: r.reference ? 'normal' : 'italic'}}>
-                      {r.reference ?? '—'}
-                    </span>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {children}
     </td>
+  );
+
+  if (failed) return wrap(<span style={{color:'#e74c3c',fontSize:'0.85rem'}}>Gagal memuat riwayat lot</span>);
+  if (!data) return wrap(<span style={{color:'#999',fontSize:'0.85rem'}}>Memuat riwayat…</span>);
+
+  const { lot, consumptions, traced } = data;
+  const opened = Number(lot.quantity) + Number(lot.consumed_quantity);
+
+  return wrap(
+    <>
+      <div style={{display:'flex',gap:'1.5rem',flexWrap:'wrap',marginBottom:'0.75rem',fontSize:'0.83rem'}}>
+        <span><strong>Masuk</strong> {fmt(lot.date)}
+          {lot.opening_vendor && <span style={{color:'#777'}}> · {lot.opening_vendor}</span>}
+          {lot.opening_reference && <span style={{color:'#777'}}> · {lot.opening_reference}</span>}
+        </span>
+        <span style={{color:'#555'}}>Jumlah awal <strong>{opened.toLocaleString('id-ID')}</strong></span>
+        <span style={{color:'#555'}}>Terpakai <strong>{Number(lot.consumed_quantity).toLocaleString('id-ID')}</strong></span>
+        <span style={{color:'#555'}}>Sisa <strong>{Number(lot.quantity).toLocaleString('id-ID')}</strong></span>
+        {lot.depleted_at
+          ? <span style={{color:'#e74c3c',fontWeight:600}}>Habis {fmt(lot.depleted_at)}</span>
+          : <span style={{color:'#27ae60',fontWeight:600}}>Masih ada</span>}
+      </div>
+
+      {!traced ? (
+        // Lots consumed before per-lot tracing existed were deleted outright, so
+        // their usage genuinely cannot be reconstructed. Say that, rather than
+        // showing an empty table that reads as "never used".
+        <div style={{fontSize:'0.83rem',color:'#888',fontStyle:'italic'}}>
+          Lot ini habis sebelum pelacakan per-lot aktif, jadi rincian pemakaiannya tidak tersimpan.
+          Riwayat tingkat barang masih lengkap di halaman barang.
+        </div>
+      ) : consumptions.length === 0 ? (
+        <div style={{fontSize:'0.83rem',color:'#999'}}>Belum ada pemakaian dari lot ini.</div>
+      ) : (
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:'0.82rem'}}>
+          <thead>
+            <tr>
+              {['Tanggal','Dipakai untuk','Tujuan','Jumlah','Nilai','Referensi'].map(h => (
+                <th key={h} style={{textAlign: h === 'Nilai' ? 'right' : 'left',padding:'0.3rem 0.6rem',color:'#888',fontWeight:600,borderBottom:'1px solid #e8e8e8',whiteSpace:'nowrap'}}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {consumptions.map(c => {
+              const path = c.source_type && c.source_id ? SOURCE_PATH[c.source_type]?.(c.source_id) : null;
+              return (
+                <tr key={c.id}>
+                  <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{fmt(c.date)}</td>
+                  <td style={{padding:'0.3rem 0.6rem'}}>
+                    <span style={{display:'inline-block',padding:'0.1rem 0.45rem',borderRadius:'4px',fontSize:'0.75rem',fontWeight:600,
+                                  ...(TYPE_STYLE[c.source_type] ?? { background:'#f3e8ff', color:'#8b5cf6' })}}>
+                      {SOURCE_LABEL[c.source_type] ?? c.source_type ?? 'Penyesuaian'}
+                    </span>
+                  </td>
+                  <td style={{padding:'0.3rem 0.6rem',color:'#555'}}>{c.destination || '—'}</td>
+                  <td style={{padding:'0.3rem 0.6rem',fontWeight:600,color:'#e74c3c'}}>
+                    −{Number(c.quantity).toLocaleString('id-ID')}
+                  </td>
+                  <td style={{padding:'0.3rem 0.6rem',textAlign:'right',fontWeight:600,whiteSpace:'nowrap',color:'#e74c3c'}}>
+                    {idr(c.value)}
+                  </td>
+                  <td style={{padding:'0.3rem 0.6rem'}}>
+                    {path ? (
+                      <Link to={path} style={{color:'#4f8ef7',textDecoration:'none',fontWeight:500}}>
+                        {c.reference || 'Lihat'}
+                      </Link>
+                    ) : (
+                      <span style={{color:'#ccc',fontStyle:'italic'}}>{c.reference || '—'}</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+// A clickable column heading. Clicking the active column flips direction rather
+// than resetting it, so a second click means "same column, other end" — which is
+// what people expect and saves a round trip through ascending.
+function SortableTh({ label, field, sort, dir, onSort, align }) {
+  const active = sort === field;
+  return (
+    <th
+      onClick={() => onSort(field)}
+      title={`Urutkan menurut ${label.toLowerCase()}`}
+      style={{ cursor:'pointer', userSelect:'none', whiteSpace:'nowrap', textAlign: align || 'left',
+               color: active ? '#4f8ef7' : undefined }}
+    >
+      {label}
+      <span style={{ marginLeft:'0.3rem', fontSize:'0.7rem', opacity: active ? 1 : 0.25 }}>
+        {active && dir === 'desc' ? '▼' : '▲'}
+      </span>
+    </th>
   );
 }
 
@@ -124,22 +179,37 @@ export default function Inventory() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]);
   const [totalLots, setTotalLots] = useState(0);
+  // Zero-stock rows are shown by default: the item you are about to run out of
+  // is the one worth seeing, and hiding it was the wrong default to have had.
+  const [includeEmpty, setIncludeEmpty] = useState(true);
+  const [sort, setSort] = useState('item');
+  const [dir, setDir] = useState('asc');
 
   const filterParams = {
     search,
     warehouse_id: warehouseId,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
+    include_empty: includeEmpty ? undefined : 'false',
   };
 
   const load = useCallback(() => {
-    getInventory({ ...filterParams, page, limit: pageSize })
+    getInventory({ ...filterParams, sort, dir, page, limit: pageSize })
       .then(r => setRecords(r.data));
-  }, [search, warehouseId, dateFrom, dateTo, page, pageSize]);
+  }, [search, warehouseId, dateFrom, dateTo, includeEmpty, sort, dir, page, pageSize]);
 
   const loadCount = useCallback(() => {
     getInventoryCount(filterParams).then(r => setTotalLots(r.data.count));
-  }, [search, warehouseId, dateFrom, dateTo]);
+  }, [search, warehouseId, dateFrom, dateTo, includeEmpty]);
+
+  // Clicking the active column flips direction; a different column starts
+  // ascending. Either way we return to page 1 — staying on page 7 of a list that
+  // was just reordered shows an arbitrary slice.
+  const applySort = (field) => {
+    if (field === sort) setDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSort(field); setDir('asc'); }
+    setPage(1);
+  };
 
   useEffect(() => {
     getWarehouses().then(r => setWarehouses(r.data));
@@ -182,7 +252,7 @@ export default function Inventory() {
         <div className="card-header">
           <div>
             <h2 style={{ marginBottom: '0.2rem' }}>
-              {totalLots.toLocaleString('id-ID')} lot{isFiltered ? ' (difilter)' : ''}
+              {totalLots.toLocaleString('id-ID')} baris{isFiltered ? ' (difilter)' : ''}
             </h2>
             {(dateFrom || dateTo) && (
               <div style={{ fontSize: '0.8rem', color: '#888' }}>
@@ -213,6 +283,14 @@ export default function Inventory() {
             {(dateFrom || dateTo) && (
               <button type="button" onClick={clearDates} className="btn btn-secondary btn-sm">Hapus filter tanggal</button>
             )}
+            <label style={{ display:'flex', alignItems:'center', gap:'0.4rem', fontSize:'0.85rem', whiteSpace:'nowrap' }}>
+              <input
+                type="checkbox"
+                checked={includeEmpty}
+                onChange={e => { setIncludeEmpty(e.target.checked); setPage(1); }}
+              />
+              Tampilkan stok kosong
+            </label>
           </div>
         </div>
 
@@ -220,48 +298,74 @@ export default function Inventory() {
           <thead>
             <tr>
               <th></th>
-              <th>Barang</th>
-              <th>Kode</th>
-              <th>Jumlah</th>
-              <th>Gudang</th>
-              <th>Tanggal</th>
+              <SortableTh label="Barang"  field="item"      sort={sort} dir={dir} onSort={applySort} />
+              <SortableTh label="Kode"    field="code"      sort={sort} dir={dir} onSort={applySort} />
+              <SortableTh label="Jumlah"  field="quantity"  sort={sort} dir={dir} onSort={applySort} />
+              <SortableTh label="Gudang"  field="warehouse" sort={sort} dir={dir} onSort={applySort} />
+              <SortableTh label="Tanggal" field="date"      sort={sort} dir={dir} onSort={applySort} />
               <th></th>
             </tr>
           </thead>
           <tbody>
             {records.length === 0 ? (
               <tr><td colSpan={7} style={{textAlign:'center',color:'#999',padding:'2rem'}}>Tidak ada data</td></tr>
-            ) : records.map(rec => (
-              <>
-                <tr
-                  key={rec.id}
-                  onClick={() => toggleRow(rec.id)}
-                  style={{cursor:'pointer'}}
-                  className={expandedId === rec.id ? 'row-expanded' : ''}
-                >
-                  <td style={{width:'28px',color:'#aaa',fontSize:'0.75rem',userSelect:'none'}}>
-                    {expandedId === rec.id ? '▼' : '▶'}
-                  </td>
-                  <td>{rec.item_name}</td>
-                  <td style={{color:'#888',fontSize:'0.85rem'}}>{rec.item_code}</td>
-                  <td><span className="badge">{Number(rec.quantity).toLocaleString('id-ID')} {rec.unit_name}</span></td>
-                  <td><span className="badge">{rec.warehouse_name}</span></td>
-                  <td style={{color:'#888',fontSize:'0.85rem'}}>{fmt(rec.date)}</td>
-                  <td onClick={e => e.stopPropagation()}>
-                    <div className="actions">
-                      <Link to={`/inventory/history/${rec.item_id}`} className="btn btn-secondary btn-sm">Riwayat</Link>
-                      <Link to={`/inventory/edit/${rec.id}`} className="btn btn-secondary btn-sm">Edit</Link>
-                      <button onClick={(e) => handleDelete(e, rec.id)} className="btn btn-danger btn-sm">Hapus</button>
-                    </div>
-                  </td>
-                </tr>
-                {expandedId === rec.id && (
-                  <tr key={`${rec.id}-history`} style={{background:'#f8f9ff'}}>
-                    <HistoryPanel itemId={rec.item_id} warehouseId={rec.warehouse_id} />
+            ) : records.map(rec => {
+              // A row with no lot id is an item we stock and have none of. There
+              // is nothing to expand, edit, delete or trace — the row exists to
+              // report the absence.
+              const isEmptyItem = !rec.id;
+              const isDepleted = !isEmptyItem && Number(rec.quantity) <= 0;
+              const rowKey = rec.id || `empty-${rec.item_id}`;
+              return (
+                <Fragment key={rowKey}>
+                  <tr
+                    onClick={() => !isEmptyItem && toggleRow(rec.id)}
+                    style={{cursor: isEmptyItem ? 'default' : 'pointer', opacity: isEmptyItem ? 0.68 : 1}}
+                    className={expandedId === rec.id ? 'row-expanded' : ''}
+                  >
+                    <td style={{width:'28px',color:'#aaa',fontSize:'0.75rem',userSelect:'none'}}>
+                      {isEmptyItem ? '' : expandedId === rec.id ? '▼' : '▶'}
+                    </td>
+                    <td>{rec.item_name}</td>
+                    <td style={{color:'#888',fontSize:'0.85rem'}}>{rec.item_code}</td>
+                    <td>
+                      {isEmptyItem ? (
+                        <span className="badge" style={{background:'#f2f2f2',color:'#999'}}>Stok kosong</span>
+                      ) : (
+                        <span className="badge" style={isDepleted ? {background:'#fdecea',color:'#e74c3c'} : undefined}>
+                          {Number(rec.quantity).toLocaleString('id-ID')} {rec.unit_name}
+                          {isDepleted && ' · habis'}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {rec.warehouse_name
+                        ? <span className="badge">{rec.warehouse_name}</span>
+                        : <span style={{color:'#bbb',fontSize:'0.85rem'}}>—</span>}
+                    </td>
+                    <td style={{color:'#888',fontSize:'0.85rem'}}>{fmt(rec.date)}</td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <div className="actions">
+                        {isEmptyItem ? (
+                          <Link to={`/items/stock/${rec.item_id}`} className="btn btn-secondary btn-sm">Lihat Barang</Link>
+                        ) : (
+                          <>
+                            <Link to={`/inventory/history/${rec.item_id}`} className="btn btn-secondary btn-sm">Riwayat Barang</Link>
+                            <Link to={`/inventory/edit/${rec.id}`} className="btn btn-secondary btn-sm">Edit</Link>
+                            <button onClick={(e) => handleDelete(e, rec.id)} className="btn btn-danger btn-sm">Hapus</button>
+                          </>
+                        )}
+                      </div>
+                    </td>
                   </tr>
-                )}
-              </>
-            ))}
+                  {!isEmptyItem && expandedId === rec.id && (
+                    <tr style={{background:'#f8f9ff'}}>
+                      <LotHistoryPanel lotId={rec.id} />
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
 

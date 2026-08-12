@@ -18,6 +18,27 @@ export const API_BASE_URL = apiBaseUrl;
 
 const api = axios.create({ baseURL: apiBaseUrl });
 
+/**
+ * URL for an uploaded file (receipt photo, employee photo, company logo).
+ *
+ * The database stores a **bare filename**, not a path — `invoice-<id>-<ts>.jpg`.
+ * Pasting that straight onto an origin produced `http://host` + `invoice-…jpg`
+ * with no separator and no `/uploads/` segment, which is why invoice photos
+ * uploaded fine and then never appeared. Everything that renders an upload
+ * should go through here rather than assembling the URL by hand.
+ *
+ * The host is derived from the API base so it follows /config.json: same-origin
+ * in production (where nginx serves /uploads/), and the dev server's origin
+ * locally. A path that is already absolute is passed through untouched.
+ */
+export const uploadUrl = (path) => {
+  if (!path) return '';
+  if (/^https?:\/\//i.test(path)) return path;
+  const file = String(path).replace(/^\/*(uploads\/)?/i, '');
+  const origin = apiBaseUrl.replace(/\/api\/?$/, '');
+  return `${origin}/uploads/${file}`;
+};
+
 // Cheap liveness probe used by the ConnectionError page's retry button. Skips
 // the shared instance's interceptors deliberately: a failed retry should not
 // re-trigger the refresh/redirect machinery, only report up or down.
@@ -125,6 +146,10 @@ export const getItemPriceHistory = (id, params) => api.get(`/items/${id}/price-h
 
 export const getInventory = (params) => api.get('/inventory', { params });
 export const getInventoryCount = (params) => api.get('/inventory/count', { params });
+// One delivery's whole life: what arrived, what was taken out of it, what is
+// left. Distinct from getStockHistory, which interleaves every delivery of the
+// same item and so cannot say whether *this* batch was used up.
+export const getLotHistory = (lotId) => api.get(`/inventory/lots/${lotId}/history`);
 // Fetch every inventory lot matching the filters. The /inventory endpoint is
 // paginated (max 200 rows/page), so callers that need the full set (stock
 // opname sheet, dispatch item picker) must page through — a single call would
@@ -209,11 +234,31 @@ export const getDailyPurchase = (id) => api.get(`/daily-purchases/${id}`);
 export const createDailyPurchase = (data) => api.post('/daily-purchases', data);
 export const cancelDailyPurchase = (id, reason) => api.post(`/daily-purchases/${id}/cancel`, { reason });
 
+// Templates carry the skeleton of a repeating shopping run — branch, warehouse,
+// and the lines in their usual units. Deliberately no quantities or prices;
+// those are the two fields that must be checked on every run.
+export const getDailyPurchaseTemplates = () => api.get('/daily-purchase-templates');
+export const createDailyPurchaseTemplate = (data) => api.post('/daily-purchase-templates', data);
+export const updateDailyPurchaseTemplate = (id, data) => api.put(`/daily-purchase-templates/${id}`, data);
+export const deleteDailyPurchaseTemplate = (id) => api.delete(`/daily-purchase-templates/${id}`);
+
 export const getPettyCashDay = (date) => api.get('/petty-cash', { params: { date } });
 export const getPettyCashHistory = (params) => api.get('/petty-cash/history', { params });
 export const getPettyCashAccounts = () => api.get('/petty-cash/accounts');
 export const recordPettyCashOpening = (data) => api.post('/petty-cash/opening', data);
 export const recordPettyCashClosing = (data) => api.post('/petty-cash/closing', data);
+
+// Pelacakan Kas — the branch till, as opposed to the petty cash box. Income
+// comes from the POS import (split by payment method), outgoings from setoran
+// and cash-settled invoices; only the two counts are typed by hand.
+export const getCashTrackingDay = (date) => api.get('/cash-tracking', { params: { date } });
+export const getCashTrackingHistory = (params) => api.get('/cash-tracking/history', { params });
+export const getPOSSettlement = (params) => api.get('/cash-tracking/settlement', { params });
+export const getCashDrawerAccounts = () => api.get('/cash-tracking/drawer-accounts');
+export const setCashDrawerAccount = (id, isCashDrawer) =>
+  api.put(`/cash-tracking/drawer-accounts/${id}`, { is_cash_drawer: isCashDrawer });
+export const recordCashDayOpening = (data) => api.post('/cash-tracking/opening', data);
+export const recordCashDayClosing = (data) => api.post('/cash-tracking/closing', data);
 
 export const getCashDeposits = (params) => api.get('/cash-deposits', { params });
 export const createCashDeposit = (data) => api.post('/cash-deposits', data);
@@ -283,6 +328,7 @@ export const getInventoryValueReport = (params) => api.get('/reports/inventory-v
 export const getExpenseSummaryReport  = (params) => api.get('/reports/expense-summary', { params });
 export const getFinancialReport       = (params)  => api.get('/reports/financial', { params });
 export const getProfitLossByBranch    = (params)  => api.get('/reports/profit-loss-by-branch', { params });
+export const getProfitLossPeriodic    = (params)  => api.get('/reports/profit-loss-periodic', { params });
 export const getCashSummaryReport     = (params)  => api.get('/reports/cash-summary', { params });
 
 export const getPriceChangesReport    = (params)  => api.get('/reports/price-changes', { params });

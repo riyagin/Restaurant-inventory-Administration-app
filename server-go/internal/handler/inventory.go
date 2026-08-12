@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -141,14 +142,19 @@ func (h *InventoryHandler) List(w http.ResponseWriter, r *http.Request) {
 		page = v
 	}
 
+	sort, dir := inventorySort(q)
+
 	rows, err := h.queries.ListInventoryPage(ctx, &db.ListInventoryPageParams{
-		WarehouseID: warehouseFilter,
-		ItemID:      itemFilter,
-		Search:      search,
-		DateFrom:    dateFromPg,
-		DateTo:      dateToPg,
-		Limit:       int32(pageSize),
-		Offset:      int32((page - 1) * pageSize),
+		WarehouseID:  warehouseFilter,
+		ItemID:       itemFilter,
+		Search:       search,
+		DateFrom:     dateFromPg,
+		DateTo:       dateToPg,
+		IncludeEmpty: inventoryIncludeEmpty(q),
+		Sort:         sort,
+		Dir:          dir,
+		Limit:        int32(pageSize),
+		Offset:       int32((page - 1) * pageSize),
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data inventori")
@@ -169,17 +175,88 @@ func (h *InventoryHandler) Count(w http.ResponseWriter, r *http.Request) {
 	warehouseFilter, itemFilter, search, dateFromPg, dateToPg := inventoryFilters(q)
 
 	count, err := h.queries.CountInventory(ctx, &db.CountInventoryParams{
-		WarehouseID: warehouseFilter,
-		ItemID:      itemFilter,
-		Search:      search,
-		DateFrom:    dateFromPg,
-		DateTo:      dateToPg,
+		WarehouseID:  warehouseFilter,
+		ItemID:       itemFilter,
+		Search:       search,
+		DateFrom:     dateFromPg,
+		DateTo:       dateToPg,
+		IncludeEmpty: inventoryIncludeEmpty(q),
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghitung data inventori")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]int64{"count": count})
+}
+
+// inventoryIncludeEmpty widens the list to depleted lots and stocked items that
+// have no lot at all. Default **on**: the item you are about to run out of is
+// the one worth seeing, and the old behaviour hid it precisely when it mattered.
+// `?include_empty=false` restores the stock-only view.
+func inventoryIncludeEmpty(q url.Values) bool {
+	return q.Get("include_empty") != "false"
+}
+
+// inventorySort validates the requested ordering against a closed set. The SQL
+// compares these values inside CASE expressions rather than interpolating them,
+// so an unknown key cannot reach the query — but rejecting it here means the
+// list falls back to a sensible order instead of an arbitrary one.
+func inventorySort(q url.Values) (sort, dir string) {
+	allowed := map[string]bool{"item": true, "code": true, "quantity": true, "warehouse": true, "date": true}
+	sort = q.Get("sort")
+	if !allowed[sort] {
+		sort = "item"
+	}
+	dir = q.Get("dir")
+	if dir != "desc" {
+		dir = "asc"
+	}
+	return sort, dir
+}
+
+// LotHistory — GET /api/inventory/lots/{id}/history
+//
+// One delivery's whole life: what arrived, everything that was taken out of it,
+// and what (if anything) is left. Distinct from the item's stock history, which
+// interleaves every delivery of that item and cannot answer "did *this* batch
+// get used up, and where did it go?".
+func (h *InventoryHandler) LotHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	lot, err := h.queries.GetInventoryLotDetail(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "lot tidak ditemukan")
+		return
+	}
+
+	consumptions, err := h.queries.GetLotConsumptions(ctx, pgID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pemakaian lot")
+		return
+	}
+	if consumptions == nil {
+		consumptions = []*db.GetLotConsumptionsRow{}
+	}
+
+	// Lots consumed before per-lot tracing existed were deleted outright, so
+	// their usage cannot be reconstructed. Saying so is better than showing an
+	// empty list that reads as "never used".
+	traced := len(consumptions) > 0 ||
+		numericToFloat64(lot.ConsumedQuantity) > 0 ||
+		!lot.DepletedAt.Valid
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"lot":          lot,
+		"consumptions": consumptions,
+		"traced":       traced,
+	})
 }
 
 func (h *InventoryHandler) Get(w http.ResponseWriter, r *http.Request) {

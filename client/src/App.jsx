@@ -19,7 +19,9 @@ import StockTransfers from './pages/StockTransfers';
 import Sales from './pages/Sales';
 import Branches from './pages/Branches';
 import DailyPurchases from './pages/DailyPurchases';
+import DailyPurchaseForm from './pages/DailyPurchaseForm';
 import PettyCash from './pages/PettyCash';
+import CashTracking from './pages/CashTracking';
 import Setoran from './pages/Setoran';
 import Dispatch from './pages/Dispatch';
 import StockHistoryPage from './pages/StockHistoryPage';
@@ -40,9 +42,9 @@ import Enumerations from './pages/Enumerations';
 import SalesImport from './pages/SalesImport';
 import FinancialReport from './pages/FinancialReport';
 import FinancialStatement from './pages/FinancialStatement';
+import ProfitLossComparison from './pages/ProfitLossComparison';
 import AccountAdjustments from './pages/AccountAdjustments';
-import InvoiceTemplates from './pages/InvoiceTemplates';
-import DispatchTemplates from './pages/DispatchTemplates';
+import Templates from './pages/Templates';
 import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
 import Profile from './pages/Profile';
@@ -229,7 +231,9 @@ function buildNav({ hrOnly, hr, reports }) {
     // count only balances if the top-ups were recorded.
     { label: 'Kas Cabang', links: [
       ['/daily-purchases', 'Pembelanjaan Harian'],
+      DIV,
       ['/petty-cash', 'Kas Kecil'],
+      ['/cash-tracking', 'Pelacakan Kas'],
       ['/setoran', 'Setoran'],
     ] },
     { label: 'Penjualan', links: [
@@ -242,7 +246,9 @@ function buildNav({ hrOnly, hr, reports }) {
     groups.push({ label: 'Laporan', links: [
       ['/reports/daily', 'Laporan Harian'],
       ['/reports/financial', 'Laporan Keuangan'],
-      ['/reports/statement', 'Dokumen Laporan Keuangan'],
+      // The printable statement is reached from a button on Laporan Keuangan:
+      // it is the same numbers in document form, not a separate report.
+      ['/reports/profit-loss', 'Perbandingan Laba Rugi'],
       ['/expense-report', 'Laporan Pengeluaran'],
       ['/reports/inventory-value', 'Nilai Inventaris'],
       DIV,
@@ -257,8 +263,8 @@ function buildNav({ hrOnly, hr, reports }) {
     ['/accounts', 'Akun'],
     DIV,
     ['/branches', 'Cabang & Divisi'],
-    ['/invoice-templates', 'Template Invoice'],
-    ['/dispatch-templates', 'Template Pengiriman'],
+    // One entry for all three kinds — pembelanjaan, invoice, pengiriman.
+    ['/templates', 'Template'],
     ['/account-adjustments', 'Jurnal Manual'],
     DIV,
     ['/users', 'Pengguna'],
@@ -442,7 +448,16 @@ export default function App() {
                 <Route path="/invoices/edit/:id" element={<RequireCore><InvoiceForm /></RequireCore>} />
                 <Route path="/invoices/view/:id" element={<RequireCore><InvoiceDetail /></RequireCore>} />
                 <Route path="/daily-purchases" element={<RequireCore><DailyPurchases /></RequireCore>} />
+                <Route path="/daily-purchases/new" element={<RequireCore><DailyPurchaseForm /></RequireCore>} />
+                <Route path="/templates" element={<RequireCore><Templates /></RequireCore>} />
+                {/* The three template kinds used to be three pages. The old
+                    paths stay as redirects: they are linked from the pages that
+                    consume the templates, and from bookmarks. */}
+                <Route path="/daily-purchase-templates" element={<Navigate to="/templates?tab=pembelanjaan" replace />} />
+                <Route path="/invoice-templates" element={<Navigate to="/templates?tab=invoice" replace />} />
+                <Route path="/dispatch-templates" element={<Navigate to="/templates?tab=pengiriman" replace />} />
                 <Route path="/petty-cash" element={<RequireCore><PettyCash /></RequireCore>} />
+                <Route path="/cash-tracking" element={<RequireCore><CashTracking /></RequireCore>} />
                 <Route path="/setoran" element={<RequireCore><Setoran /></RequireCore>} />
                 <Route path="/sales" element={<RequireCore><Sales /></RequireCore>} />
                 <Route path="/sales/import" element={<RequireCore><SalesImport /></RequireCore>} />
@@ -452,6 +467,7 @@ export default function App() {
                 <Route path="/reports/usage-trend" element={<RequireReports><UsageTrendReport /></RequireReports>} />
                 <Route path="/reports/financial" element={<RequireReports><FinancialReport /></RequireReports>} />
                 <Route path="/reports/statement" element={<RequireReports><FinancialStatement /></RequireReports>} />
+                <Route path="/reports/profit-loss" element={<RequireReports><ProfitLossComparison /></RequireReports>} />
                 <Route path="/reports/daily" element={<RequireReports><DailyReport /></RequireReports>} />
                 <Route path="/account-adjustments" element={<RequireCore><AccountAdjustments /></RequireCore>} />
                 <Route path="/transfers" element={<RequireCore><StockTransfers /></RequireCore>} />
@@ -468,8 +484,6 @@ export default function App() {
                 <Route path="/vendors/:id/history" element={<RequireCore><VendorHistory /></RequireCore>} />
                 <Route path="/accounts" element={<RequireCore><Accounts /></RequireCore>} />
                 <Route path="/branches" element={<RequireCore><Branches /></RequireCore>} />
-                <Route path="/invoice-templates" element={<RequireCore><InvoiceTemplates /></RequireCore>} />
-                <Route path="/dispatch-templates" element={<RequireCore><DispatchTemplates /></RequireCore>} />
                 <Route path="/users" element={<RequireCore><Users /></RequireCore>} />
                 <Route path="/activity" element={<RequireReports><ActivityLog /></RequireReports>} />
                 <Route path="/profile" element={<Profile />} />

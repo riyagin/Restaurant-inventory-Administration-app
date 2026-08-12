@@ -28,7 +28,7 @@ func (q *Queries) AddToAccountBalance(ctx context.Context, arg *AddToAccountBala
 const createAccount = `-- name: CreateAccount :one
 INSERT INTO accounts (id, name, account_number, account_type, parent_id, balance, is_system)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, false)
-RETURNING id, name, balance, account_number, account_type, parent_id, is_system
+RETURNING id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 `
 
 type CreateAccountParams struct {
@@ -54,6 +54,7 @@ func (q *Queries) CreateAccount(ctx context.Context, arg *CreateAccountParams) (
 		&i.AccountType,
 		&i.ParentID,
 		&i.IsSystem,
+		&i.IsCashDrawer,
 	)
 	return &i, err
 }
@@ -68,7 +69,7 @@ func (q *Queries) DeleteAccount(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAccountByID = `-- name: GetAccountByID :one
-SELECT id, name, balance, account_number, account_type, parent_id, is_system
+SELECT id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 FROM accounts WHERE id = $1
 `
 
@@ -83,6 +84,7 @@ func (q *Queries) GetAccountByID(ctx context.Context, id pgtype.UUID) (*Account,
 		&i.AccountType,
 		&i.ParentID,
 		&i.IsSystem,
+		&i.IsCashDrawer,
 	)
 	return &i, err
 }
@@ -142,7 +144,7 @@ func (q *Queries) RenameAccount(ctx context.Context, arg *RenameAccountParams) e
 }
 
 const listAccounts = `-- name: ListAccounts :many
-SELECT id, name, balance, account_number, account_type, parent_id, is_system
+SELECT id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 FROM accounts
 ORDER BY account_number NULLS LAST, name
 `
@@ -164,6 +166,7 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]*Account, error) {
 			&i.AccountType,
 			&i.ParentID,
 			&i.IsSystem,
+			&i.IsCashDrawer,
 		); err != nil {
 			return nil, err
 		}
@@ -179,7 +182,7 @@ const updateAccount = `-- name: UpdateAccount :one
 UPDATE accounts
 SET name = $1, account_number = $2, account_type = $3, parent_id = $4
 WHERE id = $5
-RETURNING id, name, balance, account_number, account_type, parent_id, is_system
+RETURNING id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 `
 
 type UpdateAccountParams struct {
@@ -207,6 +210,7 @@ func (q *Queries) UpdateAccount(ctx context.Context, arg *UpdateAccountParams) (
 		&i.AccountType,
 		&i.ParentID,
 		&i.IsSystem,
+		&i.IsCashDrawer,
 	)
 	return &i, err
 }

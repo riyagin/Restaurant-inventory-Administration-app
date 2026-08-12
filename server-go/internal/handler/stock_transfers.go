@@ -198,7 +198,8 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 1. FIFO deduct from source
-		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, fromID, it.Quantity)
+		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, fromID, it.Quantity,
+			service.LotSource{Type: service.SourceTransfer, ID: groupID, Date: today})
 		if err != nil {
 			if strings.Contains(err.Error(), "stok tidak mencukupi") {
 				respondError(w, http.StatusUnprocessableEntity,

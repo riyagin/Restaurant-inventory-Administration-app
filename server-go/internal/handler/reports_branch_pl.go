@@ -78,14 +78,22 @@ FROM owned ORDER BY account_id, depth`
 // sign per type — positive revenue, positive expense — which is the same
 // convention `accounts.balance` is cached in, so a period figure and an all-time
 // balance stay directly comparable.
-func plActivityByAccount(ctx context.Context, pool *pgxpool.Pool, startDate, endDate string) (map[string]int64, error) {
-	sql := `
-SELECT jl.account_id,
-       SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE jl.amount END)::BIGINT AS total
+// plAmountSQL and plActivityFromSQL are the *one* definition of what a P&L
+// account did, split out so the periodic report can bucket the same numbers by
+// month or year without writing a second version of them. Two spellings of this
+// arithmetic is exactly the failure the comment above describes, and a copy that
+// drifts is not detectable from either report's own totals — so callers compose
+// these instead of retyping the CASE.
+const plAmountSQL = `SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE jl.amount END)::BIGINT`
+
+const plActivityFromSQL = `
 FROM journal_lines jl
 JOIN journal_entries je ON je.id = jl.entry_id
 JOIN accounts a ON a.id = jl.account_id
 WHERE a.account_type IN ('revenue', 'expense')`
+
+func plActivityByAccount(ctx context.Context, pool *pgxpool.Pool, startDate, endDate string) (map[string]int64, error) {
+	sql := `SELECT jl.account_id, ` + plAmountSQL + ` AS total` + plActivityFromSQL
 	var params []any
 	if startDate != "" && endDate != "" {
 		sql += ` AND je.entry_date BETWEEN $1 AND $2`

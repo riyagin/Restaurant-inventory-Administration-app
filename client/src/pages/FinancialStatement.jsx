@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { getFinancialReport, getCashSummaryReport, getHRSettings } from '../api';
 
 const SERVER = 'http://localhost:5000';
@@ -103,8 +103,12 @@ function StatementSection({ title, children }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function FinancialStatement() {
-  const [startDate, setStartDate] = useState(firstOfMonthStr());
-  const [endDate, setEndDate]     = useState(todayStr());
+  // The period is taken from the URL when the financial report hands it over, so
+  // the document covers what was on screen a click earlier rather than resetting
+  // to this month and quietly printing a different period.
+  const [params] = useSearchParams();
+  const [startDate, setStartDate] = useState(params.get('start_date') || firstOfMonthStr());
+  const [endDate, setEndDate]     = useState(params.get('end_date') || todayStr());
   const [accounts, setAccounts]   = useState([]);
   const [cash, setCash]           = useState(null);
   const [settings, setSettings]   = useState(null);
@@ -166,7 +170,7 @@ export default function FinancialStatement() {
       <div className="fs-no-print page-header">
         <h1>Dokumen Laporan Keuangan</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <Link to="/reports/financial" className="btn btn-secondary">Versi Interaktif</Link>
+          <Link to="/reports/financial" className="btn btn-secondary">← Laporan Keuangan</Link>
           <button className="btn btn-primary" onClick={() => window.print()} disabled={loading}>
             Cetak / Simpan PDF
           </button>

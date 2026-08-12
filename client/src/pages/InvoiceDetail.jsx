@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getInvoice, deleteInvoicePhoto, payInvoice, getAccounts } from '../api';
+import { getInvoice, deleteInvoicePhoto, payInvoice, getAccounts, uploadUrl } from '../api';
 import { isAdminRole } from '../roles';
 
 const idr = (v) =>
@@ -19,7 +19,8 @@ const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagia
 const STATUS_CLASS  = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial', dispatched: 'status-dispatched' };
 const STATUS_GLYPH  = { unpaid: '○', paid: '✓', partial: '◐', dispatched: '→' };
 
-const SERVER = 'http://localhost:5000';
+// Upload URLs come from api.uploadUrl: photo_path is a bare filename and needs
+// both the /uploads/ segment and an origin that follows /config.json.
 
 export default function InvoiceDetail() {
   const { id } = useParams();
@@ -323,7 +324,7 @@ export default function InvoiceDetail() {
             {invoice.photo_path.match(/\.pdf$/i) ? (
               <div style={{ padding: '0.5rem 0' }}>
                 <a
-                  href={`${SERVER}${invoice.photo_path}`}
+                  href={uploadUrl(invoice.photo_path)}
                   download
                   className="btn btn-primary"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
@@ -334,13 +335,13 @@ export default function InvoiceDetail() {
             ) : (
               <>
                 <img
-                  src={`${SERVER}${invoice.photo_path}`}
+                  src={uploadUrl(invoice.photo_path)}
                   alt="Receipt"
                   style={{ width: '100%', borderRadius: '6px', border: '1px solid #e8e8e8', objectFit: 'contain', maxHeight: '400px', marginBottom: '0.75rem' }}
                 />
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <a
-                    href={`${SERVER}${invoice.photo_path}`}
+                    href={uploadUrl(invoice.photo_path)}
                     download
                     className="btn btn-primary btn-sm"
                     style={{ textDecoration: 'none' }}
@@ -348,7 +349,7 @@ export default function InvoiceDetail() {
                     ⬇ Download
                   </a>
                   <a
-                    href={`${SERVER}${invoice.photo_path}`}
+                    href={uploadUrl(invoice.photo_path)}
                     target="_blank"
                     rel="noreferrer"
                     className="btn btn-secondary btn-sm"

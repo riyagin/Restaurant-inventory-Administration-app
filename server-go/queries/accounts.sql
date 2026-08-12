@@ -1,22 +1,22 @@
 -- name: ListAccounts :many
-SELECT id, name, balance, account_number, account_type, parent_id, is_system
+SELECT id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 FROM accounts
 ORDER BY account_number NULLS LAST, name;
 
 -- name: GetAccountByID :one
-SELECT id, name, balance, account_number, account_type, parent_id, is_system
+SELECT id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer
 FROM accounts WHERE id = $1;
 
 -- name: CreateAccount :one
 INSERT INTO accounts (id, name, account_number, account_type, parent_id, balance, is_system)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, 0, false)
-RETURNING id, name, balance, account_number, account_type, parent_id, is_system;
+RETURNING id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer;
 
 -- name: UpdateAccount :one
 UPDATE accounts
 SET name = $1, account_number = $2, account_type = $3, parent_id = $4
 WHERE id = $5
-RETURNING id, name, balance, account_number, account_type, parent_id, is_system;
+RETURNING id, name, balance, account_number, account_type, parent_id, is_system, is_cash_drawer;
 
 -- name: DeleteAccount :exec
 DELETE FROM accounts WHERE id = $1;
