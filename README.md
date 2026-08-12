@@ -143,7 +143,7 @@ start.bat
 
 **Manual:**
 ```bash
-# Terminal 1 — backend (port 5000)
+# Terminal 1 — backend (port 5002)
 cd server && npm run dev
 
 # Terminal 2 — frontend (port 5173)

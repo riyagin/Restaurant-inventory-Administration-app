@@ -42,7 +42,7 @@ npm run preview    # Preview production build
 ### Go Backend (new)
 ```bash
 cd server-go
-go run ./cmd/api         # Dev server → http://localhost:5000
+go run ./cmd/api         # Dev server → http://localhost:5002
 go build -o api ./cmd/api  # Build binary
 go test ./...            # Run tests — NOTE: integration tests hit the real DB
 
@@ -552,7 +552,7 @@ DB_NAME=inventory_app
 DB_USER=postgres
 DB_PASSWORD=seesaw
 JWT_SECRET=inventory_secret_change_in_prod
-PORT=5000
+PORT=5002
 ```
 
 For Go, build DATABASE_URL from these: `postgres://user:pass@host:port/dbname`

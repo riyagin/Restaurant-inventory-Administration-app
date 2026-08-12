@@ -7,7 +7,7 @@ import {
 } from '../../api';
 import SearchSelect from '../../components/SearchSelect';
 
-const SERVER = 'http://localhost:5000';
+const SERVER = 'http://localhost:5002';
 
 const empty = {
   employee_code: '', full_name: '', dob: '', join_date: '',

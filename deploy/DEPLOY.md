@@ -61,14 +61,19 @@ pm2 reload inventory-app
 ### Prerequisites
 
 - Go binary deployed at `/var/www/inventory-app/server-go/api`
-- Both PM2 entries running: `inventory-app` on `:5000`, `inventory-app-legacy` on `:5001`
-- Nginx already proxies `/api/` to `:5000`
+- Both PM2 entries running: `inventory-app` on `:5002`, `inventory-app-legacy` on `:5001`
+- Nginx already proxies `/api/` to `:5002`
+
+> **Port history.** The Go backend served `:5000` until an orphaned instance of a
+> previous deploy took the port and could not be reclaimed; it moved to `:5002`
+> (`:5001` is the legacy Node backend). If anything still answers on `:5000`, it
+> is that stale process — it is not part of the deployment and should be killed.
 
 ### Steps
 
 1. Verify Go server is healthy:
    ```bash
-   curl http://localhost:5000/api/health
+   curl http://localhost:5002/api/health
    ```
 2. Run smoke tests:
    ```bash
@@ -81,7 +86,7 @@ pm2 reload inventory-app
 4. **If issues found** — roll back to Express immediately:
    ```bash
    pm2 stop inventory-app
-   # temporarily route legacy to :5000 via Nginx upstream change, or:
+   # temporarily route legacy to :5002 via Nginx upstream change, or:
    pm2 restart inventory-app-legacy
    ```
 5. After 3+ stable days, decommission the legacy process:

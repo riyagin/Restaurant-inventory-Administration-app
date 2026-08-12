@@ -38,7 +38,7 @@ func Load() (*Config, error) {
 		DBUser:     getEnv("DB_USER", "postgres"),
 		DBPassword: getEnv("DB_PASSWORD", ""),
 		JWTSecret:  getEnv("JWT_SECRET", ""),
-		Port:       getEnv("PORT", "5000"),
+		Port:       getEnv("PORT", "5002"),
 		UploadsDir: uploadsDir,
 	}
 

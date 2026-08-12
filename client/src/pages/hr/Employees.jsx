@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
 import { canUseHR } from '../../roles';
 
-const SERVER = 'http://localhost:5000';
+const SERVER = 'http://localhost:5002';
 
 const canEdit = canUseHR;
 

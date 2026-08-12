@@ -13,7 +13,7 @@ import KasbonFormModal from './KasbonFormModal';
 import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
 import { canUseHR } from '../../roles';
 
-const SERVER = 'http://localhost:5000';
+const SERVER = 'http://localhost:5002';
 
 const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)' };
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));

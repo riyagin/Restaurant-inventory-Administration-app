@@ -13,7 +13,7 @@ if "%LAN_IP%"=="" (
 echo Detected LAN IP: %LAN_IP%
 
 :: Write config.json so the frontend points to this machine's IP
-echo { "apiBaseUrl": "http://%LAN_IP%:5000/api" } > "%~dp0client\public\config.json"
+echo { "apiBaseUrl": "http://%LAN_IP%:5002/api" } > "%~dp0client\public\config.json"
 
 echo Starting Go backend server...
 start "Backend" cmd /k "cd /d "%~dp0server-go" && go run ./cmd/api"
@@ -35,6 +35,6 @@ echo.
 echo   App accessible from LAN devices:
 echo     http://%LAN_IP%:5173
 echo.
-echo   API:  http://%LAN_IP%:5000/api
+echo   API:  http://%LAN_IP%:5002/api
 echo =============================================
 echo Close the Backend and Frontend windows to stop.
