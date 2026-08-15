@@ -108,7 +108,7 @@ ok "Binary built: $(du -sh api | cut -f1)"
 # Use delete + start (NOT reload): reload reuses PM2's cached launch options, so
 # changes to ecosystem.config.cjs (interpreter, kill_timeout, env) would never
 # take effect. delete + start re-reads the config every deploy.
-PORT=$(get_env PORT); PORT="${PORT:-5002}"
+PORT=$(get_env PORT); PORT="${PORT:-5000}"
 log "Restarting PM2 process '$PM2_APP' on :$PORT..."
 
 # pm2 delete comes FIRST, before any kill. Killing the port while PM2 still

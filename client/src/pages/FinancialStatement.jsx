@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getFinancialReport, getCashSummaryReport, getHRSettings } from '../api';
 
-const SERVER = 'http://localhost:5002';
+const SERVER = 'http://localhost:5000';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v ?? 0);

@@ -39,10 +39,8 @@ module.exports = {
       kill_timeout: 6000, // allow the 5s graceful shutdown to finish before SIGKILL
 
       env: {
-        // 5002, not 5000: an orphaned instance of a previous deploy held :5000
-        // and could not be reclaimed. 5001 is the legacy Node backend's port.
         // Must match proxy_pass in deploy/nginx.conf.
-        PORT: 5002,
+        PORT: 5000,
         // Keep Go's own ceiling below max_memory_restart so the runtime GCs
         // harder as it approaches the limit instead of being killed at it.
         GOMEMLIMIT: '768MiB',

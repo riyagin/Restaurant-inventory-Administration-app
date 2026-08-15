@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { getKasbon } from '../../api';
 
-const SERVER = 'http://localhost:5002';
+const SERVER = 'http://localhost:5000';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getHRSettings, updateHRSettings, uploadHRLogo } from '../../api';
 
-const SERVER = 'http://localhost:5002';
+const SERVER = 'http://localhost:5000';
 
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
 
