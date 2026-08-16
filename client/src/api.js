@@ -154,11 +154,19 @@ export const getLotHistory = (lotId) => api.get(`/inventory/lots/${lotId}/histor
 // paginated (max 200 rows/page), so callers that need the full set (stock
 // opname sheet, dispatch item picker) must page through — a single call would
 // silently truncate to the first 25 lots.
+//
+// Zero-stock rows are excluded by default. The endpoint itself defaults to
+// include_empty=true, which is right for the Inventory browsing page ("what do
+// we need to buy?") but wrong for every caller of this helper: the stock opname
+// sheet and the dispatch/transfer pickers are working lists of what is actually
+// on hand, and depleted lots plus lot-less items (which carry a NULL id) only
+// pad them out with rows you cannot act on. Pass include_empty: 'true'
+// explicitly if a caller ever does want the wider set.
 export const getAllInventory = async (params = {}) => {
   const limit = 200;
   const all = [];
   for (let page = 1; ; page++) {
-    const { data } = await getInventory({ ...params, limit, page });
+    const { data } = await getInventory({ include_empty: 'false', ...params, limit, page });
     all.push(...data);
     if (data.length < limit) break;
   }
