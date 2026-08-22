@@ -359,6 +359,10 @@ export const getPriceChangesReport    = (params)  => api.get('/reports/price-cha
 export const getUsageTrendReport      = (params)  => api.get('/reports/usage-trend', { params });
 
 export const getDailyReport           = (params) => api.get('/reports/daily', { params });
+// Utilities over time, bucketed by the month each bill covers rather than by
+// when it was paid — see handler.OperationalExpenses for why that differs from
+// every other report here.
+export const getOperationalExpenseReport = (params) => api.get('/reports/operational-expenses', { params });
 export const getAccountAdjustments    = (params) => api.get('/account-adjustments', { params });
 export const createAccountAdjustment  = (data)   => api.post('/account-adjustments', data);
 export const createAccountTransfer    = (data)   => api.post('/account-adjustments/transfer', data);

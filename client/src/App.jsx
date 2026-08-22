@@ -46,6 +46,7 @@ import ProfitLossComparison from './pages/ProfitLossComparison';
 import AccountAdjustments from './pages/AccountAdjustments';
 import OperationalExpenses from './pages/OperationalExpenses';
 import OperationalExpenseForm from './pages/OperationalExpenseForm';
+import OperationalExpenseReport from './pages/OperationalExpenseReport';
 import AccountLedger from './pages/AccountLedger';
 import Templates from './pages/Templates';
 import DailyReport from './pages/DailyReport';
@@ -253,6 +254,7 @@ function buildNav({ hrOnly, hr, reports }) {
       // it is the same numbers in document form, not a separate report.
       ['/reports/profit-loss', 'Perbandingan Laba Rugi'],
       ['/expense-report', 'Laporan Pengeluaran'],
+      ['/reports/operational-expenses', 'Beban Operasional'],
       ['/reports/inventory-value', 'Nilai Inventaris'],
       DIV,
       ['/reports/price-changes', 'Perubahan Harga'],
@@ -474,6 +476,7 @@ export default function App() {
                 <Route path="/sales" element={<RequireCore><Sales /></RequireCore>} />
                 <Route path="/sales/import" element={<RequireCore><SalesImport /></RequireCore>} />
                 <Route path="/expense-report" element={<RequireReports><ExpenseReport /></RequireReports>} />
+                <Route path="/reports/operational-expenses" element={<RequireReports><OperationalExpenseReport /></RequireReports>} />
                 <Route path="/reports/inventory-value" element={<RequireReports><InventoryValueReport /></RequireReports>} />
                 <Route path="/reports/price-changes" element={<RequireReports><PriceChangeReport /></RequireReports>} />
                 <Route path="/reports/usage-trend" element={<RequireReports><UsageTrendReport /></RequireReports>} />

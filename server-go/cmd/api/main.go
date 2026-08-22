@@ -768,6 +768,9 @@ func main() {
 			r.Get("/api/reports/daily", reportsHandler.Daily)
 			r.Get("/api/reports/inventory-value", reportsHandler.InventoryValue)
 			r.Get("/api/reports/expense-summary", reportsHandler.ExpenseSummary)
+			// Utilities over time, bucketed by the month each bill *covers* —
+			// not by when it was paid, which is what the P&L is keyed on.
+			r.Get("/api/reports/operational-expenses", reportsHandler.OperationalExpenses)
 			r.Get("/api/expense-report", reportsHandler.ExpenseReport)
 			r.Get("/api/reports/price-changes", analyticsHandler.PriceChanges)
 			r.Get("/api/reports/usage-trend", analyticsHandler.UsageTrend)
