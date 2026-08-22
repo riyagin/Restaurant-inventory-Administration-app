@@ -67,6 +67,35 @@ const PATHS = {
       <path d="m12 5 7 7-7 7" />
     </>
   ),
+  // ── Beban Operasional ──
+  // Listrik — a bolt
+  zap: <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z" />,
+  // Air — a droplet
+  droplet: (
+    <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7Z" />
+  ),
+  // Sewa — a house
+  house: (
+    <>
+      <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+      <path d="M9 22V12h6v10" />
+    </>
+  ),
+  // Lainnya — a grid, i.e. "the rest of them"
+  grid: (
+    <>
+      <rect width="7" height="7" x="3" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="3" rx="1" />
+      <rect width="7" height="7" x="14" y="14" rx="1" />
+      <rect width="7" height="7" x="3" y="14" rx="1" />
+    </>
+  ),
+  calendar: (
+    <>
+      <rect width="18" height="18" x="3" y="4" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size = 20, strokeWidth = 2, className, style }) {

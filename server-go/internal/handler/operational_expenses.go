@@ -360,10 +360,29 @@ func createOperasionalDivision(ctx context.Context, tx pgx.Tx, branchID pgtype.U
 	return nil
 }
 
+// parseMonthParam accepts "YYYY-MM" — what a month input sends — or a full
+// "YYYY-MM-DD", and normalises either to the first day of that month. Accepting
+// both means the API is usable from a date picker or a month picker without the
+// caller having to know which one the column wants.
+func parseMonthParam(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, errors.New("bulan tagihan wajib diisi")
+	}
+	if t, err := time.Parse("2006-01", raw); err == nil {
+		return t, nil
+	}
+	t, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+}
+
 // ── Expenses ─────────────────────────────────────────────────────────────────
 
 const operationalExpenseSelect = `
-	SELECT oe.id::text AS id, oe.number, oe.date, oe.amount, oe.reference, oe.notes, oe.photo_path,
+	SELECT oe.id::text AS id, oe.number, oe.date, oe.period_month, oe.amount, oe.reference, oe.notes, oe.photo_path,
 	       oe.status, oe.created_at, oe.cancelled_at, oe.cancel_reason,
 	       oe.branch_id::text AS branch_id, b.name AS branch_name,
 	       oe.category_id::text AS category_id, oec.name AS category_name,
@@ -491,6 +510,7 @@ func (h *OperationalExpensesHandler) List(w http.ResponseWriter, r *http.Request
 func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Date            string `json:"date"`
+		PeriodMonth     string `json:"period_month"`
 		BranchID        string `json:"branch_id"`
 		CategoryID      string `json:"category_id"`
 		CreditAccountID string `json:"credit_account_id"`
@@ -510,6 +530,13 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	date, err := parseDayParam(body.Date)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "tanggal tidak valid")
+		return
+	}
+	// The month the bill covers, which is not the day it was paid — July's
+	// electricity settled in August belongs to July everywhere except the ledger.
+	period, err := parseMonthParam(body.PeriodMonth)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "bulan tagihan tidak valid")
 		return
 	}
 	categoryID, err := parseUUID(body.CategoryID)
@@ -581,12 +608,12 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	var id pgtype.UUID
 	err = tx.QueryRow(ctx, `
 		INSERT INTO operational_expenses
-		  (number, date, branch_id, category_id, debit_account_id, credit_account_id,
+		  (number, date, period_month, branch_id, category_id, debit_account_id, credit_account_id,
 		   amount, vendor_id, reference, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id`,
-		number, pgtype.Date{Time: date, Valid: true}, branchID, pgUUID(categoryID),
-		debitID, pgUUID(creditID), body.Amount, vendorID,
+		number, pgtype.Date{Time: date, Valid: true}, pgtype.Date{Time: period, Valid: true},
+		branchID, pgUUID(categoryID), debitID, pgUUID(creditID), body.Amount, vendorID,
 		strings.TrimSpace(body.Reference), strings.TrimSpace(body.Notes), pgUserID(ctx)).Scan(&id)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan beban operasional")
@@ -594,7 +621,8 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	}
 
 	qtx := h.queries.WithTx(tx)
-	description := fmt.Sprintf("Beban operasional %s: %s - %s (%s)", number, branchName, categoryName, credit.Name)
+	description := fmt.Sprintf("Beban operasional %s: %s - %s %s (%s)",
+		number, branchName, categoryName, period.Format("Jan 2006"), credit.Name)
 
 	if _, err := service.Post(ctx, qtx, service.Entry{
 		Date:        date,
@@ -626,8 +654,9 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]any{
-		"id":     uuidBytesToString(id.Bytes),
-		"number": number,
+		"id":           uuidBytesToString(id.Bytes),
+		"number":       number,
+		"period_month": period.Format("2006-01-02"),
 	})
 }
 

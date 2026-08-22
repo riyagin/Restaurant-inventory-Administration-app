@@ -45,6 +45,7 @@ import FinancialStatement from './pages/FinancialStatement';
 import ProfitLossComparison from './pages/ProfitLossComparison';
 import AccountAdjustments from './pages/AccountAdjustments';
 import OperationalExpenses from './pages/OperationalExpenses';
+import OperationalExpenseForm from './pages/OperationalExpenseForm';
 import AccountLedger from './pages/AccountLedger';
 import Templates from './pages/Templates';
 import DailyReport from './pages/DailyReport';
@@ -482,6 +483,7 @@ export default function App() {
                 <Route path="/reports/daily" element={<RequireReports><DailyReport /></RequireReports>} />
                 <Route path="/account-adjustments" element={<RequireCore><AccountAdjustments /></RequireCore>} />
                 <Route path="/operational-expenses" element={<RequireCore><OperationalExpenses /></RequireCore>} />
+                <Route path="/operational-expenses/new" element={<RequireCore><OperationalExpenseForm /></RequireCore>} />
                 {/* The postings behind one account. Registered after /accounts so the
                     list keeps its own path. */}
                 <Route path="/accounts/:id" element={<RequireCore><AccountLedger /></RequireCore>} />

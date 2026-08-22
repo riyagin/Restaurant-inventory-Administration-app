@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  getOperationalExpenses, createOperationalExpense, cancelOperationalExpense,
+  getOperationalExpenses, cancelOperationalExpense,
   getOperationalExpenseCategories, createOperationalExpenseCategory,
   deleteOperationalExpenseCategory,
-  getBranches, getAccounts, getVendors,
+  getBranches,
 } from '../api';
 import { isAdminRole } from '../roles';
-import CurrencyInput from '../components/CurrencyInput';
+import Icon from '../components/Icon';
+import { OP_KINDS } from './operationalKinds';
 
 // Beban Operasional — the standing bills of keeping a branch open.
 //
@@ -21,6 +22,13 @@ import CurrencyInput from '../components/CurrencyInput';
 // high told you nothing about which bill had moved.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+
+const monthLabel = (ym) => {
+  if (!ym) return '—';
+  const [y, m] = String(ym).slice(0, 7).split('-');
+  return new Date(Number(y), Number(m) - 1, 1)
+    .toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const monthStart = () => today().slice(0, 8) + '01';
 
@@ -33,24 +41,16 @@ export default function OperationalExpenses() {
 
   const [branches, setBranches] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [accounts, setAccounts] = useState([]);
-  const [vendors, setVendors] = useState([]);
 
   const [filterBranch, setFilterBranch] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [from, setFrom] = useState(monthStart());
   const [to, setTo] = useState(today());
 
-  const [showForm, setShowForm] = useState(false);
   const [showCategories, setShowCategories] = useState(false);
   const [newCategory, setNewCategory] = useState('');
-  const [form, setForm] = useState({
-    date: today(), branch_id: '', category_id: '', credit_account_id: '',
-    vendor_id: '', amount: '', reference: '', notes: '',
-  });
 
   const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(() => {
@@ -79,60 +79,13 @@ export default function OperationalExpenses() {
 
   useEffect(() => {
     loadCategories();
-    Promise.all([getBranches(), getAccounts(), getVendors()])
-      .then(([b, a, v]) => {
-        setBranches(b.data || []);
-        // What can pay a bill: cash and bank accounts, or a payable if it is
-        // booked now and settled later. A revenue or expense account here would
-        // produce a balanced entry that means nothing.
-        setAccounts((a.data || []).filter(x => x.account_type === 'asset' || x.account_type === 'liability'));
-        setVendors(v.data || []);
-      })
-      .catch(() => {});
+    getBranches().then(b => setBranches(b.data || [])).catch(() => {});
   }, [loadCategories]);
 
-  // A category already belongs to exactly one branch, so picking a branch narrows
-  // the category list rather than being a second thing to keep consistent with
-  // it. The server takes the branch from the category for the same reason.
-  const formCategories = useMemo(
-    () => categories.filter(c => !form.branch_id || c.branch_id === form.branch_id),
-    [categories, form.branch_id],
-  );
   const filterCategories = useMemo(
     () => categories.filter(c => !filterBranch || c.branch_id === filterBranch),
     [categories, filterBranch],
   );
-
-  const pettyOf = (branchId) => branches.find(b => b.id === branchId)?.petty_cash_account_id || '';
-
-  const pickBranch = (branch_id) => setForm(f => ({
-    ...f,
-    branch_id,
-    // The box at the branch pays most of these, so it is preselected — and stays
-    // editable, because rent and electricity are usually paid by transfer.
-    credit_account_id: pettyOf(branch_id) || f.credit_account_id,
-    category_id: categories.some(c => c.id === f.category_id && c.branch_id === branch_id) ? f.category_id : '',
-  }));
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (!form.category_id) { setError('Kategori wajib dipilih'); return; }
-    if (!form.credit_account_id) { setError('Sumber dana wajib dipilih'); return; }
-    if (!(Number(form.amount) > 0)) { setError('Jumlah harus lebih dari 0'); return; }
-
-    setSaving(true);
-    try {
-      await createOperationalExpense({ ...form, amount: Math.round(Number(form.amount)) });
-      setShowForm(false);
-      setForm(f => ({ ...f, amount: '', reference: '', notes: '' }));
-      await load();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Gagal menyimpan beban operasional');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const cancel = async (row) => {
     const reason = prompt(`Alasan pembatalan ${row.number}?`);
@@ -183,73 +136,46 @@ export default function OperationalExpenses() {
               {showCategories ? 'Tutup Kategori' : 'Kelola Kategori'}
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => { setShowForm(s => !s); setError(''); }}>
-            {showForm ? 'Tutup' : 'Catat Beban'}
-          </button>
         </div>
       </div>
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
 
-      {showForm && (
-        <div className="card" style={{ marginBottom: '1.5rem' }}>
-          <form onSubmit={submit}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
-              <Field label="Tanggal">
-                <input type="date" value={form.date} required style={fieldStyle}
-                       onChange={e => setForm({ ...form, date: e.target.value })} />
-              </Field>
-              <Field label="Cabang">
-                <select value={form.branch_id} required style={fieldStyle}
-                        onChange={e => pickBranch(e.target.value)}>
-                  <option value="">— pilih cabang —</option>
-                  {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Jenis beban">
-                <select value={form.category_id} required style={fieldStyle}
-                        onChange={e => setForm({ ...form, category_id: e.target.value })}>
-                  <option value="">— pilih jenis —</option>
-                  {formCategories.map(c => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}{form.branch_id ? '' : ` · ${c.branch_name}`}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Dibayar dari">
-                <select value={form.credit_account_id} required style={fieldStyle}
-                        onChange={e => setForm({ ...form, credit_account_id: e.target.value })}>
-                  <option value="">— pilih akun —</option>
-                  {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </Field>
-              <Field label="Jumlah">
-                <CurrencyInput value={form.amount} style={fieldStyle}
-                               onChange={e => setForm({ ...form, amount: e.target.value })} />
-              </Field>
-              <Field label="Vendor / penyedia" hint="opsional">
-                <select value={form.vendor_id} style={fieldStyle}
-                        onChange={e => setForm({ ...form, vendor_id: e.target.value })}>
-                  <option value="">— tanpa vendor —</option>
-                  {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                </select>
-              </Field>
-              <Field label="No. referensi" hint="no. meteran, periode tagihan">
-                <input value={form.reference} style={fieldStyle}
-                       onChange={e => setForm({ ...form, reference: e.target.value })} />
-              </Field>
-              <Field label="Catatan">
-                <input value={form.notes} style={fieldStyle}
-                       onChange={e => setForm({ ...form, notes: e.target.value })} />
-              </Field>
-            </div>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Menyimpan…' : 'Simpan Beban'}
-            </button>
-          </form>
-        </div>
-      )}
+      {/* The way in. Four tiles rather than a form, because recording these is a
+          routine somebody sits down to do for one kind of bill at a time —
+          "bayar listrik semua cabang" — and the kind is the first thing they
+          know. Carrying it into the form means that screen can be about the two
+          things that actually vary, the branch and the month. */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))',
+        gap: '0.85rem', marginBottom: '1.5rem',
+      }}>
+        {OP_KINDS.map(kind => (
+          <Link
+            key={kind.key}
+            to={`/operational-expenses/new?kind=${kind.key}`}
+            className="op-kind-tile"
+            style={{ borderRadius: '12px', border: '1px solid #e9edf3', background: '#fff',
+                     padding: '1rem', display: 'flex', gap: '0.85rem', alignItems: 'center',
+                     textDecoration: 'none', color: 'inherit' }}
+          >
+            <span style={{
+              width: '46px', height: '46px', borderRadius: '12px', flexShrink: 0,
+              display: 'grid', placeItems: 'center', background: kind.tint, color: kind.color,
+            }}>
+              <Icon name={kind.icon} size={26} />
+            </span>
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: 'block', fontWeight: 700, fontSize: '0.98rem', color: '#1f2430' }}>
+                {kind.label}
+              </span>
+              <span style={{ display: 'block', fontSize: '0.74rem', color: '#8a93a3', lineHeight: 1.35, marginTop: '0.1rem' }}>
+                {kind.hint}
+              </span>
+            </span>
+          </Link>
+        ))}
+      </div>
 
       {showCategories && (
         <div className="card" style={{ marginBottom: '1.5rem' }}>
@@ -337,22 +263,26 @@ export default function OperationalExpenses() {
           <table>
             <thead>
               <tr>
-                <th>Nomor</th><th>Tanggal</th><th>Cabang</th><th>Jenis</th>
+                <th>Nomor</th><th>Bulan</th><th>Tgl. Bayar</th><th>Cabang</th><th>Jenis</th>
                 <th>Dibayar dari</th><th style={{ textAlign: 'right' }}>Jumlah</th>
                 <th>Referensi</th><th></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat…</td></tr>
+                <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat…</td></tr>
               ) : rows.length === 0 ? (
-                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
+                <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
                   Belum ada beban operasional pada rentang ini
                 </td></tr>
               ) : rows.map(r => (
                 <tr key={r.id} style={r.status === 'cancelled' ? { opacity: 0.55, textDecoration: 'line-through' } : undefined}>
                   <td style={{ fontFamily: 'monospace' }}>{r.number}</td>
-                  <td>{String(r.date).slice(0, 10)}</td>
+                  {/* The month billed comes first: it is what the row is about.
+                      The payment date answers a different question and is easy
+                      to mistake for it, so the two are labelled apart. */}
+                  <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{monthLabel(r.period_month)}</td>
+                  <td style={{ color: '#8a93a3', fontSize: '0.85rem' }}>{String(r.date).slice(0, 10)}</td>
                   <td>{r.branch_name}</td>
                   <td style={{ fontWeight: 600 }}>{r.category_name}</td>
                   <td style={{ fontSize: '0.85rem', color: '#666' }}>{r.credit_account_name}</td>

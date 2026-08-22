@@ -1075,3 +1075,20 @@ tr.row-expanded td { background: var(--accent-soft) !important; }
   }
   .onb-actions .btn { flex: 1; justify-content: center; }
 }
+
+/* Beban Operasional — the four "what am I paying" tiles.
+   They are links styled as cards, so they need to say so on hover; without a
+   lift they read as static panels and nobody clicks them. */
+.op-kind-tile {
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.op-kind-tile:hover,
+.op-kind-tile:focus-visible {
+  border-color: #c7d3e8;
+  box-shadow: 0 4px 14px rgba(31, 36, 48, 0.08);
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .op-kind-tile { transition: none; }
+  .op-kind-tile:hover, .op-kind-tile:focus-visible { transform: none; }
+}
