@@ -150,6 +150,7 @@ func main() {
 	branchesHandler := handler.NewBranchesHandler(pool, queries)
 	divisionsHandler := handler.NewDivisionsHandler(pool, queries)
 	expenseCategoriesHandler := handler.NewExpenseCategoriesHandler(pool, queries)
+	operationalExpensesHandler := handler.NewOperationalExpensesHandler(pool, queries)
 	inventoryHandler := handler.NewInventoryHandler(pool, queries)
 	stockHistoryHandler := handler.NewStockHistoryHandler(queries)
 	stockTransfersHandler := handler.NewStockTransfersHandler(pool, queries)
@@ -302,6 +303,9 @@ func main() {
 		r.Get("/api/accounts", accountsHandler.List)
 		r.Get("/api/accounts/trial-balance", accountsHandler.TrialBalance)
 		r.Get("/api/accounts/cash-reconciliation", accountsHandler.CashReconciliation)
+		// The drill-down behind a balance: every posting that touched one account,
+		// each tagged with the branch it can be traced back to.
+		r.Get("/api/accounts/{id}/ledger", accountsHandler.Ledger)
 		r.Post("/api/accounts", accountsHandler.Create)
 		r.Put("/api/accounts/{id}", accountsHandler.Update)
 		r.Delete("/api/accounts/{id}", accountsHandler.Delete)
@@ -339,6 +343,21 @@ func main() {
 		r.Get("/api/expense-categories", expenseCategoriesHandler.List)
 		r.Post("/api/expense-categories", expenseCategoriesHandler.Create)
 		r.Delete("/api/expense-categories/{id}", expenseCategoriesHandler.Delete)
+
+		// Beban Operasional — the branch's standing bills (listrik, air, sewa),
+		// booked to the sub-accounts under its system-owned Operasional division.
+		// Recording one is ordinary desk work; cancelling reverses the ledger, and
+		// changing the breakdown itself reshapes the chart of accounts, so both of
+		// those are admin decisions.
+		r.Get("/api/operational-expenses", operationalExpensesHandler.List)
+		r.Post("/api/operational-expenses", operationalExpensesHandler.Create)
+		r.Get("/api/operational-expense-categories", operationalExpensesHandler.ListCategories)
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireAdmin)
+			r.Post("/api/operational-expenses/{id}/cancel", operationalExpensesHandler.Cancel)
+			r.Post("/api/operational-expense-categories", operationalExpensesHandler.CreateCategory)
+			r.Delete("/api/operational-expense-categories/{id}", operationalExpensesHandler.DeleteCategory)
+		})
 
 		// Inventory — all authenticated
 		r.Get("/api/inventory", inventoryHandler.List)

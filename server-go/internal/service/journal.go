@@ -35,6 +35,9 @@ const (
 	// SourceCashDeposit is Setoran — moving cash between the branch box, the
 	// main till and the owner's bank.
 	SourceCashDeposit = "cash_deposit"
+	// SourceOperationalExpense is Beban Operasional — a branch's standing bills
+	// (listrik, air, sewa), booked to the sub-account that names them.
+	SourceOperationalExpense = "operational_expense"
 	// SourcePettyCashVariance is the difference between the counted closing
 	// balance and what the ledger says should be in the box.
 	SourcePettyCashVariance = "petty_cash_variance"

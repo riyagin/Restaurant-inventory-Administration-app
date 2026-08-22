@@ -1,7 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { getAccounts, createAccount, updateAccount, deleteAccount } from '../api';
+import { getAccounts, createAccount, updateAccount, deleteAccount, getBranches } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
+
+// The chart of accounts, readable one branch at a time.
+//
+// Two different things are true of a branch and an account, and the page keeps
+// them apart because conflating them would invent numbers:
+//
+//   * A branch *owns* some accounts outright — its revenue and expense accounts,
+//     its divisions' accounts and everything beneath them, its petty cash box.
+//     The whole balance of those is the branch's, by construction.
+//   * Every other account is shared. Kas, Utang Usaha, Persediaan and equity
+//     belong to nobody in particular, and the only branch figure available for
+//     them is what can be traced back through the documents behind their journal
+//     entries. That is a derivation, so it is labelled as one, shown beside the
+//     real balance rather than in place of it, and always accompanied by the part
+//     that could not be traced to anyone.
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
@@ -35,14 +51,57 @@ const emptyForm = { name: '', balance: '', account_number: '', parent_id: '' };
 
 export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [branchId, setBranchId] = useState('');
   const [form, setForm]         = useState(emptyForm);
   const [editId, setEditId]     = useState(null);
   const [editForm, setEditForm] = useState(emptyForm);
   const [error, setError]       = useState('');
   const [collapsed, setCollapsed] = useState({});
 
-  const load = () => getAccounts().then(r => setAccounts(r.data));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(
+    () => getAccounts(branchId ? { branch_id: branchId } : undefined).then(r => setAccounts(r.data)),
+    [branchId],
+  );
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { getBranches().then(r => setBranches(r.data)).catch(() => {}); }, []);
+
+  // With a branch selected the tree keeps only what that branch owns, plus every
+  // ancestor needed to reach it — a lone "Beban - Cimanggu / Mie" with no parent
+  // would be a list, not a chart of accounts. Shared accounts move to their own
+  // section below, where their derived figures can be labelled honestly instead
+  // of sitting in a column headed "Saldo".
+  const ownedIds = useMemo(() => {
+    if (!branchId) return null;
+    const byId = new Map(accounts.map(a => [a.id, a]));
+    const keep = new Set();
+    for (const a of accounts) {
+      if (a.owner_branch_id !== branchId) continue;
+      let node = a;
+      while (node && !keep.has(node.id)) {
+        keep.add(node.id);
+        node = node.parent_id ? byId.get(node.parent_id) : null;
+      }
+    }
+    return keep;
+  }, [accounts, branchId]);
+
+  const visible = useMemo(
+    () => (ownedIds ? accounts.filter(a => ownedIds.has(a.id)) : accounts),
+    [accounts, ownedIds],
+  );
+
+  // Shared accounts that actually moved for this branch. An account with no
+  // traceable share and nothing unplaced has nothing to say here.
+  const sharedRows = useMemo(() => {
+    if (!branchId) return [];
+    return accounts
+      .filter(a => !ownedIds?.has(a.id))
+      .filter(a => Number(a.branch_amount || 0) !== 0 || Number(a.unplaced_amount || 0) !== 0)
+      .sort((a, b) => Math.abs(Number(b.branch_amount || 0)) - Math.abs(Number(a.branch_amount || 0)));
+  }, [accounts, ownedIds, branchId]);
+
+  const branchName = branches.find(b => b.id === branchId)?.name || '';
 
   const toggle = (id) => setCollapsed(s => ({ ...s, [id]: !s[id] }));
 
@@ -54,13 +113,18 @@ export default function Accounts() {
   // while purchases land on its category children. Counting only the children
   // would make that dispatch spending vanish from the COA.
   const totalOf = (a) => {
-    const children = accounts.filter(c => c.parent_id === a.id);
-    return children.reduce((s, c) => s + totalOf(c), Number(a.balance));
+    const children = visible.filter(c => c.parent_id === a.id);
+    // With a branch selected, an ancestor kept only to hold the branch's accounts
+    // contributes its children and not its own postings — those belong to the
+    // organisation, not to this branch. Without a branch selected every account
+    // is its own owner and this is the original rule unchanged.
+    const own = (!branchId || a.owner_branch_id === branchId) ? Number(a.balance) : 0;
+    return children.reduce((s, c) => s + totalOf(c), own);
   };
 
   const sectionTotal = (type) =>
-    accounts.filter(a => a.account_type === type && !a.parent_id)
-            .reduce((s, a) => s + totalOf(a), 0);
+    visible.filter(a => a.account_type === type && !a.parent_id)
+           .reduce((s, a) => s + totalOf(a), 0);
 
   const totalRevenue = sectionTotal('revenue');
   const totalExpense = sectionTotal('expense');
@@ -130,7 +194,7 @@ export default function Accounts() {
   // ── Row renderer ────────────────────────────────────────────────────────────
 
   const renderRow = (a, depth = 0) => {
-    const children  = accounts.filter(c => c.parent_id === a.id);
+    const children  = visible.filter(c => c.parent_id === a.id);
     const bal       = totalOf(a);
     const isOpen    = !collapsed[a.id];
     const isEditing = editId === a.id;
@@ -173,7 +237,16 @@ export default function Accounts() {
               autoFocus
             />
           ) : (
-            <span style={{ fontWeight: depth === 0 ? 700 : isParent ? 600 : 400 }}>{a.name}</span>
+            // The name is the way into the postings behind the balance — the
+            // drill-down the chart of accounts never had.
+            <Link
+              to={`/accounts/${a.id}${branchId ? `?branch_id=${branchId}` : ''}`}
+              style={{ fontWeight: depth === 0 ? 700 : isParent ? 600 : 400, color: 'inherit', textDecoration: 'none' }}
+              onClick={e => e.stopPropagation()}
+              title="Lihat buku besar akun ini"
+            >
+              {a.name}
+            </Link>
           )}
         </td>
 
@@ -214,7 +287,7 @@ export default function Accounts() {
   // ── Section renderer ─────────────────────────────────────────────────────────
 
   const renderSection = (type) => {
-    const roots = accounts.filter(a => a.account_type === type && !a.parent_id);
+    const roots = visible.filter(a => a.account_type === type && !a.parent_id);
     const total = sectionTotal(type);
     const color = TYPE_COLOR[type];
     const label = TYPE_LABEL[type];
@@ -248,9 +321,9 @@ export default function Accounts() {
     const today = new Date().toLocaleDateString('id-ID');
 
     // Helper: flatten accounts for a type recursively
-    const flattenType = (type, indent = 0) => {
+    const flattenType = (type) => {
       const addRows = (acc, d) => {
-        const children = accounts.filter(c => c.parent_id === acc.id);
+        const children = visible.filter(c => c.parent_id === acc.id);
         const bal = totalOf(acc);
         const prefix = '  '.repeat(d);
         rows.push([
@@ -261,7 +334,7 @@ export default function Accounts() {
         if (!collapsed[acc.id]) children.forEach(c => addRows(c, d + 1));
       };
       const rows = [];
-      accounts.filter(a => a.account_type === type && !a.parent_id).forEach(a => addRows(a, 0));
+      visible.filter(a => a.account_type === type && !a.parent_id).forEach(a => addRows(a, 0));
       return rows;
     };
 
@@ -327,7 +400,7 @@ export default function Accounts() {
 
     // ── Sheet 3: COA Lengkap ──────────────────────────────────────────────────
     const coaHeader = [['No. Akun', 'Nama Akun', 'Tipe', 'Saldo (Rp)']];
-    const sortedAccounts = [...accounts].sort((a, b) => {
+    const sortedAccounts = [...visible].sort((a, b) => {
       const na = a.account_number ?? 99999;
       const nb = b.account_number ?? 99999;
       return na - nb || a.name.localeCompare(b.name);
@@ -362,8 +435,31 @@ export default function Accounts() {
     <>
       <div className="page-header">
         <h1>Laporan Keuangan</h1>
-        <button onClick={downloadExcel} className="btn btn-secondary">⬇ Download Excel</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: '0.85rem', color: '#6b7484', fontWeight: 600 }}>Cabang</label>
+          <select
+            value={branchId}
+            onChange={e => setBranchId(e.target.value)}
+            style={{ padding: '0.45rem 0.6rem', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem' }}
+          >
+            <option value="">Semua cabang</option>
+            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <button onClick={downloadExcel} className="btn btn-secondary">⬇ Download Excel</button>
+        </div>
       </div>
+
+      {branchId && (
+        <div style={{
+          fontSize: '0.82rem', color: '#3949ab', background: '#eef2ff', border: '1px solid #dde3ff',
+          borderRadius: '8px', padding: '0.6rem 0.9rem', marginBottom: '1.25rem', lineHeight: 1.55,
+        }}>
+          Menampilkan akun milik <strong>{branchName}</strong> — akun cabang, akun divisinya,
+          turunannya, dan kas kecilnya. Saldo di bawah ini sepenuhnya milik cabang tersebut.
+          Akun bersama seperti Kas, Utang Usaha dan Persediaan tidak dimiliki cabang mana pun
+          dan dirinci terpisah di bawah.
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
@@ -446,6 +542,64 @@ export default function Accounts() {
             </tbody>
           </table>
         </div>
+
+        {/* Shared accounts — a derivation, kept visibly apart from the balances
+            above. `Saldo` is what the account holds; `Porsi cabang` is only the
+            part that can be traced to this branch through the documents behind
+            its journal entries, and `Tak terlacak` is what could be traced to no
+            branch at all. Showing the last one is the whole point: without it a
+            reader would assume the two columns account for each other. */}
+        {branchId && sharedRows.length > 0 && (
+          <div className="card" style={{ gridColumn: '1 / -1' }}>
+            <div className="card-header" style={{ marginBottom: '0.9rem' }}>
+              <h2 style={{ fontSize: '1rem', margin: 0 }}>Akun Bersama</h2>
+              <span style={{ fontSize: '0.75rem', color: '#aaa' }}>
+                porsi {branchName}, ditelusuri dari dokumen sumber
+              </span>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: '80px' }}>No. Akun</th>
+                  <th>Nama Akun</th>
+                  <th style={{ textAlign: 'right' }}>Saldo</th>
+                  <th style={{ textAlign: 'right' }}>Porsi {branchName}</th>
+                  <th style={{ textAlign: 'right' }}>Tak terlacak</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sharedRows.map(a => (
+                  <tr key={a.id}>
+                    <td style={{ fontFamily: 'monospace', fontSize: '0.82rem', color: '#888' }}>
+                      {a.account_number ?? '—'}
+                    </td>
+                    <td>
+                      <Link to={`/accounts/${a.id}?branch_id=${branchId}`} style={{ color: 'inherit', textDecoration: 'none' }}>
+                        {a.name}
+                      </Link>
+                    </td>
+                    <td style={{ textAlign: 'right', color: '#8a93a3' }}>{idr(Number(a.balance))}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700, color: Number(a.branch_amount) < 0 ? '#c0392b' : '#1f2430' }}>
+                      {idr(Number(a.branch_amount))}
+                    </td>
+                    <td style={{ textAlign: 'right', color: '#b0863a', fontSize: '0.85rem' }}>
+                      {idr(Number(a.unplaced_amount))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <p style={{ fontSize: '0.75rem', color: '#8a93a3', marginTop: '0.75rem', lineHeight: 1.5 }}>
+              Jurnal ditelusuri ke cabang lewat dokumen sumbernya (invoice, pengiriman, pembelanjaan,
+              setoran, beban operasional) atau lewat akun milik cabang yang disentuhnya. Jurnal yang
+              menyentuh lebih dari satu cabang — penggajian satu periode, saldo awal migrasi, opname
+              gudang — sengaja tidak dibagi dan masuk kolom <strong>Tak terlacak</strong>. Klik nama
+              akun untuk melihat baris-barisnya.
+            </p>
+          </div>
+        )}
 
         {/* Management form */}
         <div className="card">

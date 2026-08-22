@@ -44,6 +44,8 @@ import FinancialReport from './pages/FinancialReport';
 import FinancialStatement from './pages/FinancialStatement';
 import ProfitLossComparison from './pages/ProfitLossComparison';
 import AccountAdjustments from './pages/AccountAdjustments';
+import OperationalExpenses from './pages/OperationalExpenses';
+import AccountLedger from './pages/AccountLedger';
 import Templates from './pages/Templates';
 import DailyReport from './pages/DailyReport';
 import VendorHistory from './pages/VendorHistory';
@@ -256,7 +258,13 @@ function buildNav({ hrOnly, hr, reports }) {
       ['/reports/usage-trend', 'Perubahan Pemakaian'],
     ] });
   }
-  groups.push({ label: 'Administrasi', links: [
+  // "Administrasi" had become two different jobs wearing one label: defining
+  // the things the system is made of (items, warehouses, accounts, users), which
+  // you touch when something changes; and the back-office work you actually do
+  // on a given day (recording a bill, correcting the ledger, reading the audit
+  // trail). Splitting on that line is why Setting is master data and Admin is
+  // the desk.
+  groups.push({ label: 'Setting', links: [
     ['/items', 'Barang'],
     ['/warehouses', 'Gudang'],
     ['/vendors', 'Vendor'],
@@ -265,9 +273,12 @@ function buildNav({ hrOnly, hr, reports }) {
     ['/branches', 'Cabang & Divisi'],
     // One entry for all three kinds — pembelanjaan, invoice, pengiriman.
     ['/templates', 'Template'],
-    ['/account-adjustments', 'Jurnal Manual'],
     DIV,
     ['/users', 'Pengguna'],
+  ] });
+  groups.push({ label: 'Admin', links: [
+    ['/operational-expenses', 'Beban Operasional'],
+    ['/account-adjustments', 'Jurnal Manual'],
     // The activity log rides with reports: same audience, same restriction.
     ...(reports ? [['/activity', 'Log Aktivitas']] : []),
   ] });
@@ -470,6 +481,10 @@ export default function App() {
                 <Route path="/reports/profit-loss" element={<RequireReports><ProfitLossComparison /></RequireReports>} />
                 <Route path="/reports/daily" element={<RequireReports><DailyReport /></RequireReports>} />
                 <Route path="/account-adjustments" element={<RequireCore><AccountAdjustments /></RequireCore>} />
+                <Route path="/operational-expenses" element={<RequireCore><OperationalExpenses /></RequireCore>} />
+                {/* The postings behind one account. Registered after /accounts so the
+                    list keeps its own path. */}
+                <Route path="/accounts/:id" element={<RequireCore><AccountLedger /></RequireCore>} />
                 <Route path="/transfers" element={<RequireCore><StockTransfers /></RequireCore>} />
                 <Route path="/transfers/group/:id" element={<RequireCore><TransferDetail /></RequireCore>} />
                 <Route path="/dispatch" element={<RequireCore><Dispatch /></RequireCore>} />

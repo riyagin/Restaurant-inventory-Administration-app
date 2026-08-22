@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -283,7 +284,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// POS imports
 	posSQL := `
-		SELECT pi.id, pi.description, pi.date, pi.total_amount, pi.source_file,
+		SELECT pi.id::text AS id, pi.description, pi.date, pi.total_amount, pi.source_file,
 		       u.username AS created_by_name,
 		       json_agg(json_build_object(
 		         'label', pil.label, 'amount', pil.amount, 'line_type', pil.line_type,
@@ -305,7 +306,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// Invoices
 	invSQL := `
-		SELECT inv.id, inv.invoice_number, inv.date, inv.invoice_type, inv.payment_status,
+		SELECT inv.id::text AS id, inv.invoice_number, inv.date, inv.invoice_type, inv.payment_status,
 		       inv.amount_paid, v.name AS vendor_name, b.name AS branch_name, dv.name AS division_name,
 		       COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
 		FROM invoices inv
@@ -321,7 +322,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// Dispatches
 	dispSQL := `
-		SELECT d.id, d.dispatched_at, d.notes, b.name AS branch_name, dv.name AS division_name,
+		SELECT d.id::text AS id, d.dispatched_at, d.notes, b.name AS branch_name, dv.name AS division_name,
 		       w.name AS warehouse_name, u.username AS dispatched_by_name,
 		       COUNT(di.id)::INT AS item_count,
 		       COUNT(DISTINCT di.item_id)::INT AS distinct_items
@@ -339,7 +340,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// Opname (no branch filter)
 	opnameSQL := `
-		SELECT so.id, so.performed_at, so.notes, so.operator_name, so.pic_name,
+		SELECT so.id::text AS id, so.performed_at, so.notes, so.operator_name, so.pic_name,
 		       w.name AS warehouse_name, u.username AS performed_by_name,
 		       COUNT(soi.id)::INT AS item_count,
 		       COALESCE(SUM(ABS(soi.difference)), 0)::BIGINT AS total_diff
@@ -352,7 +353,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// Transfers (no branch filter)
 	transferSQL := `
-		SELECT st.group_id, MIN(st.transferred_at) AS transferred_at,
+		SELECT st.group_id::text AS group_id, MIN(st.transferred_at) AS transferred_at,
 		       fw.name AS from_warehouse, tw.name AS to_warehouse,
 		       u.username AS transferred_by_name,
 		       COUNT(st.id)::INT AS item_count,
@@ -366,7 +367,7 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 
 	// Sales
 	salesSQL := `
-		SELECT s.id, s.date, s.amount, s.description,
+		SELECT s.id::text AS id, s.date, s.amount, s.description,
 		       b.name AS branch_name, dv.name AS division_name, u.username AS created_by_name
 		FROM sales s
 		LEFT JOIN branches b ON b.id = s.branch_id
@@ -477,8 +478,21 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The day at a glance: what each branch earned and spent, and which divisions
+	// carried the revenue. Read from the journal through the same helpers the
+	// branch P&L uses, so a day's figures and the month's report cannot disagree
+	// — and so the overview covers everything that reaches a P&L account, not
+	// only what happens to appear in the tables listed below it.
+	branchPerf, divisionPerf, perfErr := h.dailyPerformance(ctx, date, branchID)
+	if perfErr != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung performa harian")
+		return
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"date":        date,
+		"branches":    branchPerf,
+		"divisions":   divisionPerf,
 		"pos_imports": nilToEmpty(posImports),
 		"invoices":    nilToEmpty(invoices),
 		"dispatches":  nilToEmpty(dispatches),
@@ -493,6 +507,196 @@ func (h *ReportsHandler) Daily(w http.ResponseWriter, r *http.Request) {
 			"dispatch_count": len(dispatches),
 		},
 	})
+}
+
+// dailyPerformance answers the two questions the daily report opens with: how
+// did each branch do today, and which divisions made the money.
+//
+// Both come from `plActivityByAccount` over the single day, split with the same
+// `accountBranchOwnerSQL` / `accountDivisionOwnerSQL` walks the branch and
+// periodic P&L reports use. That matters more than it looks: the tables further
+// down the daily report are source rows (invoices, POS imports, dispatches), and
+// summing those would have produced a third definition of "what a P&L account
+// did today" — one that misses payroll, Pembelanjaan Harian and opname
+// write-offs, and double-counts every dispatch against its mirror invoice. The
+// journal has all of it exactly once.
+//
+// Each account is attributed to its own owner, so no parent rollup is needed:
+// an expense category and its division parent both appear, each with only its
+// own postings.
+func (h *ReportsHandler) dailyPerformance(ctx context.Context, date, branchFilter string) ([]map[string]any, []map[string]any, error) {
+	amountOf, err := plActivityByAccount(ctx, h.pool, date, date)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	loadOwners := func(sql string) (map[string]string, error) {
+		rows, err := h.pool.Query(ctx, sql)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := map[string]string{}
+		for rows.Next() {
+			var accountID, ownerID pgtype.UUID
+			if err := rows.Scan(&accountID, &ownerID); err != nil {
+				return nil, err
+			}
+			if accountID.Valid && ownerID.Valid {
+				out[uuidBytesToString(accountID.Bytes)] = uuidBytesToString(ownerID.Bytes)
+			}
+		}
+		return out, rows.Err()
+	}
+
+	branchOf, err := loadOwners(accountBranchOwnerSQL)
+	if err != nil {
+		return nil, nil, err
+	}
+	divisionOf, err := loadOwners(accountDivisionOwnerSQL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	typeRows, err := h.pool.Query(ctx,
+		`SELECT id, account_type FROM accounts WHERE account_type IN ('revenue', 'expense')`)
+	if err != nil {
+		return nil, nil, err
+	}
+	accountType := map[string]string{}
+	for typeRows.Next() {
+		var id pgtype.UUID
+		var t string
+		if err := typeRows.Scan(&id, &t); err != nil {
+			typeRows.Close()
+			return nil, nil, err
+		}
+		accountType[uuidBytesToString(id.Bytes)] = t
+	}
+	typeRows.Close()
+	if err := typeRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	type tally struct{ revenue, expense int64 }
+	byBranch := map[string]*tally{}
+	byDivision := map[string]*tally{}
+
+	for accountID, amount := range amountOf {
+		if amount == 0 {
+			continue
+		}
+		isRevenue := accountType[accountID] == "revenue"
+		if branchID, ok := branchOf[accountID]; ok {
+			t := byBranch[branchID]
+			if t == nil {
+				t = &tally{}
+				byBranch[branchID] = t
+			}
+			if isRevenue {
+				t.revenue += amount
+			} else {
+				t.expense += amount
+			}
+		}
+		// A division only earns revenue through its own revenue account; its
+		// expense side is reported too, since "which divisions made the most
+		// money" is a poorer question than it looks if a division's costs are
+		// invisible beside its takings.
+		if divisionID, ok := divisionOf[accountID]; ok {
+			t := byDivision[divisionID]
+			if t == nil {
+				t = &tally{}
+				byDivision[divisionID] = t
+			}
+			if isRevenue {
+				t.revenue += amount
+			} else {
+				t.expense += amount
+			}
+		}
+	}
+
+	// Every branch is listed, including the ones that did nothing today: a branch
+	// missing from the overview reads as an oversight, while a branch showing
+	// zero is a fact worth seeing on a trading day.
+	branchSQL := `SELECT id, name FROM branches`
+	var branchParams []any
+	if branchFilter != "" {
+		branchSQL += ` WHERE id = $1`
+		branchParams = append(branchParams, branchFilter)
+	}
+	branchRows, err := h.pool.Query(ctx, branchSQL+` ORDER BY name`, branchParams...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer branchRows.Close()
+
+	branches := []map[string]any{}
+	for branchRows.Next() {
+		var id pgtype.UUID
+		var name string
+		if err := branchRows.Scan(&id, &name); err != nil {
+			return nil, nil, err
+		}
+		key := uuidBytesToString(id.Bytes)
+		t := byBranch[key]
+		if t == nil {
+			t = &tally{}
+		}
+		branches = append(branches, map[string]any{
+			"id":      key,
+			"name":    name,
+			"revenue": t.revenue,
+			"expense": t.expense,
+			"net":     t.revenue - t.expense,
+		})
+	}
+	if err := branchRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	// Divisions, unlike branches, are only listed when they moved: there are two
+	// dozen of them and a chart ranking twenty empty bars answers nothing.
+	divSQL := `SELECT d.id, d.name, d.branch_id, b.name FROM divisions d JOIN branches b ON b.id = d.branch_id`
+	var divParams []any
+	if branchFilter != "" {
+		divSQL += ` WHERE d.branch_id = $1`
+		divParams = append(divParams, branchFilter)
+	}
+	divRows, err := h.pool.Query(ctx, divSQL+` ORDER BY b.name, d.name`, divParams...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer divRows.Close()
+
+	divisions := []map[string]any{}
+	for divRows.Next() {
+		var id, branchID pgtype.UUID
+		var name, branchName string
+		if err := divRows.Scan(&id, &name, &branchID, &branchName); err != nil {
+			return nil, nil, err
+		}
+		key := uuidBytesToString(id.Bytes)
+		t := byDivision[key]
+		if t == nil || (t.revenue == 0 && t.expense == 0) {
+			continue
+		}
+		divisions = append(divisions, map[string]any{
+			"id":          key,
+			"name":        name,
+			"branch_id":   uuidBytesToString(branchID.Bytes),
+			"branch_name": branchName,
+			"revenue":     t.revenue,
+			"expense":     t.expense,
+			"net":         t.revenue - t.expense,
+		})
+	}
+	if err := divRows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	return branches, divisions, nil
 }
 
 // InventoryValue — GET /api/reports/inventory-value

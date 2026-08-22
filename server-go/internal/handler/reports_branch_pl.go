@@ -42,10 +42,25 @@ const unallocatedBranchKey = "unallocated"
 //
 // DISTINCT ON keeps the shallowest match if an account is somehow reachable from
 // two branches (a hand-edited parent_id), which is better than double-counting it.
-const accountBranchOwnerSQL = `
-WITH RECURSIVE direct AS (
+//
+// A branch's petty cash box is seeded here too, even though it is an asset and
+// therefore invisible to every P&L caller — they filter `account_type IN
+// ('revenue','expense')`, so the extra rows can never change their output. It
+// belongs in the same map because it is branch-owned by exactly the same logic:
+// `branches.petty_cash_account_id` is as direct a link as
+// `branches.expense_account_id`, and the Accounts page and the account ledger
+// need the whole picture, not only the income-statement half. Keeping one walk is
+// the point — a second, slightly-different definition of "which branch owns this
+// account" is the failure mode this file already warns about twice.
+//
+// Split into its CTE body and the statement that selects from it, so callers that
+// need the ownership map as one input among several (the account ledger, which
+// also needs each entry's source document) can compose it rather than re-typing
+// the walk.
+const accountBranchOwnerCTE = `direct AS (
   SELECT b.id AS branch_id, b.revenue_account_id AS account_id FROM branches b WHERE b.revenue_account_id IS NOT NULL
   UNION SELECT b.id, b.expense_account_id  FROM branches b  WHERE b.expense_account_id  IS NOT NULL
+  UNION SELECT b.id, b.petty_cash_account_id FROM branches b WHERE b.petty_cash_account_id IS NOT NULL
   UNION SELECT d.branch_id, d.revenue_account_id  FROM divisions d WHERE d.revenue_account_id  IS NOT NULL AND d.branch_id IS NOT NULL
   UNION SELECT d.branch_id, d.expense_account_id  FROM divisions d WHERE d.expense_account_id  IS NOT NULL AND d.branch_id IS NOT NULL
   UNION SELECT d.branch_id, d.discount_account_id FROM divisions d WHERE d.discount_account_id IS NOT NULL AND d.branch_id IS NOT NULL
@@ -55,7 +70,9 @@ owned AS (
   UNION ALL
   SELECT a.id, o.branch_id, o.depth + 1
   FROM accounts a JOIN owned o ON a.parent_id = o.account_id
-)
+)`
+
+const accountBranchOwnerSQL = `WITH RECURSIVE ` + accountBranchOwnerCTE + `
 SELECT DISTINCT ON (account_id) account_id, branch_id
 FROM owned ORDER BY account_id, depth`
 
@@ -74,17 +91,28 @@ FROM owned ORDER BY account_id, depth`
 // The journal has all of it, by construction, which is why both callers read it
 // here and nowhere else.
 //
-// `journal_lines.amount` is debit-positive. Negating revenue yields the natural
-// sign per type — positive revenue, positive expense — which is the same
-// convention `accounts.balance` is cached in, so a period figure and an all-time
-// balance stay directly comparable.
 // plAmountSQL and plActivityFromSQL are the *one* definition of what a P&L
 // account did, split out so the periodic report can bucket the same numbers by
 // month or year without writing a second version of them. Two spellings of this
 // arithmetic is exactly the failure the comment above describes, and a copy that
 // drifts is not detectable from either report's own totals — so callers compose
 // these instead of retyping the CASE.
-const plAmountSQL = `SUM(CASE WHEN a.account_type = 'revenue' THEN -jl.amount ELSE jl.amount END)::BIGINT`
+//
+// naturalAmountSQL is the general form. `journal_lines.amount` is debit-positive
+// and `accounts.balance` is natural-sign per type (see
+// service.applyToBalanceCache), so credit-normal types are negated and the rest
+// taken as-is; a period figure and an all-time balance therefore stay directly
+// comparable. plAmountSQL *is* that expression — on the revenue/expense subset
+// every P&L caller filters to, the liability/equity arm never fires — and it
+// keeps its own name because the P&L is where the reasoning about it lives.
+// naturalDeltaSQL is the per-line expression; naturalAmountSQL sums it. Callers
+// that need a FILTER clause compose the delta themselves, because `FILTER` is
+// part of the aggregate call and must come before any cast.
+const naturalDeltaSQL = `CASE WHEN a.account_type IN ('liability', 'equity', 'revenue') THEN -jl.amount ELSE jl.amount END`
+
+const naturalAmountSQL = `SUM(` + naturalDeltaSQL + `)::BIGINT`
+
+const plAmountSQL = naturalAmountSQL
 
 const plActivityFromSQL = `
 FROM journal_lines jl

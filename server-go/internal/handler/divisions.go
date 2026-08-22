@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -198,6 +200,16 @@ func (h *DivisionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The Operasional division is structural, not a name someone chose: every
+	// branch has one by construction, its expense account is the parent the
+	// operational sub-accounts hang from, and the Beban Operasional screen finds
+	// it by name. Renaming it would leave those sub-accounts describing a branch
+	// overhead that no longer exists under any recognisable heading.
+	if systemDivision(r.Context(), h.pool, id) {
+		respondError(w, http.StatusConflict, "divisi Operasional dibuat otomatis dan tidak dapat diubah namanya")
+		return
+	}
+
 	division, err := h.queries.UpdateDivision(r.Context(), &db.UpdateDivisionParams{
 		Name: body.Name,
 		ID:   pgtype.UUID{Bytes: id, Valid: true},
@@ -231,6 +243,14 @@ func (h *DivisionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deleting it would cascade away every operational_expense_categories row and
+	// strand their accounts — which carry posted history — outside any branch's
+	// P&L, since the branch owner walk reaches them through this division.
+	if systemDivision(r.Context(), h.pool, id) {
+		respondError(w, http.StatusConflict, "divisi Operasional dibuat otomatis dan tidak dapat dihapus")
+		return
+	}
+
 	if err := h.queries.DeleteDivision(r.Context(), pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus divisi")
 		return
@@ -240,6 +260,19 @@ func (h *DivisionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Menghapus divisi %q", existing.Name))
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "divisi berhasil dihapus"})
+}
+
+// systemDivision reports whether a division is one the system creates and
+// maintains — currently only Operasional, which every branch gets automatically
+// and whose expense account is the parent the operational sub-accounts hang
+// from. Read with a raw query rather than through GetDivisionByID: the generated
+// row type predates the column.
+func systemDivision(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) bool {
+	var isSystem bool
+	if err := pool.QueryRow(ctx, `SELECT is_system FROM divisions WHERE id = $1`, pgUUID(id)).Scan(&isSystem); err != nil {
+		return false
+	}
+	return isSystem
 }
 
 func (h *DivisionsHandler) ListCategories(w http.ResponseWriter, r *http.Request) {

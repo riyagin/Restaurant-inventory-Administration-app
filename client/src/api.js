@@ -193,7 +193,12 @@ export const createVendorBankAccount = (id, data) => api.post(`/vendors/${id}/ba
 export const updateVendorBankAccount = (id, bankId, data) => api.put(`/vendors/${id}/bank-accounts/${bankId}`, data);
 export const deleteVendorBankAccount = (id, bankId) => api.delete(`/vendors/${id}/bank-accounts/${bankId}`);
 
-export const getAccounts = () => api.get('/accounts');
+// `branch_id` annotates rather than filters: every account still comes back, each
+// carrying `owner_branch_id` plus — when a branch is named — the share of its
+// balance traceable to that branch and the share traceable to nobody. Filtering
+// server-side would hand the client a tree it cannot rebuild.
+export const getAccounts = (params) => api.get('/accounts', { params });
+export const getAccountLedger = (id, params) => api.get(`/accounts/${id}/ledger`, { params });
 export const createAccount = (data) => api.post('/accounts', data);
 export const updateAccount = (id, data) => api.put(`/accounts/${id}`, data);
 export const deleteAccount = (id) => api.delete(`/accounts/${id}`);
@@ -287,6 +292,17 @@ export const deleteDivisionCategory = (id) => api.delete(`/division-categories/$
 export const getExpenseCategories = (params) => api.get('/expense-categories', { params });
 export const createExpenseCategory = (data) => api.post('/expense-categories', data);
 export const deleteExpenseCategory = (id) => api.delete(`/expense-categories/${id}`);
+
+// Beban Operasional — the branch's standing bills (listrik, air, sewa), booked
+// to the sub-accounts under its system-owned Operasional division. Distinct from
+// the two above again: those route what a division *buys*, these are the costs
+// of keeping the place open, and they have their own screen under Admin.
+export const getOperationalExpenses = (params) => api.get('/operational-expenses', { params });
+export const createOperationalExpense = (data) => api.post('/operational-expenses', data);
+export const cancelOperationalExpense = (id, reason) => api.post(`/operational-expenses/${id}/cancel`, { reason });
+export const getOperationalExpenseCategories = (params) => api.get('/operational-expense-categories', { params });
+export const createOperationalExpenseCategory = (data) => api.post('/operational-expense-categories', data);
+export const deleteOperationalExpenseCategory = (id) => api.delete(`/operational-expense-categories/${id}`);
 
 export const getDispatches = () => api.get('/dispatches');
 export const getDispatch = (id) => api.get(`/dispatches/${id}`);

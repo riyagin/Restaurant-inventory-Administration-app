@@ -24,6 +24,20 @@ func NewAccountsHandler(pool *pgxpool.Pool, queries *db.Queries) *AccountsHandle
 	return &AccountsHandler{pool: pool, queries: queries}
 }
 
+// List — GET /api/accounts?branch_id=
+//
+// Every account, always — the branch parameter annotates rather than filters, so
+// the response can carry the whole tree while telling the caller which parts of
+// it belong to the branch. Filtering server-side would break the tree: an expense
+// category's parent may be branch-owned while a `Kas` several levels up is not,
+// and a client that receives only some nodes cannot rebuild the hierarchy the
+// page renders.
+//
+// `owner_branch_id` is always present (null for accounts no branch owns). With a
+// branch selected each account additionally carries `branch_amount` — the part of
+// its balance traceable to that branch through the documents behind its journal
+// entries — and `unplaced_amount`, the part traceable to no branch at all. Those
+// two are derivations and are named so they cannot be mistaken for `balance`.
 func (h *AccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.queries.ListAccounts(r.Context())
 	if err != nil {
@@ -33,7 +47,55 @@ func (h *AccountsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if accounts == nil {
 		accounts = []*db.Account{}
 	}
-	respondJSON(w, http.StatusOK, accounts)
+
+	branchID := r.URL.Query().Get("branch_id")
+	if branchID != "" {
+		if _, err := parseUUID(branchID); err != nil {
+			respondError(w, http.StatusBadRequest, "branch_id tidak valid")
+			return
+		}
+	}
+
+	owners, err := h.accountOwners(r)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memetakan akun ke cabang")
+		return
+	}
+
+	var branchAmount, unplaced map[string]int64
+	if branchID != "" {
+		branchAmount, unplaced, err = h.branchAmountsForAccounts(r, branchID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menghitung porsi cabang")
+			return
+		}
+	}
+
+	out := make([]map[string]any, 0, len(accounts))
+	for _, a := range accounts {
+		id := uuidBytesToString(a.ID.Bytes)
+		row := map[string]any{
+			"id":              a.ID,
+			"name":            a.Name,
+			"balance":         a.Balance,
+			"account_number":  a.AccountNumber,
+			"account_type":    a.AccountType,
+			"parent_id":       a.ParentID,
+			"is_system":       a.IsSystem,
+			"is_cash_drawer":  a.IsCashDrawer,
+			"owner_branch_id": nil,
+		}
+		if owner, ok := owners[id]; ok {
+			row["owner_branch_id"] = owner
+		}
+		if branchID != "" {
+			row["branch_amount"] = branchAmount[id]
+			row["unplaced_amount"] = unplaced[id]
+		}
+		out = append(out, row)
+	}
+
+	respondJSON(w, http.StatusOK, out)
 }
 
 func (h *AccountsHandler) Create(w http.ResponseWriter, r *http.Request) {

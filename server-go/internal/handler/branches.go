@@ -159,6 +159,15 @@ func (h *BranchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every branch pays for electricity, water and rent from day one, so its
+	// Operasional division and the standard overhead sub-accounts come into
+	// existence with it. Hand-creating them per branch is what left the breakdown
+	// missing until somebody noticed.
+	if err := createOperasionalDivision(ctx, tx, newBranch.ID, body.Name); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal membuat divisi operasional")
+		return
+	}
+
 	branch, err := qtx.GetBranchByID(ctx, newBranch.ID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data cabang")
@@ -173,7 +182,7 @@ func (h *BranchesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Action:      "CREATE",
 		EntityType:  "branch",
 		EntityID:    newBranch.ID.Bytes,
-		Description: fmt.Sprintf("Menambahkan cabang %q beserta akun pendapatan, beban dan kas kecilnya", body.Name),
+		Description: fmt.Sprintf("Menambahkan cabang %q beserta akun pendapatan, beban, kas kecil dan divisi operasionalnya", body.Name),
 	})
 
 	if err := tx.Commit(ctx); err != nil {

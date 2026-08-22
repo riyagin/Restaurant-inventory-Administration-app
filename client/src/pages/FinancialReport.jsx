@@ -69,7 +69,10 @@ function totalOfAmounts(amounts, columns) {
   return columns.reduce((s, col) => s + amounts[col.id], 0);
 }
 
-function BranchAccountRow({ node, columns, depth = 0 }) {
+// `showTotal` exists because the same row renders in two places: the all-branches
+// comparison, where a Total column is the point, and a single branch's tab, where
+// it would repeat the one column beside it.
+function BranchAccountRow({ node, columns, depth = 0, showTotal = true }) {
   const [open, setOpen] = useState(depth < 2);
   const amounts = effectiveAmounts(node, columns);
   const total = totalOfAmounts(amounts, columns);
@@ -77,6 +80,9 @@ function BranchAccountRow({ node, columns, depth = 0 }) {
   const isRoot = depth === 0;
 
   if (total === 0 && !hasChildren && !isRoot) return null;
+  // In a single-branch tab, a subtree belonging to another branch is all zeros —
+  // and a page of zero rows is worse than a short page.
+  if (!showTotal && total === 0 && !isRoot) return null;
 
   return (
     <>
@@ -107,18 +113,20 @@ function BranchAccountRow({ node, columns, depth = 0 }) {
             {amounts[col.id] !== 0 ? idr(amounts[col.id]) : <span style={{ color: '#ddd' }}>—</span>}
           </td>
         ))}
-        <td style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.82rem', fontWeight: 700, borderLeft: '1px solid #eee', color: total < 0 ? '#e74c3c' : undefined }}>
-          {total !== 0 ? idr(total) : <span style={{ color: '#ddd' }}>—</span>}
-        </td>
+        {showTotal && (
+          <td style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.82rem', fontWeight: 700, borderLeft: '1px solid #eee', color: total < 0 ? '#e74c3c' : undefined }}>
+            {total !== 0 ? idr(total) : <span style={{ color: '#ddd' }}>—</span>}
+          </td>
+        )}
       </tr>
       {open && node.children.map(child => (
-        <BranchAccountRow key={child.id} node={child} columns={columns} depth={depth + 1} />
+        <BranchAccountRow key={child.id} node={child} columns={columns} depth={depth + 1} showTotal={showTotal} />
       ))}
     </>
   );
 }
 
-function BranchSectionRows({ title, nodes, columns, color }) {
+function BranchSectionRows({ title, nodes, columns, color, showTotal = true }) {
   const totals = sumAmounts(nodes.map(n => effectiveAmounts(n, columns)), columns);
   return (
     <>
@@ -131,12 +139,60 @@ function BranchSectionRows({ title, nodes, columns, color }) {
             {idr(totals[col.id])}
           </td>
         ))}
-        <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.85rem', borderLeft: '1px solid #eee' }}>
-          {idr(totalOfAmounts(totals, columns))}
-        </td>
+        {showTotal && (
+          <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.85rem', borderLeft: '1px solid #eee' }}>
+            {idr(totalOfAmounts(totals, columns))}
+          </td>
+        )}
       </tr>
-      {nodes.map(n => <BranchAccountRow key={n.id} node={n} columns={columns} depth={0} />)}
+      {nodes.map(n => <BranchAccountRow key={n.id} node={n} columns={columns} depth={0} showTotal={showTotal} />)}
     </>
+  );
+}
+
+function TabButton({ active, muted, onClick, children }) {
+  return (
+    <button
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      style={{
+        border: 'none', background: 'none', cursor: 'pointer',
+        padding: '0.5rem 0.85rem', fontSize: '0.88rem',
+        fontWeight: active ? 700 : 500,
+        color: active ? '#2c6fc2' : muted ? '#b0863a' : '#6b7484',
+        borderBottom: `2px solid ${active ? '#2c6fc2' : 'transparent'}`,
+        marginBottom: '-1px',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Revenue above expense on a shared scale — the gap between the two bars is the
+// profit, read without doing the subtraction.
+function ProportionBar({ revenue, expense, scale }) {
+  const width = (v) => `${scale > 0 ? Math.min(100, (Math.max(0, v) / scale) * 100) : 0}%`;
+  return (
+    <div title={`Pendapatan ${idr(revenue)} · Beban ${idr(expense)}`}>
+      <div style={{ height: '6px', background: '#eef1f5', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{ width: width(revenue), height: '100%', background: '#1f9d68', borderRadius: '3px' }} />
+      </div>
+      <div style={{ height: '6px', background: '#eef1f5', borderRadius: '3px', overflow: 'hidden', marginTop: '2px' }}>
+        <div style={{ width: width(expense), height: '100%', background: '#d98324', borderRadius: '3px' }} />
+      </div>
+    </div>
+  );
+}
+
+function Figure({ label, value, color, hint }) {
+  return (
+    <div style={{ border: '1px solid #e9edf3', borderRadius: '8px', padding: '0.7rem 0.9rem' }}>
+      <div style={{ fontSize: '0.76rem', color: '#8a93a3' }}>{label}</div>
+      <div style={{ fontSize: '1.15rem', fontWeight: 700, color, marginTop: '0.15rem' }}>{idr(value)}</div>
+      {hint && <div style={{ fontSize: '0.72rem', color: '#aab1bd', marginTop: '0.1rem' }}>{hint}</div>}
+    </div>
   );
 }
 
@@ -372,6 +428,8 @@ export default function FinancialReport() {
   // a response that arrives after the filters moved on is visibly stale instead
   // of silently overwriting the current one.
   const [branchReport, setBranchReport] = useState(null);
+  // Which branch's tab is open; '' is the all-branches comparison.
+  const [branchTab, setBranchTab] = useState('');
 
   const fetchReport = useCallback(() => {
     setLoading(true);
@@ -413,14 +471,36 @@ export default function FinancialReport() {
     return { revenue: buildTree(byType.revenue), expense: buildTree(byType.expense) };
   }, [branchData]);
 
-  const branchNet = useMemo(() => {
-    if (branchColumns.length === 0) return {};
-    const rev = sumAmounts((branchTrees.revenue || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns);
-    const exp = sumAmounts((branchTrees.expense || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns);
-    const out = {};
-    for (const col of branchColumns) out[col.id] = rev[col.id] - exp[col.id];
-    return out;
+  const branchSectionTotals = useMemo(() => {
+    if (branchColumns.length === 0) return { revenue: {}, expense: {} };
+    return {
+      revenue: sumAmounts((branchTrees.revenue || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns),
+      expense: sumAmounts((branchTrees.expense || []).map(n => effectiveAmounts(n, branchColumns)), branchColumns),
+    };
   }, [branchTrees, branchColumns]);
+
+  const branchNet = useMemo(() => {
+    const out = {};
+    for (const col of branchColumns) {
+      out[col.id] = (branchSectionTotals.revenue[col.id] || 0) - (branchSectionTotals.expense[col.id] || 0);
+    }
+    return out;
+  }, [branchSectionTotals, branchColumns]);
+
+  // One scale across every proportion bar, so a bar's length means the same
+  // thing on every row. Per-row scaling would draw the smallest branch as
+  // confidently as the largest.
+  const branchScale = useMemo(() => Math.max(
+    0,
+    ...branchColumns.flatMap(col => [
+      branchSectionTotals.revenue[col.id] || 0,
+      branchSectionTotals.expense[col.id] || 0,
+    ]),
+  ), [branchSectionTotals, branchColumns]);
+
+  // A tab pointing at a branch the current period no longer returns falls back
+  // to the comparison rather than rendering an empty card.
+  const activeBranchTab = branchColumns.some(c => c.id === branchTab) ? branchTab : '';
 
   const totalRevenue = trees.revenue?.reduce((s, n) => s + effectiveBalance(n), 0) ?? 0;
   const totalExpense = trees.expense?.reduce((s, n) => s + effectiveBalance(n), 0) ?? 0;
@@ -538,45 +618,131 @@ export default function FinancialReport() {
             <p style={{ padding: '1.5rem', color: '#999' }}>Belum ada cabang.</p>
           ) : (
             <>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: `${28 + branchColumns.length * 9}rem` }}>
-                  <thead>
-                    <tr style={{ borderBottom: '2px solid #eee' }}>
-                      <th style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', color: '#888', position: 'sticky', left: 0, background: '#fff' }}>Akun</th>
-                      {branchColumns.map(col => (
-                        <th key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.8rem', color: col.id === 'unallocated' ? '#b0863a' : '#888' }}>
-                          {col.name}
-                        </th>
-                      ))}
-                      <th style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.8rem', color: '#555', borderLeft: '1px solid #eee' }}>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <BranchSectionRows title="Pendapatan" nodes={branchTrees.revenue} columns={branchColumns} color="#e6f9f0" />
-                    <BranchSectionRows title="Beban" nodes={branchTrees.expense} columns={branchColumns} color="#fff3e0" />
-                    <tr style={{ background: '#f0f4ff', borderTop: '2px solid #dde4ff' }}>
-                      <td style={{ fontWeight: 700, fontSize: '0.95rem', padding: '0.65rem 0.75rem', position: 'sticky', left: 0, background: '#f0f4ff' }}>
-                        Laba / Rugi Bersih
-                      </td>
-                      {branchColumns.map(col => (
-                        <td key={col.id} style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.88rem', color: branchNet[col.id] >= 0 ? '#1b5e45' : '#c0392b' }}>
-                          {idr(branchNet[col.id])}
-                        </td>
-                      ))}
-                      <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.92rem', borderLeft: '1px solid #eee', color: totalOfAmounts(branchNet, branchColumns) >= 0 ? '#1b5e45' : '#c0392b' }}>
-                        {idr(totalOfAmounts(branchNet, branchColumns))}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+              {/* Tabs rather than one wide table.
+                  The n-column grid put every branch on screen at once, which is
+                  the right shape for comparing a single line across branches and
+                  the wrong one for the question people actually bring here —
+                  "how did this branch do" — where it means reading down a column
+                  while four others compete for the eye, on a table that scrolls
+                  sideways past its own account names. So the comparison keeps a
+                  tab of its own, reduced to the three figures that carry it, and
+                  each branch gets a tab where its P&L is just a P&L. */}
+              <div role="tablist" aria-label="Cabang" style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', borderBottom: '1px solid #eceff4', marginBottom: '1rem' }}>
+                <TabButton active={activeBranchTab === ''} onClick={() => setBranchTab('')}>Perbandingan</TabButton>
+                {branchColumns.map(col => (
+                  <TabButton
+                    key={col.id}
+                    active={activeBranchTab === col.id}
+                    onClick={() => setBranchTab(col.id)}
+                    muted={col.id === 'unallocated'}
+                  >
+                    {col.name}
+                  </TabButton>
+                ))}
               </div>
 
-              <p style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.75rem', lineHeight: 1.5 }}>
-                Setiap akun pendapatan/beban dipetakan ke cabang pemiliknya — akun cabang, akun divisinya,
-                dan akun turunannya (kategori beban, beban gaji). Kolom <strong>Umum</strong> memuat akun
-                yang tidak dimiliki cabang mana pun, sehingga laba tiap cabang hanya menanggung biayanya sendiri.
-                Angka diambil dari jurnal, jadi termasuk pemakaian dispatch, gaji, selisih opname dan jurnal manual.
-              </p>
+              {activeBranchTab === '' ? (
+                <>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #eee' }}>
+                        <th style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', color: '#888' }}>Cabang</th>
+                        <th style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.8rem', color: '#888' }}>Pendapatan</th>
+                        <th style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.8rem', color: '#888' }}>Beban</th>
+                        <th style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.8rem', color: '#555' }}>Laba / Rugi</th>
+                        <th style={{ width: '32%', paddingLeft: '1rem', fontSize: '0.8rem', color: '#888', textAlign: 'left' }}>Proporsi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {branchColumns.map(col => {
+                        const rev = branchSectionTotals.revenue[col.id] || 0;
+                        const exp = branchSectionTotals.expense[col.id] || 0;
+                        const net = branchNet[col.id] || 0;
+                        return (
+                          <tr key={col.id} style={{ borderBottom: '1px solid #f4f6f9' }}>
+                            <td style={{ padding: '0.55rem 0.75rem', fontWeight: 600, fontSize: '0.9rem', color: col.id === 'unallocated' ? '#b0863a' : '#1f2430' }}>
+                              <button
+                                onClick={() => setBranchTab(col.id)}
+                                style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: '#dde3ec' }}
+                              >
+                                {col.name}
+                              </button>
+                            </td>
+                            <td style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.88rem', fontWeight: 600, color: '#1f9d68' }}>{idr(rev)}</td>
+                            <td style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.88rem', fontWeight: 600, color: '#d98324' }}>{idr(exp)}</td>
+                            <td style={{ textAlign: 'right', paddingRight: '1rem', fontSize: '0.9rem', fontWeight: 700, color: net >= 0 ? '#1b5e45' : '#c0392b' }}>{idr(net)}</td>
+                            <td style={{ paddingLeft: '1rem' }}>
+                              <ProportionBar revenue={rev} expense={exp} scale={branchScale} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      <tr style={{ background: '#f0f4ff' }}>
+                        <td style={{ padding: '0.6rem 0.75rem', fontWeight: 700, fontSize: '0.9rem' }}>Total</td>
+                        <td style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.88rem' }}>
+                          {idr(totalOfAmounts(branchSectionTotals.revenue, branchColumns))}
+                        </td>
+                        <td style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.88rem' }}>
+                          {idr(totalOfAmounts(branchSectionTotals.expense, branchColumns))}
+                        </td>
+                        <td style={{ textAlign: 'right', paddingRight: '1rem', fontWeight: 700, fontSize: '0.92rem', color: totalOfAmounts(branchNet, branchColumns) >= 0 ? '#1b5e45' : '#c0392b' }}>
+                          {idr(totalOfAmounts(branchNet, branchColumns))}
+                        </td>
+                        <td />
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <p style={{ fontSize: '0.78rem', color: '#888', marginTop: '0.75rem', lineHeight: 1.5 }}>
+                    Setiap akun pendapatan/beban dipetakan ke cabang pemiliknya — akun cabang, akun divisinya,
+                    dan akun turunannya (kategori beban, beban operasional, beban gaji). Tab <strong>Umum</strong> memuat
+                    akun yang tidak dimiliki cabang mana pun, sehingga laba tiap cabang hanya menanggung biayanya sendiri.
+                    Angka diambil dari jurnal, jadi termasuk pemakaian dispatch, gaji, selisih opname dan jurnal manual.
+                  </p>
+                </>
+              ) : (
+                (() => {
+                  const col = branchColumns.find(c => c.id === activeBranchTab);
+                  if (!col) return null;
+                  const one = [col];
+                  const rev = branchSectionTotals.revenue[col.id] || 0;
+                  const exp = branchSectionTotals.expense[col.id] || 0;
+                  const net = branchNet[col.id] || 0;
+                  return (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                        <Figure label="Pendapatan" value={rev} color="#1f9d68" />
+                        <Figure label="Beban" value={exp} color="#d98324" />
+                        <Figure
+                          label={net >= 0 ? 'Laba Bersih' : 'Rugi Bersih'}
+                          value={Math.abs(net)}
+                          color={net >= 0 ? '#1b5e45' : '#c0392b'}
+                          hint={rev > 0 ? `margin ${Math.round((net / rev) * 100)}%` : 'belum ada pendapatan'}
+                        />
+                      </div>
+
+                      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid #eee' }}>
+                            <th style={{ textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', color: '#888' }}>Akun</th>
+                            <th style={{ textAlign: 'right', paddingRight: '0.75rem', fontSize: '0.8rem', color: '#888' }}>{col.name}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <BranchSectionRows title="Pendapatan" nodes={branchTrees.revenue} columns={one} color="#e6f9f0" showTotal={false} />
+                          <BranchSectionRows title="Beban" nodes={branchTrees.expense} columns={one} color="#fff3e0" showTotal={false} />
+                          <tr style={{ background: '#f0f4ff', borderTop: '2px solid #dde4ff' }}>
+                            <td style={{ fontWeight: 700, fontSize: '0.95rem', padding: '0.65rem 0.75rem' }}>Laba / Rugi Bersih</td>
+                            <td style={{ textAlign: 'right', paddingRight: '0.75rem', fontWeight: 700, fontSize: '0.9rem', color: net >= 0 ? '#1b5e45' : '#c0392b' }}>
+                              {idr(net)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </>
+                  );
+                })()
+              )}
             </>
           )}
         </div>
