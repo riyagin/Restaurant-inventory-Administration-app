@@ -36,6 +36,7 @@ import StockItemDetail from './pages/StockItemDetail';
 import InventoryValueReport from './pages/InventoryValueReport';
 import PriceChangeReport from './pages/PriceChangeReport';
 import UsageTrendReport from './pages/UsageTrendReport';
+import StockMovementReport from './pages/StockMovementReport';
 import Recipes from './pages/Recipes';
 import Productions from './pages/Productions';
 import Enumerations from './pages/Enumerations';
@@ -259,6 +260,7 @@ function buildNav({ hrOnly, hr, reports }) {
       DIV,
       ['/reports/price-changes', 'Perubahan Harga'],
       ['/reports/usage-trend', 'Perubahan Pemakaian'],
+      ['/reports/stock-movement', 'Pergerakan Stok'],
     ] });
   }
   // "Administrasi" had become two different jobs wearing one label: defining
@@ -480,6 +482,7 @@ export default function App() {
                 <Route path="/reports/inventory-value" element={<RequireReports><InventoryValueReport /></RequireReports>} />
                 <Route path="/reports/price-changes" element={<RequireReports><PriceChangeReport /></RequireReports>} />
                 <Route path="/reports/usage-trend" element={<RequireReports><UsageTrendReport /></RequireReports>} />
+                <Route path="/reports/stock-movement" element={<RequireReports><StockMovementReport /></RequireReports>} />
                 <Route path="/reports/financial" element={<RequireReports><FinancialReport /></RequireReports>} />
                 <Route path="/reports/statement" element={<RequireReports><FinancialStatement /></RequireReports>} />
                 <Route path="/reports/profit-loss" element={<RequireReports><ProfitLossComparison /></RequireReports>} />

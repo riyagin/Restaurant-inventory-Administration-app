@@ -235,6 +235,7 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | InventoryValueReport | `/reports/inventory-value` | Yes |
 | PriceChangeReport | `/reports/price-changes` | Yes |
 | UsageTrendReport | `/reports/usage-trend` | Yes |
+| StockMovementReport | `/reports/stock-movement` | Yes (item × day matrix of stock change: opname only, or opname + dispatch usage) |
 | AccountAdjustments | `/account-adjustments` | Yes |
 | NonStockItemDetail | `/items/history/:id` | Yes |
 | StockItemDetail | `/items/stock/:id` | Yes |
@@ -469,7 +470,7 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 
 **Enumerations** (3): GET, POST, DELETE /:id — /api/enumerations
 
-**Reports** (8): GET /api/reports/financial, /daily, /inventory-value, /expense-summary + /profit-loss-by-branch (P&L split into one column per branch — see the rule below) + /profit-loss-periodic (the same P&L with one column per **period**: `granularity=month|year`, `range=6m|ytd`, `years=2..5`, optional `branch_id` and `division` — see the rule below) + /price-changes (weighted fixed-basket purchase-price index per week over a range, plus per item/unit first-vs-last price and rupiah impact) + /usage-trend (daily item usage over a range: stock items via dispatch stock_history, non-stock items via invoice lines, with start-vs-end percentage changes)
+**Reports** (9): GET /api/reports/financial, /daily, /inventory-value, /expense-summary + /profit-loss-by-branch (P&L split into one column per branch — see the rule below) + /profit-loss-periodic (the same P&L with one column per **period**: `granularity=month|year`, `range=6m|ytd`, `years=2..5`, optional `branch_id` and `division` — see the rule below) + /price-changes (weighted fixed-basket purchase-price index per week over a range, plus per item/unit first-vs-last price and rupiah impact) + /usage-trend (daily item usage over a range: stock items via dispatch stock_history, non-stock items via invoice lines, with start-vs-end percentage changes) + /stock-movement (per-item, per-day stock change from `stock_history`: `mode=opname` for opname corrections only, `mode=opname_dispatch` to add dispatch usage; optional `warehouse_id`; max 93 days. Selects on `source_type`, never `type` — legacy rows are labelled `SO` / `pemakaian`. Quantities are in the item's base unit, because `stock_history.unit_name` is blank on most opname rows)
 
 **Stats** (3): GET /api/stats, /stats/daily-sales, /stats/stock-flow
 

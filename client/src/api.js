@@ -357,6 +357,7 @@ export const getCashSummaryReport     = (params)  => api.get('/reports/cash-summ
 
 export const getPriceChangesReport    = (params)  => api.get('/reports/price-changes', { params });
 export const getUsageTrendReport      = (params)  => api.get('/reports/usage-trend', { params });
+export const getStockMovementReport   = (params)  => api.get('/reports/stock-movement', { params });
 
 export const getDailyReport           = (params) => api.get('/reports/daily', { params });
 // Utilities over time, bucketed by the month each bill covers rather than by

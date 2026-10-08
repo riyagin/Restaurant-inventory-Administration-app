@@ -774,6 +774,7 @@ func main() {
 			r.Get("/api/expense-report", reportsHandler.ExpenseReport)
 			r.Get("/api/reports/price-changes", analyticsHandler.PriceChanges)
 			r.Get("/api/reports/usage-trend", analyticsHandler.UsageTrend)
+			r.Get("/api/reports/stock-movement", analyticsHandler.StockMovement)
 		})
 
 		// Daily tasks & notifications.
