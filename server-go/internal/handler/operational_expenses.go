@@ -383,6 +383,7 @@ func parseMonthParam(raw string) (time.Time, error) {
 
 const operationalExpenseSelect = `
 	SELECT oe.id::text AS id, oe.number, oe.date, oe.period_month, oe.amount, oe.reference, oe.notes, oe.photo_path,
+	       oe.billing, oe.due_date, oe.term_months,
 	       oe.status, oe.created_at, oe.cancelled_at, oe.cancel_reason,
 	       oe.branch_id::text AS branch_id, b.name AS branch_name,
 	       oe.category_id::text AS category_id, oec.name AS category_name,
@@ -518,6 +519,12 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 		Amount          int64  `json:"amount"`
 		Reference       string `json:"reference"`
 		Notes           string `json:"notes"`
+		// "monthly" (default) or "annual". Annual is rent paid a year up front:
+		// booked to the branch's prepaid rent asset and expensed a twelfth a month.
+		Billing string `json:"billing"`
+		// Tanggal jatuh tempo. Optional on a monthly bill; on an annual one it is
+		// required and is the first day of the lease year.
+		DueDate string `json:"due_date"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -532,11 +539,44 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusBadRequest, "tanggal tidak valid")
 		return
 	}
-	// The month the bill covers, which is not the day it was paid — July's
-	// electricity settled in August belongs to July everywhere except the ledger.
-	period, err := parseMonthParam(body.PeriodMonth)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "bulan tagihan tidak valid")
+	dueDate := pgtype.Date{}
+	if strings.TrimSpace(body.DueDate) != "" {
+		d, err := parseDayParam(body.DueDate)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "tanggal jatuh tempo tidak valid")
+			return
+		}
+		dueDate = pgtype.Date{Time: d, Valid: true}
+	}
+	billing := strings.TrimSpace(body.Billing)
+	if billing == "" {
+		billing = billingMonthly
+	}
+	var period time.Time
+	switch billing {
+	case billingMonthly:
+		// The month the bill covers, which is not the day it was paid — July's
+		// electricity settled in August belongs to July everywhere except the ledger.
+		period, err = parseMonthParam(body.PeriodMonth)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "bulan tagihan tidak valid")
+			return
+		}
+	case billingAnnual:
+		// The lease year starts on the due date, so that is the month the first
+		// twelfth is used up in; any period_month sent alongside is ignored rather
+		// than allowed to disagree with it.
+		if !dueDate.Valid {
+			respondError(w, http.StatusBadRequest, "tanggal jatuh tempo wajib diisi untuk sewa tahunan")
+			return
+		}
+		period = time.Date(dueDate.Time.Year(), dueDate.Time.Month(), 1, 0, 0, 0, 0, time.UTC)
+		if body.Amount < service.AnnualTermMonths {
+			respondError(w, http.StatusBadRequest, "harga sewa tahunan terlalu kecil untuk dibagi 12 bulan")
+			return
+		}
+	default:
+		respondError(w, http.StatusBadRequest, "jenis pembayaran tidak valid (monthly | annual)")
 		return
 	}
 	categoryID, err := parseUUID(body.CategoryID)
@@ -574,6 +614,16 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusBadRequest, "akun beban dan akun sumber dana tidak boleh sama")
 		return
 	}
+	// Annual billing is offered for rent only: it is the one standing bill that
+	// is routinely settled a year up front, and keeping it there keeps the
+	// Statistik page's other rows strictly monthly.
+	if billing == billingAnnual && !strings.EqualFold(strings.TrimSpace(categoryName), "sewa") {
+		respondError(w, http.StatusBadRequest, "pembayaran tahunan hanya tersedia untuk Sewa")
+		return
+	}
+	// The category's own account is where the cost ends up either way; on an
+	// annual payment it is reached a month at a time through the schedule.
+	expenseAccountID := debitID
 
 	credit, err := h.queries.GetAccountByID(ctx, pgUUID(creditID))
 	if err != nil {
@@ -598,6 +648,23 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	}
 	defer tx.Rollback(ctx)
 
+	termMonths := 1
+	if billing == billingAnnual {
+		termMonths = service.AnnualTermMonths
+		// Paid rent is an asset until it is used: the payment debits the branch's
+		// prepaid rent account, not the expense.
+		prepaidID, err := ensurePrepaidRentAccount(ctx, tx, branchID, branchName)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyiapkan akun sewa dibayar di muka")
+			return
+		}
+		if prepaidID.Bytes == creditID {
+			respondError(w, http.StatusBadRequest, "akun sewa dibayar di muka tidak dapat menjadi sumber dana")
+			return
+		}
+		debitID = prepaidID
+	}
+
 	var number string
 	if err := tx.QueryRow(ctx,
 		`SELECT 'BO-' || LPAD(nextval('operational_expense_number_seq')::TEXT, 6, '0')`).Scan(&number); err != nil {
@@ -609,12 +676,13 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	err = tx.QueryRow(ctx, `
 		INSERT INTO operational_expenses
 		  (number, date, period_month, branch_id, category_id, debit_account_id, credit_account_id,
-		   amount, vendor_id, reference, notes, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		   amount, vendor_id, reference, notes, created_by, billing, due_date, term_months)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id`,
 		number, pgtype.Date{Time: date, Valid: true}, pgtype.Date{Time: period, Valid: true},
 		branchID, pgUUID(categoryID), debitID, pgUUID(creditID), body.Amount, vendorID,
-		strings.TrimSpace(body.Reference), strings.TrimSpace(body.Notes), pgUserID(ctx)).Scan(&id)
+		strings.TrimSpace(body.Reference), strings.TrimSpace(body.Notes), pgUserID(ctx),
+		billing, dueDate, termMonths).Scan(&id)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan beban operasional")
 		return
@@ -623,6 +691,11 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	qtx := h.queries.WithTx(tx)
 	description := fmt.Sprintf("Beban operasional %s: %s - %s %s (%s)",
 		number, branchName, categoryName, period.Format("Jan 2006"), credit.Name)
+	if billing == billingAnnual {
+		last := period.AddDate(0, service.AnnualTermMonths-1, 0)
+		description = fmt.Sprintf("Sewa tahunan %s: %s - %s %s s/d %s (%s)",
+			number, branchName, categoryName, period.Format("Jan 2006"), last.Format("Jan 2006"), credit.Name)
+	}
 
 	if _, err := service.Post(ctx, qtx, service.Entry{
 		Date:        date,
@@ -637,6 +710,27 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal beban operasional")
 		return
+	}
+
+	amortized := 0
+	if billing == billingAnnual {
+		for _, s := range service.AmortizationSchedule(body.Amount, period, service.AnnualTermMonths) {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO operational_expense_amortizations
+				  (expense_id, seq, period_month, amount, expense_account_id, prepaid_account_id)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+				id, s.Seq, pgtype.Date{Time: s.PeriodMonth, Valid: true}, s.Amount, expenseAccountID, debitID); err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal menyimpan jadwal amortisasi")
+				return
+			}
+		}
+		// A lease whose year has already begun gets its elapsed months expensed
+		// now, in this transaction, rather than at the next background sweep.
+		amortized, err = service.PostDueAmortizationsFor(ctx, tx, qtx, id.Bytes, time.Now(), middleware.UserIDFromCtx(ctx))
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat amortisasi sewa")
+			return
+		}
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
@@ -654,10 +748,56 @@ func (h *OperationalExpensesHandler) Create(w http.ResponseWriter, r *http.Reque
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]any{
-		"id":           uuidBytesToString(id.Bytes),
-		"number":       number,
-		"period_month": period.Format("2006-01-02"),
+		"id":               uuidBytesToString(id.Bytes),
+		"number":           number,
+		"period_month":     period.Format("2006-01-02"),
+		"billing":          billing,
+		"months_amortized": amortized,
 	})
+}
+
+const (
+	billingMonthly = "monthly"
+	billingAnnual  = "annual"
+)
+
+// ensurePrepaidRentAccount returns the branch's "Sewa Dibayar di Muka" account,
+// creating it on the branch's first annual rent. Numbered 10501-10599 under the
+// system parent 10500 — outside 11000-19999, where GetNextInventoryAccountNumber
+// takes MAX + 1 and any other account would shift the next warehouse's number.
+//
+// The branch row is locked so two annual payments recorded at once cannot each
+// create an account for the same branch.
+func ensurePrepaidRentAccount(ctx context.Context, tx pgx.Tx, branchID pgtype.UUID, branchName string) (pgtype.UUID, error) {
+	var existing pgtype.UUID
+	if err := tx.QueryRow(ctx,
+		`SELECT prepaid_rent_account_id FROM branches WHERE id = $1 FOR UPDATE`, branchID).Scan(&existing); err != nil {
+		return pgtype.UUID{}, err
+	}
+	if existing.Valid {
+		return existing, nil
+	}
+
+	var id pgtype.UUID
+	err := tx.QueryRow(ctx, `
+		INSERT INTO accounts (name, account_number, account_type, parent_id)
+		SELECT $1, n.next, 'asset', p.id
+		FROM (SELECT COALESCE(MAX(account_number), 10500) + 1 AS next
+		      FROM accounts WHERE account_number BETWEEN 10501 AND 10599) n,
+		     (SELECT id FROM accounts WHERE account_number = 10500) p
+		WHERE n.next <= 10599
+		RETURNING id`, "Sewa Dibayar di Muka - "+branchName).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, errors.New("nomor akun sewa dibayar di muka (10501-10599) sudah habis")
+		}
+		return pgtype.UUID{}, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE branches SET prepaid_rent_account_id = $1 WHERE id = $2`, id, branchID); err != nil {
+		return pgtype.UUID{}, err
+	}
+	return id, nil
 }
 
 // Cancel — POST /api/operational-expenses/{id}/cancel
@@ -684,13 +824,22 @@ func (h *OperationalExpensesHandler) Cancel(w http.ResponseWriter, r *http.Reque
 
 	ctx := r.Context()
 
-	var number, status string
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Locked: the amortization poster checks the payment's status before posting
+	// a month, so the status read here must not go stale mid-cancellation.
+	var number, status, billing string
 	var amount int64
 	var debitID, creditID pgtype.UUID
-	err = h.pool.QueryRow(ctx, `
-		SELECT number, status, amount, debit_account_id, credit_account_id
-		FROM operational_expenses WHERE id = $1`, pgUUID(id)).
-		Scan(&number, &status, &amount, &debitID, &creditID)
+	err = tx.QueryRow(ctx, `
+		SELECT number, status, billing, amount, debit_account_id, credit_account_id
+		FROM operational_expenses WHERE id = $1 FOR UPDATE`, pgUUID(id)).
+		Scan(&number, &status, &billing, &amount, &debitID, &creditID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "beban operasional tidak ditemukan")
@@ -704,12 +853,66 @@ func (h *OperationalExpensesHandler) Cancel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	tx, err := h.pool.Begin(ctx)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
-		return
+	// A monthly bill reverses as it was posted. An annual one has, by now, moved
+	// part of the payment from prepaid rent into expense, so the reversal credits
+	// each of those back where it currently sits: the months already expensed
+	// come off the expense account, and the rest off prepaid rent. Every month
+	// posted is still undone — reverse-and-keep, never un-post.
+	lines := []service.Line{
+		service.Dr(creditID.Bytes, amount),
+		service.Cr(debitID.Bytes, amount),
 	}
-	defer tx.Rollback(ctx)
+	if billing == billingAnnual {
+		rows, err := tx.Query(ctx, `
+			SELECT expense_account_id, status, amount
+			FROM operational_expense_amortizations
+			WHERE expense_id = $1 FOR UPDATE`, pgUUID(id))
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membaca jadwal amortisasi")
+			return
+		}
+		var postedTotal int64
+		postedByAccount := map[uuid.UUID]int64{}
+		var order []uuid.UUID
+		for rows.Next() {
+			var acct uuid.UUID
+			var rowStatus string
+			var rowAmount int64
+			if err := rows.Scan(&acct, &rowStatus, &rowAmount); err != nil {
+				rows.Close()
+				respondError(w, http.StatusInternalServerError, "gagal membaca jadwal amortisasi")
+				return
+			}
+			if rowStatus != "posted" {
+				continue
+			}
+			if _, seen := postedByAccount[acct]; !seen {
+				order = append(order, acct)
+			}
+			postedByAccount[acct] += rowAmount
+			postedTotal += rowAmount
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membaca jadwal amortisasi")
+			return
+		}
+
+		lines = []service.Line{
+			service.Dr(creditID.Bytes, amount),
+			service.Cr(debitID.Bytes, amount-postedTotal),
+		}
+		for _, acct := range order {
+			lines = append(lines, service.Cr(acct, postedByAccount[acct]))
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE operational_expense_amortizations SET status = 'cancelled'
+			WHERE expense_id = $1 AND status = 'scheduled'`, pgUUID(id)); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal membatalkan jadwal amortisasi")
+			return
+		}
+	}
 
 	qtx := h.queries.WithTx(tx)
 	if _, err := service.Post(ctx, qtx, service.Entry{
@@ -718,10 +921,7 @@ func (h *OperationalExpensesHandler) Cancel(w http.ResponseWriter, r *http.Reque
 		SourceID:    id,
 		Description: fmt.Sprintf("Pembatalan beban operasional %s", number),
 		CreatedBy:   middleware.UserIDFromCtx(ctx),
-		Lines: []service.Line{
-			service.Dr(creditID.Bytes, amount),
-			service.Cr(debitID.Bytes, amount),
-		},
+		Lines:       lines,
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembatalan")
 		return
@@ -749,4 +949,131 @@ func (h *OperationalExpensesHandler) Cancel(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"message": "beban operasional berhasil dibatalkan"})
+}
+
+// ListAnnual — GET /api/operational-expenses/annual?branch_id=&include_cancelled=
+//
+// Every annual rent payment with its amortization schedule: what has been
+// expensed so far, what is still sitting in prepaid rent, and when the next
+// year falls due. This is what the Sewa page's "Tahunan" tab draws.
+//
+// "Renewed" means a later annual payment exists for the same branch and
+// category. The tab uses it to stop flagging a lease's upcoming due date once
+// the next year has already been paid.
+func (h *OperationalExpensesHandler) ListAnnual(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	where := []string{"oe.billing = 'annual'"}
+	var params []any
+	if v := q.Get("branch_id"); v != "" {
+		id, err := parseUUID(v)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "branch_id tidak valid")
+			return
+		}
+		params = append(params, pgUUID(id))
+		where = append(where, fmt.Sprintf("oe.branch_id = $%d", len(params)))
+	}
+	if q.Get("include_cancelled") != "true" {
+		where = append(where, "oe.status = 'posted'")
+	}
+
+	ctx := r.Context()
+	rows, err := h.pool.Query(ctx, operationalExpenseSelect+` WHERE `+strings.Join(where, " AND ")+
+		` ORDER BY oe.due_date DESC, oe.created_at DESC`, params...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data sewa tahunan")
+		return
+	}
+	leases, err := pgx.CollectRows(rows, pgx.RowToMap)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memproses data sewa tahunan")
+		return
+	}
+
+	ids := make([]string, 0, len(leases))
+	for _, l := range leases {
+		ids = append(ids, l["id"].(string))
+	}
+
+	type slice struct {
+		Seq         int        `json:"seq"`
+		PeriodMonth string     `json:"period_month"`
+		Amount      int64      `json:"amount"`
+		Status      string     `json:"status"`
+		PostedAt    *time.Time `json:"posted_at"`
+		LastError   string     `json:"last_error"`
+	}
+	schedules := map[string][]slice{}
+	if len(ids) > 0 {
+		sRows, err := h.pool.Query(ctx, `
+			SELECT expense_id::text, seq, to_char(period_month, 'YYYY-MM-DD'), amount, status, posted_at, last_error
+			FROM operational_expense_amortizations
+			WHERE expense_id = ANY($1::uuid[])
+			ORDER BY expense_id, seq`, ids)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil jadwal amortisasi")
+			return
+		}
+		for sRows.Next() {
+			var expenseID string
+			var s slice
+			if err := sRows.Scan(&expenseID, &s.Seq, &s.PeriodMonth, &s.Amount, &s.Status, &s.PostedAt, &s.LastError); err != nil {
+				sRows.Close()
+				respondError(w, http.StatusInternalServerError, "gagal memproses jadwal amortisasi")
+				return
+			}
+			schedules[expenseID] = append(schedules[expenseID], s)
+		}
+		sRows.Close()
+		if sRows.Err() != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memproses jadwal amortisasi")
+			return
+		}
+	}
+
+	type key struct{ branch, category string }
+	latestDue := map[key]time.Time{}
+	for _, l := range leases {
+		if l["status"] != "posted" {
+			continue
+		}
+		due, _ := l["due_date"].(time.Time)
+		k := key{l["branch_id"].(string), l["category_id"].(string)}
+		if due.After(latestDue[k]) {
+			latestDue[k] = due
+		}
+	}
+
+	out := make([]map[string]any, 0, len(leases))
+	for _, l := range leases {
+		id := l["id"].(string)
+		sched := schedules[id]
+		if sched == nil {
+			sched = []slice{}
+		}
+		var amortized int64
+		posted := 0
+		for _, s := range sched {
+			if s.Status == "posted" {
+				amortized += s.Amount
+				posted++
+			}
+		}
+		due, _ := l["due_date"].(time.Time)
+		start := time.Date(due.Year(), due.Month(), due.Day(), 0, 0, 0, 0, time.UTC)
+		nextDue := start.AddDate(0, service.AnnualTermMonths, 0)
+		k := key{l["branch_id"].(string), l["category_id"].(string)}
+
+		l["schedule"] = sched
+		l["amortized"] = amortized
+		l["months_posted"] = posted
+		l["remaining"] = toInt64(l["amount"]) - amortized
+		l["coverage_start"] = start.Format("2006-01-02")
+		l["coverage_end"] = nextDue.AddDate(0, 0, -1).Format("2006-01-02")
+		l["next_due_date"] = nextDue.Format("2006-01-02")
+		l["renewed"] = latestDue[k].After(start)
+		out = append(out, l)
+	}
+
+	respondJSON(w, http.StatusOK, out)
 }

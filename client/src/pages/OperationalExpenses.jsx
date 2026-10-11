@@ -29,6 +29,12 @@ const monthLabel = (ym) => {
   return new Date(Number(y), Number(m) - 1, 1)
     .toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
 };
+// "YYYY-MM…" plus n months, as "YYYY-MM" — for an annual row's last month.
+const addMonthsYm = (ym, n) => {
+  const [y, m] = String(ym).slice(0, 7).split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
 const today = () => new Date().toISOString().slice(0, 10);
 const monthStart = () => today().slice(0, 8) + '01';
 
@@ -281,7 +287,24 @@ export default function OperationalExpenses() {
                   {/* The month billed comes first: it is what the row is about.
                       The payment date answers a different question and is easy
                       to mistake for it, so the two are labelled apart. */}
-                  <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{monthLabel(r.period_month)}</td>
+                  <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {r.billing === 'annual' ? (
+                      // A year paid up front: the row covers twelve months, and
+                      // reads as one month's bill unless it says otherwise.
+                      <>
+                        {monthLabel(r.period_month)} – {monthLabel(addMonthsYm(r.period_month, 11))}
+                        <span style={{ marginLeft: '0.35rem', fontSize: '0.68rem', padding: '0.1rem 0.35rem',
+                                       borderRadius: '3px', background: '#f1ecfa', color: '#6b3fa0', fontWeight: 600 }}>
+                          Tahunan
+                        </span>
+                      </>
+                    ) : monthLabel(r.period_month)}
+                    {r.due_date && (
+                      <div style={{ fontSize: '0.74rem', color: '#8a93a3', fontWeight: 400 }}>
+                        jatuh tempo {String(r.due_date).slice(0, 10)}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ color: '#8a93a3', fontSize: '0.85rem' }}>{String(r.date).slice(0, 10)}</td>
                   <td>{r.branch_name}</td>
                   <td style={{ fontWeight: 600 }}>{r.category_name}</td>

@@ -390,7 +390,9 @@ export default function Invoices() {
                     {inv.payment_status !== 'paid' && inv.payment_status !== 'dispatched' && (
                       <button onClick={() => openPay(inv)} className="btn btn-primary btn-sm">Bayar</button>
                     )}
-                    <Link to={`/invoices/edit/${inv.id}`} className="btn btn-secondary btn-sm">Edit</Link>
+                    {inv.payment_status !== 'dispatched' && inv.payment_status !== 'cancelled' && (
+                      <Link to={`/invoices/edit/${inv.id}`} className="btn btn-secondary btn-sm">Edit</Link>
+                    )}
                     {isAdmin && <button onClick={() => handleDelete(inv.id)} className="btn btn-danger btn-sm">Hapus</button>}
                   </div>
                 </td>

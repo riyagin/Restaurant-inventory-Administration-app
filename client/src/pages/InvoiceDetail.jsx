@@ -101,7 +101,9 @@ export default function InvoiceDetail() {
               💳 Bayar Invoice
             </button>
           )}
-          {isAdmin && <Link to={`/invoices/edit/${id}`} className="btn btn-secondary">Edit</Link>}
+          {isAdmin && invoice.payment_status !== 'dispatched' && invoice.payment_status !== 'cancelled' && (
+            <Link to={`/invoices/edit/${id}`} className="btn btn-secondary">Edit</Link>
+          )}
           <Link to="/invoices" className="btn btn-secondary">← Kembali</Link>
         </div>
       </div>
@@ -183,6 +185,13 @@ export default function InvoiceDetail() {
                 <div style={{ fontWeight: 700, fontSize: '1.1rem', color: '#e67e22' }}>{idr(remaining)}</div>
               </div>
             </>
+          )}
+          {/* A price revised down after settlement leaves the vendor owing the difference back. */}
+          {invoice.payment_status === 'paid' && remaining < 0 && (
+            <div>
+              <div style={{ fontSize: '0.75rem', color: '#999', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: '0.3rem' }}>Kelebihan Bayar</div>
+              <div style={{ fontWeight: 700, fontSize: '1.1rem', color: '#e74c3c' }}>{idr(-remaining)}</div>
+            </div>
           )}
         </div>
       </div>

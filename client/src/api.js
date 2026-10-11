@@ -300,6 +300,8 @@ export const deleteExpenseCategory = (id) => api.delete(`/expense-categories/${i
 export const getOperationalExpenses = (params) => api.get('/operational-expenses', { params });
 export const createOperationalExpense = (data) => api.post('/operational-expenses', data);
 export const cancelOperationalExpense = (id, reason) => api.post(`/operational-expenses/${id}/cancel`, { reason });
+// Annual rent payments with their month-by-month amortization schedule.
+export const getAnnualRents = (params) => api.get('/operational-expenses/annual', { params });
 export const getOperationalExpenseCategories = (params) => api.get('/operational-expense-categories', { params });
 export const createOperationalExpenseCategory = (data) => api.post('/operational-expense-categories', data);
 export const deleteOperationalExpenseCategory = (id) => api.delete(`/operational-expense-categories/${id}`);

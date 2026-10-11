@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -629,7 +630,14 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, invoice)
 }
 
-// Update — PUT /api/invoices/:id (only if unpaid)
+// Update — PUT /api/invoices/:id
+//
+// Paid and partially paid invoices are editable too: the price agreed at order,
+// the price on the delivery note and the amount finally settled often differ,
+// and the invoice has to end up saying what was actually owed. Only the
+// purchase side is restated — the settlement entries stay where they are,
+// because that cash really moved — and the payment status is recomputed from
+// the amount already paid against the new total.
 func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -662,7 +670,7 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	invoiceUUID := pgtype.UUID{Bytes: id, Valid: true}
 
-	// 1. Get current invoice — must be unpaid
+	// 1. Get current invoice
 	old, err := h.queries.GetInvoiceWithTotal(ctx, invoiceUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -672,8 +680,17 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
 		return
 	}
-	if old.PaymentStatus != "unpaid" {
-		respondError(w, http.StatusConflict, "faktur yang sudah dibayar tidak dapat diubah")
+	switch old.PaymentStatus {
+	case "dispatched":
+		respondError(w, http.StatusConflict, "faktur ini dibuat otomatis dari pengiriman — ubah lewat halaman pengiriman")
+		return
+	case "cancelled":
+		respondError(w, http.StatusConflict, "faktur yang sudah dibatalkan tidak dapat diubah")
+		return
+	}
+	oldHeader, err := h.queries.GetInvoiceByID(ctx, invoiceUUID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
 		return
 	}
 
@@ -686,6 +703,13 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	warehouseID, branchID, divisionID, vendorID, err := parseInvoiceUUIDs(body.WarehouseID, body.BranchID, body.DivisionID, body.VendorID)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// The settlements already debited the old vendor's payable account. Moving
+	// the invoice to another vendor would leave that account showing money paid
+	// against nothing and the new one owing the full amount again.
+	if old.AmountPaid > 0 && vendorID != uuidFromPg(old.VendorID) {
+		respondError(w, http.StatusConflict, "vendor tidak dapat diganti pada faktur yang sudah ada pembayarannya")
 		return
 	}
 
@@ -714,6 +738,51 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	lines := make([]resolvedInvoiceLine, 0, len(body.Items))
+	for _, it := range body.Items {
+		l := resolvedInvoiceLine{in: it, conv: lineConversion{Factor: 1, BaseIndex: it.UnitIndex}}
+		if it.ItemID != "" {
+			parsed, err := parseUUID(it.ItemID)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "item_id tidak valid")
+				return
+			}
+			l.itemID, l.hasItemID = parsed, true
+		}
+		if it.VendorID != "" {
+			ivid, err := parseUUID(it.VendorID)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, "vendor_id item tidak valid")
+				return
+			}
+			l.vendorID = ivid
+		}
+		l.value = int64(float64(it.Price) * it.Quantity)
+		if old.InvoiceType == "purchase" && l.hasItemID {
+			item, err := h.queries.GetItemByID(ctx, pgtype.UUID{Bytes: l.itemID, Valid: true})
+			if err != nil {
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))
+				return
+			}
+			l.conv, err = resolveLineConversion(item.Units, it.UnitIndex, it.ConversionFactor)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		lines = append(lines, l)
+	}
+
+	// A purchase whose goods, quantities, warehouse and date are untouched is a
+	// price correction. It is restated by revaluing the stock it brought in
+	// rather than by pulling that stock back out and re-adding it: by the time a
+	// supplier's final price is known the goods have usually been used, and the
+	// reversal would fail on stock that is no longer there.
+	repriceOnly := old.InvoiceType == "purchase" &&
+		old.WarehouseID.Valid && warehouseID == old.WarehouseID.Bytes &&
+		oldHeader.Date.Valid && oldHeader.Date.Time.Format("2006-01-02") == invoiceDate.Format("2006-01-02") &&
+		purchaseQuantitiesUnchanged(oldItems, lines)
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -734,13 +803,14 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		oldCategoryID = old.ExpenseCategoryID.Bytes
 	}
 
-	// 2. Reverse the old posting. Only unpaid invoices reach here (paid ones are
-	// rejected above), so there is no settlement entry to unwind — just the
-	// original Dr inventory-or-expense / Cr payable.
+	// 2. Reverse the old posting — the original Dr inventory-or-expense / Cr
+	// payable. Settlement entries on a paid or partial invoice are left alone:
+	// they record cash that really moved, and the payable they debited is still
+	// the one the revised invoice credits (the vendor cannot change once paid).
 	var oldDebitAcctID uuid.UUID
 	if old.InvoiceType == "purchase" && old.WarehouseID.Valid {
 		for _, it := range oldItems {
-			if !it.ItemID.Valid {
+			if repriceOnly || !it.ItemID.Valid {
 				continue
 			}
 			// Deduct what the line actually put into inventory: its quantity in
@@ -783,20 +853,32 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// The reversal is appended as its own entry rather than rewriting the
 	// original — the ledger is append-only, matching the invoice edit/delete
-	// convention already used elsewhere.
-	if _, err := service.Post(ctx, qtx, service.Entry{
-		Date:        invoiceDate,
-		SourceType:  service.SourceInvoice,
-		SourceID:    id,
-		Description: fmt.Sprintf("Pembalikan faktur %s (revisi)", old.InvoiceNumber),
-		CreatedBy:   middleware.UserIDFromCtx(ctx),
-		Lines: []service.Line{
-			service.Cr(oldDebitAcctID, old.TotalAmount),
-			service.Dr(oldAPAcctID, old.TotalAmount),
-		},
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan faktur")
-		return
+	// convention already used elsewhere. A price correction posts only the
+	// difference instead (step 6).
+	//
+	// It is dated with the invoice's *old* date, not the new one: it has to
+	// cancel the original in the period the original landed in. Dated on the new
+	// date, an edit that moves the invoice to another month left the old month
+	// carrying the full original amount and the new month short by the same.
+	reversalDate := invoiceDate
+	if oldHeader.Date.Valid {
+		reversalDate = oldHeader.Date.Time
+	}
+	if !repriceOnly {
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        reversalDate,
+			SourceType:  service.SourceInvoice,
+			SourceID:    id,
+			Description: fmt.Sprintf("Pembalikan faktur %s (revisi)", old.InvoiceNumber),
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Cr(oldDebitAcctID, old.TotalAmount),
+				service.Dr(oldAPAcctID, old.TotalAmount),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal pembalikan faktur")
+			return
+		}
 	}
 
 	// 3. Delete old items
@@ -825,44 +907,10 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Re-insert items and compute new total
 	var grandTotal int64
-	for _, it := range body.Items {
-		var itemID uuid.UUID
-		hasItemID := it.ItemID != ""
-		if hasItemID {
-			parsed, err := parseUUID(it.ItemID)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "item_id tidak valid")
-				return
-			}
-			itemID = parsed
-		}
-		itemVendorID := uuid.Nil
-		if it.VendorID != "" {
-			ivid, err := parseUUID(it.VendorID)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, "vendor_id item tidak valid")
-				return
-			}
-			itemVendorID = ivid
-		}
-
-		lineValue := int64(float64(it.Price) * it.Quantity)
+	for _, l := range lines {
+		it, itemID, hasItemID, itemVendorID, conv, lineValue := l.in, l.itemID, l.hasItemID, l.vendorID, l.conv, l.value
 		grandTotal += lineValue
-
 		isStockLine := old.InvoiceType == "purchase" && hasItemID
-		conv := lineConversion{Factor: 1, BaseIndex: it.UnitIndex}
-		if isStockLine {
-			item, err := qtx.GetItemByID(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
-			if err != nil {
-				respondError(w, http.StatusBadRequest, fmt.Sprintf("item tidak ditemukan: %s", it.ItemID))
-				return
-			}
-			conv, err = resolveLineConversion(item.Units, it.UnitIndex, it.ConversionFactor)
-			if err != nil {
-				respondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-		}
 
 		if _, err := qtx.CreateInvoiceItem(ctx, &db.CreateInvoiceItemParams{
 			InvoiceID:        invoiceUUID,
@@ -887,9 +935,11 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 
 			baseQty := conv.BaseQty(it.Quantity)
-			if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, baseQty, conv.BaseIndex, lineValue, invoiceDate); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal menambah stok baru")
-				return
+			if !repriceOnly {
+				if err := service.FIFOAdd(ctx, qtx, itemID, warehouseID, baseQty, conv.BaseIndex, lineValue, invoiceDate); err != nil {
+					respondError(w, http.StatusInternalServerError, "gagal menambah stok baru")
+					return
+				}
 			}
 
 			if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
@@ -928,19 +978,89 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := service.Post(ctx, qtx, service.Entry{
-		Date:        invoiceDate,
-		SourceType:  service.SourceInvoice,
-		SourceID:    id,
-		Description: fmt.Sprintf("Faktur %s (revisi)", old.InvoiceNumber),
-		CreatedBy:   middleware.UserIDFromCtx(ctx),
-		Lines: []service.Line{
-			service.Dr(newDebitAcctID, grandTotal),
-			service.Cr(newAPAcctID, grandTotal),
-		},
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal faktur revisi")
-		return
+	if !repriceOnly {
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        invoiceDate,
+			SourceType:  service.SourceInvoice,
+			SourceID:    id,
+			Description: fmt.Sprintf("Faktur %s (revisi)", old.InvoiceNumber),
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines: []service.Line{
+				service.Dr(newDebitAcctID, grandTotal),
+				service.Cr(newAPAcctID, grandTotal),
+			},
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal faktur revisi")
+			return
+		}
+	} else {
+		// Price correction: post only the difference. Per item, the share of the
+		// delivery still on hand is revalued in its lots and on the inventory
+		// account; the share already consumed went out at the old cost, so its
+		// difference goes to Selisih Persediaan — the inventory account must keep
+		// agreeing with the lots it summarises.
+		oldValue := map[uuid.UUID]int64{}
+		oldQty := map[uuid.UUID]float64{}
+		var oldTotal int64
+		for _, it := range oldItems {
+			v := int64(float64(it.Price) * numericToFloat64(it.Quantity))
+			oldTotal += v
+			oldValue[it.ItemID.Bytes] += v
+			oldQty[it.ItemID.Bytes] += numericToFloat64(it.Quantity) * storedConversionFactor(it.ConversionFactor)
+		}
+		newValue := map[uuid.UUID]int64{}
+		for _, l := range lines {
+			newValue[l.itemID] += l.value
+		}
+
+		var invDelta, varianceDelta int64
+		for itemID, nv := range newValue {
+			delta := nv - oldValue[itemID]
+			if delta == 0 {
+				continue
+			}
+			applied, err := repriceReceivedStock(ctx, qtx, itemID, warehouseID, oldQty[itemID], delta)
+			if err != nil {
+				respondError(w, http.StatusInternalServerError, "gagal menyesuaikan nilai stok")
+				return
+			}
+			invDelta += applied
+			varianceDelta += delta - applied
+		}
+
+		var varianceAcctID uuid.UUID
+		if varianceDelta != 0 {
+			varianceAcctID = inventoryAdjustmentAccountID(ctx, qtx)
+		}
+		journal := []service.Line{
+			service.Dr(newDebitAcctID, invDelta),
+			service.Dr(varianceAcctID, varianceDelta).WithMemo("selisih harga atas stok yang sudah terpakai"),
+		}
+		if oldAPAcctID == newAPAcctID {
+			journal = append(journal, service.Cr(newAPAcctID, grandTotal-oldTotal))
+		} else {
+			journal = append(journal, service.Dr(oldAPAcctID, oldTotal), service.Cr(newAPAcctID, grandTotal))
+		}
+		if _, err := service.Post(ctx, qtx, service.Entry{
+			Date:        invoiceDate,
+			SourceType:  service.SourceInvoice,
+			SourceID:    id,
+			Description: fmt.Sprintf("Koreksi harga faktur %s", old.InvoiceNumber),
+			CreatedBy:   middleware.UserIDFromCtx(ctx),
+			Lines:       journal,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal koreksi harga")
+			return
+		}
+	}
+
+	// 7. The amount already paid stays; what it now means depends on the new total.
+	newStatus := invoicePaymentStatus(old.AmountPaid, grandTotal)
+	if newStatus != old.PaymentStatus {
+		if _, err := tx.Exec(ctx, `UPDATE invoices SET payment_status = $1 WHERE id = $2`, newStatus, id); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memperbarui status pembayaran")
+			return
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -948,6 +1068,10 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	desc := fmt.Sprintf("Update faktur %s", old.InvoiceNumber)
+	if grandTotal != old.TotalAmount {
+		desc += fmt.Sprintf(" (total %d → %d)", old.TotalAmount, grandTotal)
+	}
 	userID := middleware.UserIDFromCtx(ctx)
 	username := middleware.UsernameFromCtx(ctx)
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
@@ -956,10 +1080,128 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Action:      "UPDATE",
 		EntityType:  "Invoice",
 		EntityID:    id,
-		Description: fmt.Sprintf("Update faktur %s", old.InvoiceNumber),
+		Description: desc,
 	})
 
-	respondJSON(w, http.StatusOK, map[string]any{"id": id})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"id":             id,
+		"payment_status": newStatus,
+		"total_amount":   grandTotal,
+		"amount_paid":    old.AmountPaid,
+	})
+}
+
+// resolvedInvoiceLine is one submitted invoice line with its IDs parsed and,
+// for a stock line, the unit conversion it is booked at.
+type resolvedInvoiceLine struct {
+	in        invoiceItemInput
+	itemID    uuid.UUID
+	hasItemID bool
+	vendorID  uuid.UUID
+	conv      lineConversion
+	value     int64
+}
+
+// purchaseQuantitiesUnchanged reports whether a revised purchase brings in
+// exactly the stock the original did — the same items in the same base-unit
+// quantities, however the lines are split or which unit they are entered in.
+// Old lines are measured at their stored factor, which is what actually went
+// into inventory.
+func purchaseQuantitiesUnchanged(old []*db.GetInvoiceItemsRow, lines []resolvedInvoiceLine) bool {
+	qty := map[uuid.UUID]float64{}
+	for _, it := range old {
+		if !it.ItemID.Valid {
+			return false
+		}
+		qty[it.ItemID.Bytes] += numericToFloat64(it.Quantity) * storedConversionFactor(it.ConversionFactor)
+	}
+	for _, l := range lines {
+		if !l.hasItemID {
+			return false
+		}
+		qty[l.itemID] -= l.conv.BaseQty(l.in.Quantity)
+	}
+	for _, q := range qty {
+		if math.Abs(q) > 0.0001 {
+			return false
+		}
+	}
+	return true
+}
+
+// repriceReceivedStock spreads a purchase's price difference over the stock it
+// brought in that is still on hand, and returns how much was absorbed there.
+// The caller sends the rest to Selisih Persediaan.
+//
+// Lots carry no link back to the invoice that created them, so "still on hand"
+// is estimated the FIFO way: the newest lots are the ones not yet consumed, so
+// up to receivedQty of them, newest first, take the difference in proportion to
+// their quantity. A lot is never pushed below zero value — a price cut larger
+// than a lot's worth (possible when the newest lot came from a cheaper delivery)
+// leaves the excess unabsorbed.
+func repriceReceivedStock(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.UUID, receivedQty float64, delta int64) (int64, error) {
+	if receivedQty <= 0 || delta == 0 {
+		return 0, nil
+	}
+	lots, err := qtx.GetInventoryLotsForFIFO(ctx, &db.GetInventoryLotsForFIFOParams{
+		ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},
+		WarehouseID: pgtype.UUID{Bytes: warehouseID, Valid: true},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var onHand float64
+	for _, lot := range lots {
+		onHand += numericToFloat64(lot.Quantity)
+	}
+	cover := math.Min(onHand, receivedQty)
+	if cover <= 0 {
+		return 0, nil
+	}
+	target := int64(float64(delta) * cover / receivedQty)
+
+	var allotted, applied int64
+	remaining := cover
+	for i := len(lots) - 1; i >= 0 && remaining > 1e-9; i-- {
+		lot := lots[i]
+		take := math.Min(numericToFloat64(lot.Quantity), remaining)
+		remaining -= take
+		share := int64(float64(target) * take / cover)
+		if remaining <= 1e-9 {
+			share = target - allotted // last lot takes the rounding remainder
+		}
+		allotted += share
+		if lot.Value+share < 0 {
+			share = -lot.Value
+		}
+		if share == 0 {
+			continue
+		}
+		if err := qtx.UpdateInventoryLotQuantity(ctx, &db.UpdateInventoryLotQuantityParams{
+			ID:       lot.ID,
+			Quantity: lot.Quantity,
+			Value:    lot.Value + share,
+		}); err != nil {
+			return 0, err
+		}
+		applied += share
+	}
+	return applied, nil
+}
+
+// invoicePaymentStatus derives an invoice's status from what has been paid
+// against its total. Paying more than the total (a price cut after settlement)
+// still reads as paid; the excess sits as a debit on the vendor's payable
+// account, which is what the vendor owes back.
+func invoicePaymentStatus(amountPaid, total int64) string {
+	switch {
+	case amountPaid <= 0:
+		return "unpaid"
+	case amountPaid >= total:
+		return "paid"
+	default:
+		return "partial"
+	}
 }
 
 // Delete — DELETE /api/invoices/:id (admin only)

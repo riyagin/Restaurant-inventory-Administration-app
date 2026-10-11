@@ -41,7 +41,7 @@ export const OP_KINDS = [
     key: 'sewa',
     label: 'Sewa',
     categoryName: 'sewa',
-    hint: 'Sewa tempat untuk periode tertentu',
+    hint: 'Sewa tempat, dibayar bulanan atau tahunan',
     icon: 'house',
     color: '#6b3fa0',
     tint: '#f1ecfa',

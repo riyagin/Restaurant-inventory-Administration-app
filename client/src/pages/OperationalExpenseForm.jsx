@@ -7,6 +7,7 @@ import {
 import CurrencyInput from '../components/CurrencyInput';
 import Icon from '../components/Icon';
 import { OP_KINDS, kindOf, NAMED_OP_CATEGORIES } from './operationalKinds';
+import AnnualRentPanel from './AnnualRentPanel';
 
 // Recording one standing bill.
 //
@@ -43,8 +44,17 @@ const monthLabel = (ym) => {
 
 export default function OperationalExpenseForm() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const kind = kindOf(searchParams.get('kind'));
+  // Sewa is the one bill that is also paid a year at a time. The tab lives in
+  // the URL so a link (or a reload) lands back on the same one.
+  const isRent = kind.key === 'sewa';
+  const annual = isRent && searchParams.get('billing') === 'annual';
+  const setBilling = (b) => setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    if (b === 'annual') next.set('billing', 'annual'); else next.delete('billing');
+    return next;
+  }, { replace: true });
 
   const [branches, setBranches] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -59,6 +69,8 @@ export default function OperationalExpenseForm() {
   const [amount, setAmount] = useState('');
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
+  // Tanggal jatuh tempo — only asked on Sewa, and optional on a monthly bill.
+  const [dueDate, setDueDate] = useState('');
 
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -178,6 +190,7 @@ export default function OperationalExpenseForm() {
         amount: Math.round(Number(amount)),
         reference,
         notes,
+        due_date: isRent && dueDate ? dueDate : undefined,
       });
       setSaved(`${r.data.number} tersimpan — ${categoryName} ${monthLabel(periodMonth)}`);
       setAmount('');
@@ -208,6 +221,24 @@ export default function OperationalExpenseForm() {
         </div>
         <Link to="/operational-expenses" className="btn btn-secondary">← Beban Operasional</Link>
       </div>
+
+      {isRent && (
+        <div className="tabs" style={{ display: 'flex', gap: '0.4rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+          {[['monthly', 'Bulanan'], ['annual', 'Tahunan']].map(([key, label]) => {
+            const active = (key === 'annual') === annual;
+            return (
+              <button key={key} type="button" onClick={() => setBilling(key)}
+                      className={`btn ${active ? 'btn-primary' : 'btn-secondary'}`}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {annual ? (
+        <AnnualRentPanel branches={branches} categories={categories} accounts={accounts} kind={kind} />
+      ) : (<>
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
       {saved && (
@@ -254,6 +285,13 @@ export default function OperationalExpenseForm() {
                 <input type="date" value={date} required style={fieldStyle}
                        onChange={e => setDate(e.target.value)} />
               </Field>
+
+              {isRent && (
+                <Field label="Tanggal jatuh tempo" hint="opsional">
+                  <input type="date" value={dueDate} style={fieldStyle}
+                         onChange={e => setDueDate(e.target.value)} />
+                </Field>
+              )}
 
               <Field label="Dibayar dari">
                 <select value={creditAccountId} required style={fieldStyle}
@@ -344,6 +382,7 @@ export default function OperationalExpenseForm() {
           )}
         </div>
       </div>
+      </>)}
     </>
   );
 }

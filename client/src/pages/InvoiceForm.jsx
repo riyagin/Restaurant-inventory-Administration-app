@@ -37,6 +37,10 @@ export default function InvoiceForm() {
   const [lastPrices, setLastPrices] = useState({});  // key: `${item_id}:${unit_index}` → price
   const [templates, setTemplates] = useState([]);
   const [photoFile, setPhotoFile] = useState(null);
+  // What has already been settled on the invoice being edited. Payments are
+  // recorded from the detail page, never from this form; an edit only changes
+  // what was owed, and the status follows from the two.
+  const [amountPaid, setAmountPaid] = useState(0);
   const [existingPhoto, setExistingPhoto] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -55,6 +59,7 @@ export default function InvoiceForm() {
         const type = inv.invoice_type ?? 'purchase';
         setInvoiceType(type);
         setExistingPhoto(inv.photo_path ?? null);
+        setAmountPaid(Number(inv.amount_paid ?? 0));
         if (inv.branch_id) getDivisions({ branch_id: inv.branch_id }).then(r => setDivisions(r.data));
         if (inv.division_id) getExpenseCategories({ division_id: inv.division_id }).then(r => setExpenseCategories(r.data));
         setHeader({
@@ -288,6 +293,13 @@ export default function InvoiceForm() {
       }
     }
 
+    if (isEdit && amountPaid > 0 && grandTotal < amountPaid) {
+      const ok = window.confirm(
+        `Total baru (${idr(grandTotal)}) lebih kecil dari yang sudah dibayar (${idr(amountPaid)}). `
+        + `Selisih ${idr(amountPaid - grandTotal)} akan tercatat sebagai kelebihan bayar ke vendor. Lanjutkan?`);
+      if (!ok) return;
+    }
+
     const needsAccount = header.payment_status !== 'unpaid';
     const payload = {
       date: header.date,
@@ -398,6 +410,18 @@ export default function InvoiceForm() {
         </div>
       )}
 
+      {isEdit && amountPaid > 0 && (
+        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: '#fff8e6', border: '1px solid #f5d98b', borderRadius: '6px', fontSize: '0.9rem', color: '#7a5b00' }}>
+          Faktur ini sudah dibayar {idr(amountPaid)}. Harga boleh disesuaikan dengan tagihan akhir vendor —
+          pembayaran yang sudah tercatat tidak berubah, dan status dihitung ulang dari total baru
+          ({grandTotal > amountPaid
+            ? <>sisa tagihan <strong>{idr(grandTotal - amountPaid)}</strong></>
+            : grandTotal < amountPaid
+              ? <>kelebihan bayar <strong>{idr(amountPaid - grandTotal)}</strong></>
+              : <>lunas</>}).
+        </div>
+      )}
+
       <form onSubmit={handleSubmit}>
         {/* Header fields */}
         <div className="form-row" style={{ marginBottom: '1rem' }}>
@@ -434,13 +458,24 @@ export default function InvoiceForm() {
         <div className="form-row" style={{ marginBottom: '1rem' }}>
           <div className="form-group" style={{ margin: 0 }}>
             <label>Status Pembayaran</label>
-            <select value={header.payment_status} onChange={setHeaderField('payment_status')}>
-              <option value="unpaid">Belum Dibayar</option>
-              <option value="partial">Sebagian</option>
-              <option value="paid">Lunas</option>
-            </select>
+            {isEdit ? (
+              <div style={{ padding: '0.5rem 0', fontWeight: 600 }}>
+                {{ unpaid: 'Belum Dibayar', partial: 'Sebagian', paid: 'Lunas' }[header.payment_status] ?? header.payment_status}
+                {amountPaid > 0 && (
+                  <span style={{ fontWeight: 400, color: '#888', marginLeft: '0.4rem' }}>
+                    · dibayar {idr(amountPaid)}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <select value={header.payment_status} onChange={setHeaderField('payment_status')}>
+                <option value="unpaid">Belum Dibayar</option>
+                <option value="partial">Sebagian</option>
+                <option value="paid">Lunas</option>
+              </select>
+            )}
           </div>
-          {needsAccount && (
+          {needsAccount && !isEdit && (
             <div className="form-group" style={{ margin: 0 }}>
               <label>Akun Pembayaran</label>
               <select value={header.account_id} onChange={setHeaderField('account_id')} required>
@@ -452,7 +487,12 @@ export default function InvoiceForm() {
           {(invoiceType === 'purchase' || invoiceType === 'expense') && (
             <div className="form-group" style={{ margin: 0 }}>
               <label>Vendor <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
-              <select value={header.vendor_id} onChange={setHeaderField('vendor_id')}>
+              <select
+                value={header.vendor_id}
+                onChange={setHeaderField('vendor_id')}
+                disabled={isEdit && amountPaid > 0}
+                title={isEdit && amountPaid > 0 ? 'Vendor tidak dapat diganti setelah ada pembayaran' : undefined}
+              >
                 <option value="">Pilih vendor...</option>
                 {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>

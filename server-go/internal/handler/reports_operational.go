@@ -101,25 +101,43 @@ func (h *ReportsHandler) OperationalExpenses(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	sql := `
-		SELECT b.id::text AS branch_id, b.name AS branch_name,
-		       oec.name AS category,
-		       to_char(oe.period_month, 'YYYY-MM') AS ym,
-		       SUM(oe.amount)::BIGINT AS amount,
-		       COUNT(*)::INT AS entries
-		FROM operational_expenses oe
-		JOIN branches b ON b.id = oe.branch_id
-		JOIN operational_expense_categories oec ON oec.id = oe.category_id
-		WHERE oe.status = 'posted' AND oe.period_month BETWEEN $1 AND $2`
+	// Annual rent is read through its amortization schedule, one twelfth in
+	// each month of the lease year — the month a bill *covers* is what this
+	// page is keyed on, and a year's rent covers twelve. Taken as one row on its
+	// due month it would show as a twelve-month spike followed by eleven months
+	// the branch apparently paid no rent. Scheduled months count too, not only
+	// posted ones: the lease covers them whether or not the ledger has reached
+	// them yet.
+	branchClause := ""
 	params := []any{
 		pgtype.Date{Time: startMonth, Valid: true},
 		pgtype.Date{Time: endMonth, Valid: true},
 	}
 	if branchFilter != "" {
-		sql += ` AND oe.branch_id = $3`
+		branchClause = ` AND oe.branch_id = $3`
 		params = append(params, branchFilter)
 	}
-	sql += ` GROUP BY b.id, b.name, oec.name, ym`
+	sql := `
+		SELECT b.id::text AS branch_id, b.name AS branch_name,
+		       oec.name AS category,
+		       x.ym,
+		       SUM(x.amount)::BIGINT AS amount,
+		       COUNT(*)::INT AS entries
+		FROM (
+		  SELECT oe.branch_id, oe.category_id, to_char(oe.period_month, 'YYYY-MM') AS ym, oe.amount
+		  FROM operational_expenses oe
+		  WHERE oe.status = 'posted' AND oe.billing = 'monthly'
+		    AND oe.period_month BETWEEN $1 AND $2` + branchClause + `
+		  UNION ALL
+		  SELECT oe.branch_id, oe.category_id, to_char(a.period_month, 'YYYY-MM') AS ym, a.amount
+		  FROM operational_expense_amortizations a
+		  JOIN operational_expenses oe ON oe.id = a.expense_id
+		  WHERE oe.status = 'posted' AND a.status <> 'cancelled'
+		    AND a.period_month BETWEEN $1 AND $2` + branchClause + `
+		) x
+		JOIN branches b ON b.id = x.branch_id
+		JOIN operational_expense_categories oec ON oec.id = x.category_id
+		GROUP BY b.id, b.name, oec.name, x.ym`
 
 	rows, err := h.pool.Query(ctx, sql, params...)
 	if err != nil {

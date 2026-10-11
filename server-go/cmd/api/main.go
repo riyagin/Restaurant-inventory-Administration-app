@@ -192,6 +192,9 @@ func main() {
 	// anything that failed or was interrupted by a restart, so a closed period
 	// always ends up in the journal without anyone pressing a button.
 	payrollHandler.Poster().Start(ctx)
+	// Annual rent is expensed a twelfth per month; each month is posted once it
+	// starts. Runs at startup to catch up any month a stopped server missed.
+	service.NewAmortizationPoster(pool, queries).Start(ctx)
 	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
@@ -350,6 +353,7 @@ func main() {
 		// changing the breakdown itself reshapes the chart of accounts, so both of
 		// those are admin decisions.
 		r.Get("/api/operational-expenses", operationalExpensesHandler.List)
+		r.Get("/api/operational-expenses/annual", operationalExpensesHandler.ListAnnual)
 		r.Post("/api/operational-expenses", operationalExpensesHandler.Create)
 		r.Get("/api/operational-expense-categories", operationalExpensesHandler.ListCategories)
 		r.Group(func(r chi.Router) {
