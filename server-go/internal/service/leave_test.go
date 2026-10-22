@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -99,5 +100,61 @@ func TestQuotaSufficient(t *testing.T) {
 	}
 	if !QuotaSufficient(12, 0, 12) {
 		t.Fatalf("expected full quota to cover an exactly-12-day request")
+	}
+}
+
+func TestLeaveDayCostWeekendCountsDouble(t *testing.T) {
+	// 2026-10-23 Fri, 24 Sat, 25 Sun, 26 Mon.
+	for date, want := range map[string]int{"2026-10-23": 1, "2026-10-24": 2, "2026-10-25": 2, "2026-10-26": 1} {
+		if got := LeaveDayCost(d(date)); got != want {
+			t.Errorf("LeaveDayCost(%s) = %d, want %d", date, got, want)
+		}
+	}
+}
+
+func TestQuotaCostByMonthSplitsAtMonthEnd(t *testing.T) {
+	// Fri 30 Oct (1) + Sat 31 Oct (2) | Sun 1 Nov (2) + Mon 2 Nov (1).
+	days := WorkingDaysInRange(d("2026-10-30"), d("2026-11-02"), []int{1, 2, 3, 4, 5, 6, 7}, nil)
+	got := QuotaCostByMonth(days)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 months, got %+v", got)
+	}
+	if !got[0].Month.Equal(d("2026-10-01")) || got[0].Cost != 3 {
+		t.Errorf("October = %+v, want 2026-10-01 cost 3", got[0])
+	}
+	if !got[1].Month.Equal(d("2026-11-01")) || got[1].Cost != 3 {
+		t.Errorf("November = %+v, want 2026-11-01 cost 3", got[1])
+	}
+}
+
+func TestFourDayQuotaAllowsTwoWeekendDays(t *testing.T) {
+	sat, sun := LeaveDayCost(d("2026-10-24")), LeaveDayCost(d("2026-10-25"))
+	if !QuotaSufficient(DefaultMonthlyLeaveQuota, sat, sun) {
+		t.Fatal("a Saturday and a Sunday off should fit in the monthly allowance")
+	}
+	if QuotaSufficient(DefaultMonthlyLeaveQuota, sat+sun, LeaveDayCost(d("2026-10-26"))) {
+		t.Fatal("a third day after a full weekend should overdraw the allowance")
+	}
+}
+
+func TestNewMonthlyLeaveBalance(t *testing.T) {
+	today := d("2026-10-22")
+	sep := NewMonthlyLeaveBalance(d("2026-09-01"), 4, 1, false, today)
+	if !sep.Closed || sep.UnusedDays != 3 || sep.Month != "2026-09" {
+		t.Errorf("September = %+v, want closed with 3 unused", sep)
+	}
+	oct := NewMonthlyLeaveBalance(d("2026-10-01"), 4, 6, true, today)
+	if oct.Closed || oct.UnusedDays != 0 {
+		t.Errorf("October = %+v, want open and unused clamped at 0", oct)
+	}
+}
+
+func TestQuotaExceededErrorMatchesSentinel(t *testing.T) {
+	var err error = &QuotaExceededError{Month: d("2026-10-01"), Quota: 4, Used: 3, Needed: 2}
+	if !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatal("QuotaExceededError should match ErrQuotaExceeded")
+	}
+	if want := "jatah cuti 10/2026 tidak mencukupi: sisa 1 hari, dibutuhkan 2 hari"; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
 	}
 }

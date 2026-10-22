@@ -35,7 +35,7 @@ func (h *AttendanceHandler) ListWorkSchedules(w http.ResponseWriter, r *http.Req
 
 // UpsertWorkSchedule — POST /api/hr/attendance/work-schedules
 // Body: { branch_id, work_start "08:00", work_end "17:00", grace_minutes,
-//         early_leave_minutes, work_days [1,2,3,4,5,6] }
+//         early_leave_minutes, work_days [1,2,3,4,5,6,7] }
 func (h *AttendanceHandler) UpsertWorkSchedule(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		BranchID          string `json:"branch_id"`
@@ -65,7 +65,7 @@ func (h *AttendanceHandler) UpsertWorkSchedule(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if len(body.WorkDays) == 0 {
-		body.WorkDays = []int32{1, 2, 3, 4, 5, 6}
+		body.WorkDays = []int32{1, 2, 3, 4, 5, 6, 7}
 	}
 	for _, d := range body.WorkDays {
 		if d < 1 || d > 7 {

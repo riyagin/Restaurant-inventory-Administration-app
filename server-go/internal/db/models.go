@@ -489,6 +489,7 @@ type LeaveRequest struct {
 	DecisionNote pgtype.Text        `json:"decision_note"`
 	CreatedBy    pgtype.UUID        `json:"created_by"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	IsBackdated  bool               `json:"is_backdated"`
 }
 
 type LeaveType struct {

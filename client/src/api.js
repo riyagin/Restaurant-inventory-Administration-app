@@ -539,9 +539,14 @@ export const cancelLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/$
 export const bulkApproveLeaveRequests = (ids, note) => api.post('/hr/leave-requests/bulk-approve', { ids, note });
 export const bulkRejectLeaveRequests  = (ids, note) => api.post('/hr/leave-requests/bulk-reject', { ids, note });
 
-// Per-employee balance + history
+// Monthly paid-leave allowance (4/month, weekend day = 2). getLeaveBalance returns
+// { year, default_quota, weekend_cost, months: [{ month, quota_days, used_days,
+// unused_days, closed, overridden }], unused_closed_total }.
 export const getLeaveBalance        = (id, year) => api.get(`/hr/employees/${id}/leave-balance`, { params: { year } });
+// data: { month: 'YYYY-MM', quota_days } — overrides one month's allowance.
 export const setLeaveBalanceQuota   = (id, data) => api.put(`/hr/employees/${id}/leave-balance`, data);
+// Every active employee's allowance for one month — the unused-leave indicator.
+export const getLeaveBalances       = (month) => api.get('/hr/leave-balances', { params: { month } });
 export const getEmployeeLeaveRequests = (id) => api.get(`/hr/employees/${id}/leave-requests`);
 
 // ── HR: Kasbon (Cash Advance) ───────────────────────────────────────────────

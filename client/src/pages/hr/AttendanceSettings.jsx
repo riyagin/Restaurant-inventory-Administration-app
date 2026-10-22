@@ -42,7 +42,7 @@ function ScheduleSection({ branches }) {
       work_end: s ? microsToHHMM(s.work_end) : '17:00',
       grace_minutes: s ? s.grace_minutes : 15,
       early_leave_minutes: s ? s.early_leave_minutes : 30,
-      work_days: s && s.work_days ? [...s.work_days] : [1, 2, 3, 4, 5, 6],
+      work_days: s && s.work_days ? [...s.work_days] : [1, 2, 3, 4, 5, 6, 7],
     });
   };
 
@@ -86,7 +86,7 @@ function ScheduleSection({ branches }) {
                 <td>{s ? `${s.grace_minutes} mnt` : <span style={{ color: '#bbb' }}>15 mnt</span>}</td>
                 <td>{s ? `${s.early_leave_minutes} mnt` : <span style={{ color: '#bbb' }}>30 mnt</span>}</td>
                 <td style={{ fontSize: '0.8rem' }}>
-                  {(s && s.work_days ? s.work_days : [1, 2, 3, 4, 5, 6]).map(n => ISO_DAYS.find(d => d.n === n)?.label).join(', ')}
+                  {(s && s.work_days ? s.work_days : [1, 2, 3, 4, 5, 6, 7]).map(n => ISO_DAYS.find(d => d.n === n)?.label).join(', ')}
                 </td>
                 <td><button className="btn btn-secondary btn-sm" onClick={() => startEdit(b)}>Atur</button></td>
               </tr>

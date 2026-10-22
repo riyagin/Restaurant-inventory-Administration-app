@@ -1,9 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  getLeaveRequests, createLeaveRequest, cancelLeaveRequest, getLeaveTypes, getLeaveBalance,
+  getLeaveRequests, cancelLeaveRequest, getLeaveTypes,
   getOvertimeRequests, createOvertimeRequest, cancelOvertimeRequest,
   getEmployees, getBranches,
 } from '../../api';
+import { todayLocal, submitLeaveRequest } from './leaveRules';
+import { QuotaPreview, BackdatedNotice, BackdatedBadge } from './LeaveRuleWidgets';
 
 // ── shared status styling ─────────────────────────────────────────────────────
 const STATUS_LABELS = { pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak', cancelled: 'Dibatalkan' };
@@ -19,7 +21,7 @@ const TYPE_META = {
 };
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = todayLocal;
 const monthOf = (d) => (d ? new Date(d).toISOString().slice(0, 7) : '');
 
 function StatusChip({ status }) {
@@ -42,6 +44,7 @@ function normLeave(rq) {
     detail: `${rq.day_count} hari`,
     subtitle: rq.leave_type_name + (rq.is_paid === false ? ' (tanpa gaji)' : ''),
     status: rq.status,
+    is_backdated: rq.is_backdated,
   };
 }
 function normOvertime(o) {
@@ -157,7 +160,7 @@ export default function Requests() {
               <tr key={r.key}>
                 <td><TypeBadge type={r.type} /></td>
                 <td>{r.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{r.employee_code}</div></td>
-                <td style={{ fontSize: '0.88rem', color: '#445' }}>{r.subtitle}</td>
+                <td style={{ fontSize: '0.88rem', color: '#445' }}>{r.subtitle}<BackdatedBadge request={r} /></td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{r.periodLabel}</td>
                 <td style={{ textAlign: 'center' }}>{r.detail}</td>
                 <td><StatusChip status={r.status} /></td>
@@ -184,7 +187,6 @@ function LeaveCreateModal({ onClose, onSaved }) {
   const [employees, setEmployees] = useState([]);
   const [types, setTypes] = useState([]);
   const [form, setForm] = useState({ employee_id: '', leave_type_id: '', start_date: todayStr(), end_date: todayStr(), reason: '' });
-  const [balance, setBalance] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -193,13 +195,7 @@ function LeaveCreateModal({ onClose, onSaved }) {
     getLeaveTypes({ active: 1 }).then(r => setTypes(r.data || [])).catch(() => setTypes([]));
   }, []);
 
-  useEffect(() => {
-    const t = types.find(t => t.id === form.leave_type_id);
-    if (form.employee_id && t?.uses_quota) {
-      const year = new Date(form.start_date).getFullYear();
-      getLeaveBalance(form.employee_id, year).then(r => setBalance(r.data)).catch(() => setBalance(null));
-    } else setBalance(null);
-  }, [form.employee_id, form.leave_type_id, form.start_date, types]);
+  const usesQuota = !!types.find(t => t.id === form.leave_type_id)?.uses_quota;
 
   const calendarDays = (() => {
     const s = new Date(form.start_date), e = new Date(form.end_date);
@@ -213,7 +209,7 @@ function LeaveCreateModal({ onClose, onSaved }) {
     if (!form.leave_type_id) { setError('Pilih jenis cuti.'); return; }
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
-    try { await createLeaveRequest(form); onSaved(); }
+    try { if (await submitLeaveRequest(form)) onSaved(); }
     catch (err) { setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.'); }
     finally { setSaving(false); }
   };
@@ -249,10 +245,11 @@ function LeaveCreateModal({ onClose, onSaved }) {
 
         <div style={{ display: 'flex', gap: '1rem', margin: '0.5rem 0', fontSize: '0.85rem', color: '#445' }}>
           <span>Rentang: <strong>{calendarDays}</strong> hari kalender</span>
-          {balance && <span>Sisa kuota: <strong>{balance.quota_days - balance.used_days}</strong> / {balance.quota_days} hari</span>}
         </div>
+        <BackdatedNotice startDate={form.start_date} />
+        {usesQuota && <QuotaPreview employeeId={form.employee_id} startDate={form.start_date} endDate={form.end_date} />}
         <p style={{ fontSize: '0.78rem', color: '#888', margin: '0 0 0.5rem' }}>
-          Jumlah hari kerja dihitung otomatis oleh sistem (mengabaikan hari libur dan hari non-kerja).
+          Jumlah hari dihitung otomatis oleh sistem (hari libur nasional tidak dihitung).
         </p>
 
         <label style={lbl}>Alasan</label>

@@ -12,6 +12,9 @@ import CurrencyInput from '../../components/CurrencyInput';
 import KasbonFormModal from './KasbonFormModal';
 import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
 import { canUseHR } from '../../roles';
+import { todayLocal, fmtMonth } from './leaveRules';
+import { BackdatedBadge } from './LeaveRuleWidgets';
+import { UnusedChip } from './LeaveBalancesPanel';
 
 const SERVER = 'http://localhost:5000';
 
@@ -292,31 +295,72 @@ function LeaveStatusChip({ status }) {
 }
 
 function CutiTab({ employeeId }) {
-  const year = new Date().getFullYear();
+  const thisYear = new Date().getFullYear();
+  const thisMonth = todayLocal().slice(0, 7);
+  const [year, setYear] = useState(thisYear);
   const [balance, setBalance] = useState(null);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([
-      getLeaveBalance(employeeId, year).then(r => setBalance(r.data)).catch(() => setBalance(null)),
-      getEmployeeLeaveRequests(employeeId).then(r => setRequests(r.data || [])).catch(() => setRequests([])),
-    ]).finally(() => setLoading(false));
+    getLeaveBalance(employeeId, year).then(r => setBalance(r.data)).catch(() => setBalance(null));
   }, [employeeId, year]);
 
-  const quota = balance?.quota_days ?? 0;
-  const used = balance?.used_days ?? 0;
-  const remaining = quota - used;
+  useEffect(() => {
+    setLoading(true);
+    getEmployeeLeaveRequests(employeeId).then(r => setRequests(r.data || [])).catch(() => setRequests([]))
+      .finally(() => setLoading(false));
+  }, [employeeId]);
+
+  const months = balance?.months || [];
+  const current = months.find(m => m.month === thisMonth);
 
   return (
     <div>
+      {current && (
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Jatah Libur {fmtMonth(thisMonth)}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+            <BalanceStat label="Jatah" value={current.quota_days} color="#2563eb" />
+            <BalanceStat label="Terpakai" value={current.used_days} color="#a06800" />
+            <BalanceStat label="Sisa" value={current.unused_days} color={current.unused_days > 0 ? '#1e7e34' : '#c5221f'} />
+          </div>
+          <p style={{ fontSize: '0.78rem', color: '#888', margin: '0.6rem 0 0' }}>
+            {balance.default_quota} hari libur berbayar per bulan; Sabtu/Minggu dihitung {balance.weekend_cost} hari. Sisa tidak terbawa ke bulan berikutnya.
+          </p>
+        </div>
+      )}
+
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Saldo Cuti Tahunan {year}</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
-          <BalanceStat label="Kuota" value={quota} color="#2563eb" />
-          <BalanceStat label="Terpakai" value={used} color="#a06800" />
-          <BalanceStat label="Sisa" value={remaining} color={remaining > 0 ? '#1e7e34' : '#c5221f'} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, fontSize: '1rem' }}>Sisa Jatah Libur per Bulan</h3>
+          <select value={year} onChange={e => setYear(Number(e.target.value))} style={{ padding: '0.3rem 0.5rem', border: '1px solid #d4d9e2', borderRadius: 6 }}>
+            {[thisYear - 2, thisYear - 1, thisYear, thisYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+        {balance && (
+          <p style={{ fontSize: '0.88rem', margin: '0 0 0.6rem' }}>
+            Total sisa bulan yang sudah ditutup: <strong>{balance.unused_closed_total}</strong> hari
+            <span style={{ color: '#888', fontSize: '0.8rem' }}> — biasanya dikonversi menjadi uang saat evaluasi</span>
+          </p>
+        )}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%' }}>
+            <thead>
+              <tr><th>Bulan</th><th style={{ textAlign: 'center' }}>Jatah</th><th style={{ textAlign: 'center' }}>Terpakai</th><th style={{ textAlign: 'center' }}>Sisa</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {months.map(m => (
+                <tr key={m.month}>
+                  <td>{fmtMonth(m.month)}</td>
+                  <td style={{ textAlign: 'center' }}>{m.quota_days}{m.overridden && <span title="Jatah bulan ini diatur khusus" style={{ color: '#889' }}> *</span>}</td>
+                  <td style={{ textAlign: 'center' }}>{m.used_days}</td>
+                  <td style={{ textAlign: 'center' }}><UnusedChip days={m.unused_days} closed={m.closed} /></td>
+                  <td style={{ fontSize: '0.82rem', color: '#667' }}>{m.closed ? 'Final' : m.month === thisMonth ? 'Berjalan' : 'Akan datang'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -330,12 +374,12 @@ function CutiTab({ employeeId }) {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%' }}>
               <thead>
-                <tr><th>Jenis</th><th>Mulai</th><th>Selesai</th><th style={{ textAlign: 'center' }}>Hari Kerja</th><th>Status</th><th>Alasan</th></tr>
+                <tr><th>Jenis</th><th>Mulai</th><th>Selesai</th><th style={{ textAlign: 'center' }}>Hari</th><th>Status</th><th>Alasan</th></tr>
               </thead>
               <tbody>
                 {requests.map(rq => (
                   <tr key={rq.id}>
-                    <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}</td>
+                    <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}<BackdatedBadge request={rq} /></td>
                     <td>{fmtDateShort(rq.start_date)}</td>
                     <td>{fmtDateShort(rq.end_date)}</td>
                     <td style={{ textAlign: 'center' }}>{rq.day_count}</td>

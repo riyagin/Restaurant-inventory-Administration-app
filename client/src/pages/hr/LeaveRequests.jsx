@@ -1,10 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  getLeaveRequests, createLeaveRequest, approveLeaveRequest, rejectLeaveRequest,
-  cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches, getLeaveBalance,
+  getLeaveRequests, approveLeaveRequest, rejectLeaveRequest,
+  cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches,
   bulkApproveLeaveRequests, bulkRejectLeaveRequests,
 } from '../../api';
 import { canApprove } from '../../roles';
+import { todayLocal, submitLeaveRequest } from './leaveRules';
+import { QuotaPreview, BackdatedNotice, BackdatedBadge } from './LeaveRuleWidgets';
+import LeaveBalancesPanel from './LeaveBalancesPanel';
 
 const STATUS_LABELS = {
   pending: 'Menunggu',
@@ -20,7 +23,7 @@ const STATUS_COLORS = {
 };
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = todayLocal;
 
 const isManager = () => canApprove();
 
@@ -38,7 +41,6 @@ function CreateModal({ onClose, onSaved }) {
   const [employees, setEmployees] = useState([]);
   const [types, setTypes] = useState([]);
   const [form, setForm] = useState({ employee_id: '', leave_type_id: '', start_date: todayStr(), end_date: todayStr(), reason: '' });
-  const [balance, setBalance] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -47,16 +49,7 @@ function CreateModal({ onClose, onSaved }) {
     getLeaveTypes({ active: 1 }).then(r => setTypes(r.data || [])).catch(() => setTypes([]));
   }, []);
 
-  // Fetch the remaining quota preview when an employee + quota type is selected.
-  useEffect(() => {
-    const t = types.find(t => t.id === form.leave_type_id);
-    if (form.employee_id && t?.uses_quota) {
-      const year = new Date(form.start_date).getFullYear();
-      getLeaveBalance(form.employee_id, year).then(r => setBalance(r.data)).catch(() => setBalance(null));
-    } else {
-      setBalance(null);
-    }
-  }, [form.employee_id, form.leave_type_id, form.start_date, types]);
+  const usesQuota = !!types.find(t => t.id === form.leave_type_id)?.uses_quota;
 
   // Rough client-side calendar day span (server authoritatively computes work days).
   const calendarDays = (() => {
@@ -72,8 +65,8 @@ function CreateModal({ onClose, onSaved }) {
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
     try {
-      const r = await createLeaveRequest(form);
-      onSaved(r.data);
+      const created = await submitLeaveRequest(form);
+      if (created) onSaved(created);
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.');
     } finally {
@@ -112,12 +105,11 @@ function CreateModal({ onClose, onSaved }) {
 
         <div style={{ display: 'flex', gap: '1rem', margin: '0.5rem 0', fontSize: '0.85rem', color: '#445' }}>
           <span>Rentang: <strong>{calendarDays}</strong> hari kalender</span>
-          {balance && (
-            <span>Sisa kuota: <strong>{balance.quota_days - balance.used_days}</strong> / {balance.quota_days} hari</span>
-          )}
         </div>
+        <BackdatedNotice startDate={form.start_date} />
+        {usesQuota && <QuotaPreview employeeId={form.employee_id} startDate={form.start_date} endDate={form.end_date} />}
         <p style={{ fontSize: '0.78rem', color: '#888', margin: '0 0 0.5rem' }}>
-          Jumlah hari kerja akan dihitung otomatis oleh sistem (mengabaikan hari libur dan hari non-kerja).
+          Jumlah hari dihitung otomatis oleh sistem (hari libur nasional tidak dihitung).
         </p>
 
         <label style={lbl}>Alasan</label>
@@ -158,9 +150,15 @@ function DecisionModal({ action, request, onClose, onDone }) {
       <div className="card" style={modal} onClick={e => e.stopPropagation()}>
         <h3 style={{ marginTop: 0 }}>{titles[action]}</h3>
         <p style={{ fontSize: '0.9rem', color: '#445' }}>
-          {request.employee_name} — {request.leave_type_name}<br />
-          {fmtDate(request.start_date)} s/d {fmtDate(request.end_date)} ({request.day_count} hari kerja)
+          {request.employee_name} — {request.leave_type_name}<BackdatedBadge request={request} /><br />
+          {fmtDate(request.start_date)} s/d {fmtDate(request.end_date)} ({request.day_count} hari)
         </p>
+        {action === 'approve' && request.is_backdated && (
+          <div style={{ ...errBox, background: '#fff4e5', color: '#9a3412' }}>
+            Pengajuan ini dibuat setelah tanggal mulainya lewat. Pastikan alasannya sah sebelum menyetujui.
+            {request.reason && <><br />Alasan: <em>{request.reason}</em></>}
+          </div>
+        )}
         {error && <div style={errBox}>{error}</div>}
         <label style={lbl}>Catatan {action === 'reject' ? '(disarankan)' : '(opsional)'}</label>
         <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} />
@@ -249,6 +247,7 @@ export default function LeaveRequests() {
   useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => setBranches([])); }, []);
 
   const load = useCallback(() => {
+    if (tab === 'balances') return; // the panel loads its own data
     setLoading(true);
     const params = tab === 'pending'
       ? { status: 'pending' }
@@ -267,7 +266,8 @@ export default function LeaveRequests() {
   const onDecision = () => { setDecision(null); load(); };
   const onBulkDecision = () => { setBulkDecision(null); setSelected(new Set()); load(); };
 
-  const pendingRows = rows.filter(rq => rq.status === 'pending');
+  // Backdated requests are approved one by one, never in bulk (server enforces it too).
+  const pendingRows = rows.filter(rq => rq.status === 'pending' && !rq.is_backdated);
   const allPendingSelected = pendingRows.length > 0 && pendingRows.every(rq => selected.has(rq.id));
 
   const toggleSelected = (id) => {
@@ -292,7 +292,10 @@ export default function LeaveRequests() {
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid #e3e6ec' }}>
         <TabBtn active={tab === 'pending'} onClick={() => switchTab('pending')}>Menunggu Persetujuan</TabBtn>
         <TabBtn active={tab === 'all'} onClick={() => switchTab('all')}>Semua Pengajuan</TabBtn>
+        <TabBtn active={tab === 'balances'} onClick={() => switchTab('balances')}>Sisa Jatah Libur</TabBtn>
       </div>
+
+      {tab === 'balances' && <LeaveBalancesPanel />}
 
       {tab === 'all' && (
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -316,7 +319,7 @@ export default function LeaveRequests() {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
+      {tab !== 'balances' && <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%' }}>
           <thead>
             <tr>
@@ -336,11 +339,12 @@ export default function LeaveRequests() {
               <tr key={rq.id}>
                 {tab === 'pending' && manager && (
                   <td style={{ textAlign: 'center' }}>
-                    <input type="checkbox" checked={selected.has(rq.id)} onChange={() => toggleSelected(rq.id)} />
+                    <input type="checkbox" checked={selected.has(rq.id)} onChange={() => toggleSelected(rq.id)}
+                      disabled={rq.is_backdated} title={rq.is_backdated ? 'Pengajuan mundur tanggal harus disetujui satu per satu' : undefined} />
                   </td>
                 )}
                 <td>{rq.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{rq.employee_code}</div></td>
-                <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}</td>
+                <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}<BackdatedBadge request={rq} /></td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{fmtDate(rq.start_date)} – {fmtDate(rq.end_date)}</td>
                 <td style={{ textAlign: 'center' }}>{rq.day_count}</td>
                 <td><StatusChip status={rq.status} /></td>
@@ -359,7 +363,7 @@ export default function LeaveRequests() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {showCreate && <CreateModal onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); load(); }} />}
       {decision && <DecisionModal action={decision.action} request={decision.request} onClose={() => setDecision(null)} onDone={onDecision} />}

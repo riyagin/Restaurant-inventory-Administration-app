@@ -67,29 +67,29 @@ RETURNING id, employee_id, year, quota_days, used_days;
 
 -- name: GetLeaveRequestByID :one
 SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at
+       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
 FROM leave_requests
 WHERE id = $1;
 
 -- name: CreateLeaveRequest :one
 INSERT INTO leave_requests (
     id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-    status, created_by
+    status, created_by, is_backdated
 )
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending', $7)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending', $7, $8)
 RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at;
+          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated;
 
 -- name: SetLeaveRequestStatus :one
 UPDATE leave_requests
 SET status = $1, decided_by = $2, decided_at = now(), decision_note = $3
 WHERE id = $4
 RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at;
+          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated;
 
 -- name: ListOverlappingRequests :many
 SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at
+       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
 FROM leave_requests
 WHERE employee_id = $1
   AND status IN ('pending', 'approved')
@@ -99,7 +99,7 @@ WHERE employee_id = $1
 -- name: ListLeaveRequests :many
 SELECT lr.id, lr.employee_id, lr.leave_type_id, lr.start_date, lr.end_date,
        lr.day_count, lr.reason, lr.status, lr.decided_by, lr.decided_at,
-       lr.decision_note, lr.created_by, lr.created_at,
+       lr.decision_note, lr.created_by, lr.created_at, lr.is_backdated,
        e.full_name AS employee_name, e.employee_code, e.branch_id,
        lt.name AS leave_type_name, lt.is_paid, lt.uses_quota
 FROM leave_requests lr
@@ -114,7 +114,7 @@ ORDER BY lr.created_at DESC;
 -- name: ListLeaveRequestsByEmployee :many
 SELECT lr.id, lr.employee_id, lr.leave_type_id, lr.start_date, lr.end_date,
        lr.day_count, lr.reason, lr.status, lr.decided_by, lr.decided_at,
-       lr.decision_note, lr.created_by, lr.created_at,
+       lr.decision_note, lr.created_by, lr.created_at, lr.is_backdated,
        lt.name AS leave_type_name, lt.is_paid, lt.uses_quota
 FROM leave_requests lr
 JOIN leave_types lt ON lt.id = lr.leave_type_id

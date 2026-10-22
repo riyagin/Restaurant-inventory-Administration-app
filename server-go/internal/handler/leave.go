@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -305,11 +306,24 @@ type createLeaveRequestBody struct {
 	StartDate   string `json:"start_date"`
 	EndDate     string `json:"end_date"`
 	Reason      string `json:"reason"`
+	// ConfirmBackdated acknowledges that a start date before today makes the
+	// request a backdated one, which only a manager/owner can approve.
+	ConfirmBackdated bool `json:"confirm_backdated"`
 }
+
+// codeBackdatedNeedsConfirm is returned (409) for a backdated request submitted
+// without confirm_backdated, so the client can show its warning and resubmit.
+const codeBackdatedNeedsConfirm = "backdated_requires_confirmation"
 
 // CreateLeaveRequest — POST /api/hr/leave-requests
 // Computes day_count server-side from the branch schedule + holidays and rejects
 // overlapping pending/approved requests for the same employee.
+//
+// Leave planning is not meant to be rewritten after the fact, so a request that
+// starts before today is refused until the caller confirms it, and is then
+// frozen as is_backdated: it waits for a manager/owner to approve it on its own,
+// never through bulk approval. The flag is set from the server's date, not the
+// client's, so it cannot be dodged by omitting it.
 func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request) {
 	var body createLeaveRequestBody
 	if err := parseBody(r, &body); err != nil {
@@ -339,6 +353,14 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	}
 	if endDate.Before(startDate) {
 		respondError(w, http.StatusBadRequest, "tanggal selesai harus setelah atau sama dengan tanggal mulai")
+		return
+	}
+	isBackdated := startDate.Before(today())
+	if isBackdated && !body.ConfirmBackdated {
+		respondJSON(w, http.StatusConflict, map[string]string{
+			"error": "tanggal mulai sudah lewat — pengajuan mundur tanggal memerlukan persetujuan manajer/pemilik",
+			"code":  codeBackdatedNeedsConfirm,
+		})
 		return
 	}
 
@@ -408,19 +430,24 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		DayCount:    int32(dayCount),
 		Reason:      reason,
 		CreatedBy:   pgtype.UUID{Bytes: createdBy, Valid: createdBy != [16]byte{}},
+		IsBackdated: isBackdated,
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan cuti")
 		return
 	}
 
+	desc := fmt.Sprintf("Mengajukan cuti %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount)
+	if isBackdated {
+		desc += " — MUNDUR TANGGAL, menunggu persetujuan manajer/pemilik"
+	}
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
 		UserID:      createdBy,
 		Username:    middleware.UsernameFromCtx(ctx),
 		Action:      "CREATE",
 		EntityType:  "leave_request",
 		EntityID:    req.ID.Bytes,
-		Description: fmt.Sprintf("Mengajukan cuti %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount),
+		Description: desc,
 	})
 
 	respondJSON(w, http.StatusCreated, req)
@@ -431,8 +458,9 @@ type decisionBody struct {
 }
 
 // approveOne approves a single pending leave request inside its own transaction.
-// Shared by ApproveLeaveRequest (single) and BulkApproveLeaveRequests.
-func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.Text) (*service.ApproveResult, error) {
+// Shared by ApproveLeaveRequest (single) and BulkApproveLeaveRequests; bulk
+// refuses backdated requests, which must each be looked at individually.
+func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.Text, bulk bool) (*service.ApproveResult, error) {
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
 	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
@@ -444,6 +472,9 @@ func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.
 	}
 	if req.Status != "pending" {
 		return nil, errLeaveRequestNotPending
+	}
+	if bulk && req.IsBackdated {
+		return nil, errLeaveRequestBackdatedBulk
 	}
 
 	leaveType, err := h.queries.GetLeaveTypeByID(ctx, req.LeaveTypeID)
@@ -470,7 +501,7 @@ func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.
 		Action:      "UPDATE",
 		EntityType:  "leave_request",
 		EntityID:    id,
-		Description: fmt.Sprintf("Menyetujui pengajuan cuti (%d hari kehadiran ditandai cuti)", res.CoveredDays),
+		Description: approveDescription(req, res),
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -533,7 +564,7 @@ func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Reques
 		note = pgtype.Text{String: s, Valid: true}
 	}
 
-	res, err := h.approveOne(r.Context(), id, note)
+	res, err := h.approveOne(r.Context(), id, note, false)
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaveRequestNotFound):
@@ -541,7 +572,7 @@ func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Reques
 		case errors.Is(err, errLeaveRequestNotPending):
 			respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat disetujui")
 		case errors.Is(err, service.ErrQuotaExceeded):
-			respondError(w, http.StatusBadRequest, "kuota cuti tahunan tidak mencukupi untuk pengajuan ini")
+			respondError(w, http.StatusBadRequest, err.Error())
 		default:
 			respondError(w, http.StatusInternalServerError, "gagal menyetujui pengajuan cuti")
 		}
@@ -616,7 +647,7 @@ func (h *LeaveHandler) BulkApproveLeaveRequests(w http.ResponseWriter, r *http.R
 			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: "ID tidak valid"})
 			continue
 		}
-		if _, err := h.approveOne(ctx, id, note); err != nil {
+		if _, err := h.approveOne(ctx, id, note, true); err != nil {
 			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: bulkErrorMessage(err)})
 			continue
 		}
@@ -658,18 +689,29 @@ func (h *LeaveHandler) BulkRejectLeaveRequests(w http.ResponseWriter, r *http.Re
 }
 
 var (
-	errLeaveRequestNotFound   = errors.New("pengajuan cuti tidak ditemukan")
-	errLeaveRequestNotPending = errors.New("pengajuan cuti sudah tidak menunggu persetujuan")
+	errLeaveRequestNotFound      = errors.New("pengajuan cuti tidak ditemukan")
+	errLeaveRequestNotPending    = errors.New("pengajuan cuti sudah tidak menunggu persetujuan")
+	errLeaveRequestBackdatedBulk = errors.New("pengajuan mundur tanggal harus disetujui satu per satu")
 )
 
 func bulkErrorMessage(err error) string {
-	if errors.Is(err, service.ErrQuotaExceeded) {
-		return "kuota cuti tahunan tidak mencukupi"
-	}
-	if errors.Is(err, errLeaveRequestNotFound) || errors.Is(err, errLeaveRequestNotPending) {
+	if errors.Is(err, service.ErrQuotaExceeded) ||
+		errors.Is(err, errLeaveRequestNotFound) ||
+		errors.Is(err, errLeaveRequestNotPending) ||
+		errors.Is(err, errLeaveRequestBackdatedBulk) {
 		return err.Error()
 	}
 	return "gagal memproses pengajuan cuti"
+}
+
+func approveDescription(req *db.LeaveRequest, res *service.ApproveResult) string {
+	desc := fmt.Sprintf("Menyetujui pengajuan cuti (%d hari kehadiran ditandai cuti)", res.CoveredDays)
+	if req.IsBackdated {
+		desc = "Menyetujui pengajuan cuti MUNDUR TANGGAL " +
+			req.StartDate.Time.Format("2006-01-02") + " s/d " + req.EndDate.Time.Format("2006-01-02") +
+			fmt.Sprintf(" (%d hari kehadiran ditandai cuti)", res.CoveredDays)
+	}
+	return desc
 }
 
 // CancelLeaveRequest — POST /api/hr/leave-requests/:id/cancel (admin/manager)
@@ -769,7 +811,9 @@ func yearParam(r *http.Request) int32 {
 }
 
 // GetLeaveBalance — GET /api/hr/employees/:id/leave-balance?year=
-// Auto-creates a balance row (default quota 12) when missing for the year.
+// The employee's paid-leave allowance month by month for the year: quota, used
+// (weekend days counted double) and unused. Unused days in closed months are
+// what evaluation converts to cash.
 func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -778,7 +822,7 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	pgEmpID := pgtype.UUID{Bytes: id, Valid: true}
-	year := yearParam(r)
+	year := int(yearParam(r))
 
 	if _, err := h.queries.GetEmployeeByID(ctx, pgEmpID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -789,25 +833,75 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bal, err := h.queries.GetLeaveBalance(ctx, &db.GetLeaveBalanceParams{EmployeeID: pgEmpID, Year: year})
+	months, err := service.MonthlyLeaveBalances(ctx, h.queries, pgEmpID, year, today())
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			bal, err = h.queries.CreateLeaveBalance(ctx, &db.CreateLeaveBalanceParams{
-				EmployeeID: pgEmpID,
-				Year:       year,
-				QuotaDays:  12,
-			})
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membuat saldo cuti")
-				return
-			}
-		} else {
-			respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
-			return
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		return
+	}
+	unusedClosed := 0
+	for _, m := range months {
+		if m.Closed {
+			unusedClosed += m.UnusedDays
 		}
 	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"year":                year,
+		"default_quota":       service.DefaultMonthlyLeaveQuota,
+		"weekend_cost":        service.WeekendLeaveCost,
+		"months":              months,
+		"unused_closed_total": unusedClosed,
+	})
+}
 
-	respondJSON(w, http.StatusOK, bal)
+// ListMonthlyLeaveBalances — GET /api/hr/leave-balances?month=YYYY-MM
+// Every active employee's allowance for one month — the unused-leave indicator
+// HR reads at evaluation time. Defaults to the current month.
+func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.Request) {
+	month := service.MonthStart(today())
+	if v := strings.TrimSpace(r.URL.Query().Get("month")); v != "" {
+		m, err := time.Parse("2006-01", v)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "format bulan tidak valid (YYYY-MM)")
+			return
+		}
+		month = m
+	}
+
+	ctx := r.Context()
+	rows, err := h.queries.ListMonthlyLeaveBalances(ctx, &db.ListMonthlyLeaveBalancesParams{
+		Month:        pgtype.Date{Time: month, Valid: true},
+		DefaultQuota: service.DefaultMonthlyLeaveQuota,
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		return
+	}
+
+	type row struct {
+		EmployeeID   pgtype.UUID `json:"employee_id"`
+		EmployeeName string      `json:"employee_name"`
+		EmployeeCode string      `json:"employee_code"`
+		BranchName   string      `json:"branch_name"`
+		service.MonthlyLeaveBalance
+	}
+	out := make([]row, 0, len(rows))
+	for _, rr := range rows {
+		out = append(out, row{
+			EmployeeID:   rr.EmployeeID,
+			EmployeeName: rr.EmployeeName,
+			EmployeeCode: rr.EmployeeCode,
+			BranchName:   rr.BranchName,
+			MonthlyLeaveBalance: service.NewMonthlyLeaveBalance(month, int(rr.QuotaDays), int(rr.UsedDays),
+				rr.Overridden, today()),
+		})
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"month":         month.Format("2006-01"),
+		"closed":        month.Before(service.MonthStart(today())),
+		"default_quota": service.DefaultMonthlyLeaveQuota,
+		"weekend_cost":  service.WeekendLeaveCost,
+		"employees":     out,
+	})
 }
 
 // ListEmployeeLeaveRequests — GET /api/hr/employees/:id/leave-requests
@@ -842,6 +936,9 @@ type manpowerEmployee struct {
 	Name     string        `json:"name"`
 	Position string        `json:"position"`
 	Days     []manpowerDay `json:"days"`
+	// LeaveBalance is the paid-leave allowance for each month the window touches,
+	// so the planner sees how much day-off budget is left before adding more.
+	LeaveBalance []service.MonthlyLeaveBalance `json:"leave_balance"`
 }
 
 type manpowerBranch struct {
@@ -978,7 +1075,30 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 3. Build response grouped by branch preserving order from the query.
+	// 3. Paid-leave allowance for every month the window touches (at most two).
+	var windowMonths []time.Time
+	for m := service.MonthStart(startDate); !m.After(endDate); m = m.AddDate(0, 1, 0) {
+		windowMonths = append(windowMonths, m)
+	}
+	now := today()
+	balanceBy := map[string][]service.MonthlyLeaveBalance{} // employee id → one per window month
+	for _, m := range windowMonths {
+		rows, err := h.queries.ListMonthlyLeaveBalances(ctx, &db.ListMonthlyLeaveBalancesParams{
+			Month:        pgtype.Date{Time: m, Valid: true},
+			DefaultQuota: service.DefaultMonthlyLeaveQuota,
+		})
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+			return
+		}
+		for _, rr := range rows {
+			empID := uuid.UUID(rr.EmployeeID.Bytes).String()
+			balanceBy[empID] = append(balanceBy[empID], service.NewMonthlyLeaveBalance(
+				m, int(rr.QuotaDays), int(rr.UsedDays), rr.Overridden, now))
+		}
+	}
+
+	// 4. Build response grouped by branch preserving order from the query.
 	branchMap := map[string]*manpowerBranch{}
 	var branchOrder []string
 	for _, e := range employees {
@@ -996,10 +1116,11 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 			days[i] = day
 		}
 		branchMap[e.branchID].Employees = append(branchMap[e.branchID].Employees, manpowerEmployee{
-			ID:       e.id,
-			Name:     e.name,
-			Position: e.position,
-			Days:     days,
+			ID:           e.id,
+			Name:         e.name,
+			Position:     e.position,
+			Days:         days,
+			LeaveBalance: balanceBy[e.id],
 		})
 	}
 
@@ -1016,11 +1137,14 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 }
 
 type setQuotaBody struct {
-	Year      *int32 `json:"year"`
+	Month     string `json:"month"` // YYYY-MM
 	QuotaDays int32  `json:"quota_days"`
 }
 
 // SetLeaveBalanceQuota — PUT /api/hr/employees/:id/leave-balance
+// Overrides one month's allowance for the employee (e.g. a part month after
+// joining). Lowering it below what is already used is allowed — the month then
+// simply shows no unused days.
 func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -1036,15 +1160,17 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusBadRequest, "kuota cuti tidak boleh negatif")
 		return
 	}
-	year := int32(time.Now().UTC().Year())
-	if body.Year != nil {
-		year = *body.Year
+	month, err := time.Parse("2006-01", strings.TrimSpace(body.Month))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "format bulan tidak valid (YYYY-MM)")
+		return
 	}
 
 	ctx := r.Context()
 	pgEmpID := pgtype.UUID{Bytes: id, Valid: true}
 
-	if _, err := h.queries.GetEmployeeByID(ctx, pgEmpID); err != nil {
+	emp, err := h.queries.GetEmployeeByID(ctx, pgEmpID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
 			return
@@ -1053,29 +1179,11 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Ensure the row exists, then set the quota.
-	if _, err := h.queries.GetLeaveBalance(ctx, &db.GetLeaveBalanceParams{EmployeeID: pgEmpID, Year: year}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			if _, err := h.queries.CreateLeaveBalance(ctx, &db.CreateLeaveBalanceParams{
-				EmployeeID: pgEmpID,
-				Year:       year,
-				QuotaDays:  body.QuotaDays,
-			}); err != nil {
-				respondError(w, http.StatusInternalServerError, "gagal membuat saldo cuti")
-				return
-			}
-		} else {
-			respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
-			return
-		}
-	}
-
-	bal, err := h.queries.SetLeaveBalanceQuota(ctx, &db.SetLeaveBalanceQuotaParams{
-		QuotaDays:  body.QuotaDays,
+	if err := h.queries.UpsertLeaveMonthlyQuota(ctx, &db.UpsertLeaveMonthlyQuotaParams{
 		EmployeeID: pgEmpID,
-		Year:       year,
-	})
-	if err != nil {
+		Month:      pgtype.Date{Time: month, Valid: true},
+		QuotaDays:  body.QuotaDays,
+	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui kuota cuti")
 		return
 	}
@@ -1085,9 +1193,14 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		Username:    middleware.UsernameFromCtx(ctx),
 		Action:      "UPDATE",
 		EntityType:  "leave_balance",
-		EntityID:    bal.ID.Bytes,
-		Description: fmt.Sprintf("Mengatur kuota cuti %d menjadi %d hari", year, body.QuotaDays),
+		EntityID:    id,
+		Description: fmt.Sprintf("Mengatur jatah cuti %s bulan %s menjadi %d hari", emp.FullName, month.Format("01/2006"), body.QuotaDays),
 	})
 
-	respondJSON(w, http.StatusOK, bal)
+	months, err := service.MonthlyLeaveBalances(ctx, h.queries, pgEmpID, month.Year(), today())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		return
+	}
+	respondJSON(w, http.StatusOK, months[month.Month()-1])
 }

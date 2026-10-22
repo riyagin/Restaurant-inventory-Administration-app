@@ -5,6 +5,7 @@ import {
   getBranches,
 } from '../../api';
 import { canApprove } from '../../roles';
+import { BackdatedBadge } from './LeaveRuleWidgets';
 
 const TYPE_META = {
   leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
@@ -27,8 +28,10 @@ function normLeave(rq) {
     branch_id: rq.branch_id ?? null,
     sortDate: rq.start_date,
     periodLabel: `${fmtDate(rq.start_date)} – ${fmtDate(rq.end_date)}`,
-    detail: `${rq.day_count} hari kerja`,
+    detail: `${rq.day_count} hari`,
     subtitle: rq.leave_type_name + (rq.is_paid === false ? ' (tanpa gaji)' : ''),
+    is_backdated: rq.is_backdated,
+    reason: rq.reason,
   };
 }
 function normOvertime(o) {
@@ -124,7 +127,7 @@ export default function Approvals() {
               <tr key={r.key}>
                 <td><TypeBadge type={r.type} /></td>
                 <td>{r.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{r.employee_code}</div></td>
-                <td style={{ fontSize: '0.88rem', color: '#445' }}>{r.subtitle}</td>
+                <td style={{ fontSize: '0.88rem', color: '#445' }}>{r.subtitle}<BackdatedBadge request={r} /></td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{r.periodLabel}</td>
                 <td style={{ textAlign: 'center' }}>{r.detail}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
@@ -166,8 +169,14 @@ function DecisionModal({ action, request, onClose, onDone }) {
         <h3 style={{ marginTop: 0 }}>{titles[action]}</h3>
         <p style={{ fontSize: '0.9rem', color: '#445' }}>
           {TYPE_META[request.type].label} — {request.employee_name}<br />
-          {request.periodLabel} ({request.detail})
+          {request.periodLabel} ({request.detail})<BackdatedBadge request={request} />
         </p>
+        {action === 'approve' && request.is_backdated && (
+          <div style={{ ...errBox, background: '#fff4e5', color: '#9a3412' }}>
+            Pengajuan ini dibuat setelah tanggal mulainya lewat. Pastikan alasannya sah sebelum menyetujui.
+            {request.reason && <><br />Alasan: <em>{request.reason}</em></>}
+          </div>
+        )}
         {error && <div style={errBox}>{error}</div>}
         <label style={lbl}>Catatan {action === 'reject' ? '(disarankan)' : '(opsional)'}</label>
         <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} style={{ ...inp, resize: 'vertical' }} />

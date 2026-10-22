@@ -657,6 +657,7 @@ func main() {
 			// Balances + per-employee history
 			r.Get("/api/hr/employees/{id}/leave-balance", leaveHandler.GetLeaveBalance)
 			r.Put("/api/hr/employees/{id}/leave-balance", leaveHandler.SetLeaveBalanceQuota)
+			r.Get("/api/hr/leave-balances", leaveHandler.ListMonthlyLeaveBalances)
 			r.Get("/api/hr/employees/{id}/leave-requests", leaveHandler.ListEmployeeLeaveRequests)
 		})
 		// HR Leave approval / rejection — manager only.

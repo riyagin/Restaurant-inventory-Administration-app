@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react';
-import { getManpowerPlanning, getLeaveTypes, createLeaveRequest, getLeaveBalance } from '../../api';
+import { getManpowerPlanning, getLeaveTypes } from '../../api';
+import { todayLocal, fmtMonth, submitLeaveRequest, WEEKEND_COST } from './leaveRules';
+import { QuotaPreview, BackdatedNotice } from './LeaveRuleWidgets';
 
 const DAY_NAMES = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
-function todayLocal() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const shortMonth = (ym) => fmtMonth(ym).split(' ')[0];
+
+// "Sisa libur Okt: 2/4" for each month the view touches.
+function leaveBalanceLabel(emp) {
+  return (emp.leave_balance || [])
+    .map(b => `Sisa libur ${shortMonth(b.month)}: ${b.quota_days - b.used_days}/${b.quota_days}`)
+    .join(' · ');
 }
 
 function formatDateHeader(dateStr) {
@@ -61,7 +67,7 @@ function buildManpowerPrintHtml({ data, days }) {
         return `<td class="c hadir">✓</td>`;
       }).join('');
       return `<tr>
-        <td class="emp"><div class="en">${escapeHtml(emp.name)}</div>${emp.position ? `<div class="ep">${escapeHtml(emp.position)}</div>` : ''}</td>
+        <td class="emp"><div class="en">${escapeHtml(emp.name)}</div>${emp.position ? `<div class="ep">${escapeHtml(emp.position)}</div>` : ''}<div class="ep">${escapeHtml(leaveBalanceLabel(emp))}</div></td>
         ${cells}
       </tr>`;
     }).join('');
@@ -146,7 +152,6 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
     end_date: date,
     reason: '',
   });
-  const [balance, setBalance] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -154,17 +159,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
     getLeaveTypes({ active: 1 }).then(r => setTypes(r.data || [])).catch(() => setTypes([]));
   }, []);
 
-  useEffect(() => {
-    const t = types.find(t => t.id === form.leave_type_id);
-    if (t?.uses_quota) {
-      const year = new Date(form.start_date).getFullYear();
-      getLeaveBalance(employee.id, year)
-        .then(r => setBalance(r.data))
-        .catch(() => setBalance(null));
-    } else {
-      setBalance(null);
-    }
-  }, [form.leave_type_id, form.start_date, types, employee.id]);
+  const usesQuota = !!types.find(t => t.id === form.leave_type_id)?.uses_quota;
 
   const calendarDays = (() => {
     const s = new Date(form.start_date), e = new Date(form.end_date);
@@ -181,8 +176,8 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
     }
     setSaving(true);
     try {
-      const r = await createLeaveRequest(form);
-      onSaved(r.data);
+      const created = await submitLeaveRequest(form);
+      if (created) onSaved(created);
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.');
     } finally {
@@ -220,11 +215,6 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
           </select>
         )}
 
-        {balance && (
-          <p style={{ fontSize: 12, color: '#6b7280', margin: '-6px 0 12px' }}>
-            Sisa kuota: <strong>{balance.quota_days - balance.used_days} hari</strong>
-          </p>
-        )}
 
         {field('Tanggal Mulai',
           <input
@@ -250,6 +240,8 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
             {calendarDays} hari kalender
           </p>
         )}
+        <BackdatedNotice startDate={form.start_date} />
+        {usesQuota && <QuotaPreview employeeId={employee.id} startDate={form.start_date} endDate={form.end_date} />}
 
         {field('Keterangan (opsional)',
           <textarea
@@ -358,6 +350,9 @@ const headerCellStyle = {
   zIndex: 1,
 };
 
+// Days already gone: planning them now is backdating, so they read as faded.
+const pastCellStyle = { opacity: 0.45 };
+
 // Compact mode (>10 days in view): narrower cells, no per-cell text — color only.
 const compactCellStyle = {
   padding: '8px 2px',
@@ -415,6 +410,7 @@ export default function ManpowerPlanning() {
   const [modal, setModal] = useState(null); // { type: 'create'|'info', employee, day }
 
   const compact = days > COMPACT_THRESHOLD;
+  const today = todayLocal();
 
   const load = () => {
     setLoading(true);
@@ -515,6 +511,7 @@ export default function ManpowerPlanning() {
 
       <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 1rem' }}>
         {compact ? 'Arahkan kursor ke kotak untuk detail. ' : ''}Klik kotak hari untuk mengajukan cuti karyawan.
+        {' '}Jatah libur 4 hari/bulan, Sabtu/Minggu dihitung {WEEKEND_COST} hari. Hari yang sudah lewat (pudar) hanya dapat diajukan dengan persetujuan manajer/pemilik.
       </p>
 
       {error && <p style={{ color: '#dc2626' }}>{error}</p>}
@@ -574,6 +571,15 @@ export default function ManpowerPlanning() {
                             {emp.position && (
                               <div style={{ fontSize: 11, color: '#9ca3af' }}>{emp.position}</div>
                             )}
+                            {(emp.leave_balance || []).map(b => {
+                              const left = b.quota_days - b.used_days;
+                              return (
+                                <div key={b.month} style={{ fontSize: 11, color: left > 0 ? '#15803d' : '#b91c1c' }}
+                                  title={`Jatah libur ${fmtMonth(b.month)}: terpakai ${b.used_days} dari ${b.quota_days} hari`}>
+                                  Sisa libur {shortMonth(b.month)}: {left}/{b.quota_days}
+                                </div>
+                              );
+                            })}
                           </td>
                           {emp.days.map(day => {
                             const cellColors = {
@@ -581,17 +587,20 @@ export default function ManpowerPlanning() {
                               pending: { background: '#fed7aa', color: '#9a3412' },
                               hadir: { background: '#dcfce7', color: '#15803d' },
                             }[day.status] || { background: '#dcfce7', color: '#15803d' };
+                            const past = day.date < today;
                             const cellTitle = day.status === 'cuti'
                               ? `${day.leave_type} (disetujui) — klik untuk detail`
                               : day.status === 'pending'
                                 ? `${day.leave_type} (menunggu persetujuan) — klik untuk detail`
-                                : 'Klik untuk ajukan cuti';
+                                : past
+                                  ? 'Tanggal sudah lewat — pengajuan mundur tanggal perlu persetujuan manajer/pemilik'
+                                  : 'Klik untuk ajukan cuti';
                             return (
                               <td
                                 key={day.date}
                                 title={cellTitle}
                                 onClick={() => handleCellClick(emp, day)}
-                                style={{ ...cellStyle, ...(compact ? compactCellStyle : null), ...cellColors }}
+                                style={{ ...cellStyle, ...(compact ? compactCellStyle : null), ...cellColors, ...(past ? pastCellStyle : null) }}
                                 onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.93)'}
                                 onMouseLeave={e => e.currentTarget.style.filter = ''}
                               >
@@ -626,6 +635,10 @@ export default function ManpowerPlanning() {
             <LegendItem color="#dcfce7" label="Hadir" />
             <LegendItem color="#fed7aa" label="Menunggu Persetujuan" />
             <LegendItem color="#1f2937" label="Cuti (Disetujui)" />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', opacity: 0.6 }}>
+              <span style={{ width: 14, height: 14, borderRadius: 3, background: '#dcfce7', border: '1px solid rgba(0,0,0,0.1)' }} />
+              Sudah lewat (pudar)
+            </span>
           </div>
         </>
       )}

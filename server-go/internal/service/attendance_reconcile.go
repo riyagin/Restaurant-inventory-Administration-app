@@ -33,13 +33,14 @@ func ScheduleFromRow(ws *db.WorkSchedule) Schedule {
 }
 
 // DefaultSchedule is used when a branch has no configured work_schedule row.
+// Employees work seven days a week; days off are paid leave (see leave.go).
 func DefaultSchedule() Schedule {
 	return Schedule{
 		WorkStartMinutes:  8 * 60,
 		WorkEndMinutes:    17 * 60,
 		GraceMinutes:      15,
 		EarlyLeaveMinutes: 30,
-		WorkDays:          []int{1, 2, 3, 4, 5, 6},
+		WorkDays:          []int{1, 2, 3, 4, 5, 6, 7},
 	}
 }
 
