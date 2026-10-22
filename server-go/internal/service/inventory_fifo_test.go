@@ -68,7 +68,9 @@ func TestFIFODeduct_PartialSingleLot(t *testing.T) {
 
 // TestFIFODeduct_ExactLotDeleted confirms that consuming an entire lot removes
 // the row from inventory.
-func TestFIFODeduct_ExactLotDeleted(t *testing.T) {
+// A fully consumed lot is kept — zeroed and stamped depleted_at — so its
+// delivery stays traceable; it just drops out of FIFO (see migration 068).
+func TestFIFODeduct_ExactLotDepleted(t *testing.T) {
 	pool := testutil.OpenDB(t)
 	ctx, tx, qtx := testutil.OpenTx(t, pool)
 
@@ -97,10 +99,15 @@ func TestFIFODeduct_ExactLotDeleted(t *testing.T) {
 		t.Errorf("valueDeducted = %d, want 50000", got)
 	}
 
-	var count int
-	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM inventory WHERE id = $1`, lotID).Scan(&count)
-	if count != 0 {
-		t.Errorf("lot still present after full deduction, want deleted")
+	var qty float64
+	var depleted bool
+	if err := tx.QueryRow(ctx,
+		`SELECT quantity::float8, depleted_at IS NOT NULL FROM inventory WHERE id = $1`, lotID).
+		Scan(&qty, &depleted); err != nil {
+		t.Fatalf("depleted lot must be kept, not deleted: %v", err)
+	}
+	if qty != 0 || !depleted {
+		t.Errorf("after full deduction: qty = %.4f, depleted = %v; want 0, true", qty, depleted)
 	}
 }
 
@@ -145,11 +152,11 @@ func TestFIFODeduct_MultiLotOldestFirst(t *testing.T) {
 		t.Errorf("valueDeducted = %d, want 80000", got)
 	}
 
-	// Lot A must be deleted.
+	// Lot A must be depleted (kept at zero), not deleted.
 	var cntA int
-	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM inventory WHERE id = $1`, lotA).Scan(&cntA)
-	if cntA != 0 {
-		t.Error("lot A must be deleted after full consumption")
+	_ = tx.QueryRow(ctx, `SELECT COUNT(*) FROM inventory WHERE id = $1 AND quantity = 0 AND depleted_at IS NOT NULL`, lotA).Scan(&cntA)
+	if cntA != 1 {
+		t.Error("lot A must be depleted (quantity 0, depleted_at set) after full consumption")
 	}
 
 	// Lot B must have 3 kg remaining.
@@ -207,7 +214,7 @@ func TestFIFODeduct_SpansThreeLots(t *testing.T) {
 
 	var remaining int
 	_ = tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2`,
+		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0`,
 		itemID, warehouseID).Scan(&remaining)
 	if remaining != 1 {
 		t.Errorf("expected 1 surviving lot, got %d", remaining)
@@ -319,7 +326,7 @@ func TestFIFOAddThenDeduct(t *testing.T) {
 
 	var remaining int
 	_ = tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2`,
+		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0`,
 		itemID, warehouseID).Scan(&remaining)
 	if remaining != 1 {
 		t.Errorf("expected 1 remaining lot, got %d", remaining)

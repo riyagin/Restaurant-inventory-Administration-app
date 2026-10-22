@@ -366,7 +366,7 @@ export default function Invoices() {
                 <td className="cell-body">
                   {(inv.invoice_type === 'expense'
                     ? [inv.branch_name, inv.division_name].filter(Boolean).join(' / ')
-                    : inv.warehouse_name) || <span className="cell-empty">—</span>}
+                    : inv.is_distributed ? 'Beberapa tujuan' : inv.warehouse_name) || <span className="cell-empty">—</span>}
                 </td>
                 <td className="cell-meta">{inv.vendor_name ?? <span className="cell-empty">—</span>}</td>
                 <td className="cell-meta">{inv.account_name ?? <span className="cell-empty">—</span>}</td>

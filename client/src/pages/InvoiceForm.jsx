@@ -3,6 +3,8 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getItems, getWarehouses, getVendors, getAccounts, getBranches, getDivisions, getInvoice, createInvoice, updateInvoice, uploadInvoicePhoto, getItemLastPrice, getInvoiceTemplates, getExpenseCategories, uploadUrl } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 import UnitConversion from '../components/UnitConversion';
+import InvoiceDistribution from '../components/InvoiceDistribution';
+import { newAllocation, allocQty, unallocated, destToPayload, allocationToDest, ALLOC_TOLERANCE } from '../invoiceAllocation';
 import { isBaseUnit } from '../units';
 
 const idr = (v) =>
@@ -14,6 +16,9 @@ const today = new Date().toISOString().split('T')[0];
 // means "use the item's own units".
 const emptyPurchaseRow = () => ({ item_id: '', quantity: '', unit_index: '0', price: '', conversion_factor: '' });
 const emptyExpenseRow  = () => ({ item_id: '', description: '', quantity: '', unit_index: '0', price: '', useDescription: false });
+// A faktur distribusi line is a purchase line plus where its quantity goes.
+const emptyDistRow     = () => ({ ...emptyPurchaseRow(), allocations: [newAllocation()] });
+const emptyRowFor = (type) => type === 'expense' ? emptyExpenseRow() : type === 'distribution' ? emptyDistRow() : emptyPurchaseRow();
 
 const emptyHeader = { date: today, due_date: '', warehouse_id: '', payment_status: 'unpaid', account_id: '', branch_id: '', division_id: '', expense_category_id: '', vendor_id: '', reference_number: '' };
 
@@ -33,6 +38,9 @@ export default function InvoiceForm() {
   const [accounts, setAccounts] = useState([]);
   const [branches, setBranches] = useState([]);
   const [divisions, setDivisions] = useState([]);
+  // Every division of every branch — the destination picker of a distributed
+  // invoice offers them all at once.
+  const [allDivisions, setAllDivisions] = useState([]);
   const [expenseCategories, setExpenseCategories] = useState([]);
   const [lastPrices, setLastPrices] = useState({});  // key: `${item_id}:${unit_index}` → price
   const [templates, setTemplates] = useState([]);
@@ -52,11 +60,14 @@ export default function InvoiceForm() {
     getVendors().then(r => setVendors(r.data));
     getAccounts().then(r => setAccounts(r.data));
     getBranches().then(r => setBranches(r.data));
+    getDivisions().then(r => setAllDivisions(r.data));
     if (!id) getInvoiceTemplates().then(r => setTemplates(r.data));
     if (id) {
       getInvoice(id).then(r => {
         const inv = r.data;
-        const type = inv.invoice_type ?? 'purchase';
+        // "distribution" is a form-level type: on the wire it is a purchase
+        // with is_distributed set.
+        const type = inv.is_distributed ? 'distribution' : (inv.invoice_type ?? 'purchase');
         setInvoiceType(type);
         setExistingPhoto(inv.photo_path ?? null);
         setAmountPaid(Number(inv.amount_paid ?? 0));
@@ -90,6 +101,22 @@ export default function InvoiceForm() {
             price: String(i.price),
             useDescription: true,
           })));
+        } else if (type === 'distribution') {
+          setRows(inv.items.map(i => {
+            const allocs = (inv.allocations ?? []).filter(a => a.invoice_item_id === i.id);
+            return {
+              item_id: i.item_id,
+              quantity: String(i.quantity),
+              unit_index: String(i.unit_index),
+              price: String(i.price),
+              conversion_factor: i.conversion_factor != null ? String(i.conversion_factor) : '',
+              // The last row reopens as auto; the stored rows sum to the line,
+              // so it shows the same number it was saved with.
+              allocations: allocs.length
+                ? allocs.map((a, ai) => ({ dest: allocationToDest(a), quantity: String(a.quantity), auto: ai === allocs.length - 1 }))
+                : [newAllocation()],
+            };
+          }));
         } else {
           setRows(inv.items.map(i => ({
             item_id: i.item_id,
@@ -107,8 +134,12 @@ export default function InvoiceForm() {
 
   const switchType = (type) => {
     setInvoiceType(type);
-    setRows(type === 'expense' ? [emptyExpenseRow()] : [emptyPurchaseRow()]);
+    setRows([emptyRowFor(type)]);
   };
+
+  // Stock and non-stock items alike: a distributed purchase may carry supplies
+  // that go straight to a branch and never enter a warehouse.
+  const itemById = (itemId) => items.find(it => it.id === itemId) ?? nonStockItems.find(it => it.id === itemId);
 
   const applyTemplate = async (tpl) => {
     setInvoiceType(tpl.invoice_type);
@@ -209,7 +240,7 @@ export default function InvoiceForm() {
       if (i !== index) return r;
       const updated = { ...r, [field]: val };
       if (field === 'item_id') {
-        const selected = items.find(it => it.id === val);
+        const selected = itemById(val);
         updated.unit_index = selected ? String(selected.units.length - 1) : '0';
         updated.price = '';
         updated.conversion_factor = '';
@@ -255,7 +286,7 @@ export default function InvoiceForm() {
     }));
   };
 
-  const addRow = () => setRows(rs => [...rs, invoiceType === 'expense' ? emptyExpenseRow() : emptyPurchaseRow()]);
+  const addRow = () => setRows(rs => [...rs, emptyRowFor(invoiceType)]);
   const removeRow = (index) => setRows(rs => rs.filter((_, i) => i !== index));
 
   const rowTotal = (row) => {
@@ -269,14 +300,32 @@ export default function InvoiceForm() {
     e.preventDefault();
     setError('');
 
-    if (invoiceType === 'purchase') {
+    if (invoiceType === 'purchase' || invoiceType === 'distribution') {
       for (const [i, row] of rows.entries()) {
         if (!row.item_id || !row.quantity || !row.price) {
           setError(`Baris ${i + 1}: item, kuantitas, dan harga wajib diisi`);
           return;
         }
       }
-    } else {
+    }
+    if (invoiceType === 'distribution') {
+      for (const [i, row] of rows.entries()) {
+        const item = itemById(row.item_id);
+        const label = `Baris ${i + 1} (${item?.name ?? 'item'})`;
+        for (const [ai, a] of row.allocations.entries()) {
+          if (allocQty(row, ai) <= 0) continue;
+          if (!a.dest) { setError(`${label}: tujuan distribusi belum dipilih`); return; }
+          if (a.dest.startsWith('w:') && !item?.is_stock) { setError(`${label}: item non-stok tidak dapat dikirim ke gudang`); return; }
+        }
+        const left = unallocated(row);
+        if (Math.abs(left) > ALLOC_TOLERANCE) {
+          setError(left > 0
+            ? `${label}: masih ada ${left} yang belum dialokasikan`
+            : `${label}: alokasi melebihi kuantitas sebanyak ${-left}`);
+          return;
+        }
+      }
+    } else if (invoiceType === 'expense') {
       for (const [i, row] of rows.entries()) {
         if (row.useDescription && !row.description?.trim()) {
           setError(`Baris ${i + 1}: nama item wajib diisi`);
@@ -301,11 +350,13 @@ export default function InvoiceForm() {
     }
 
     const needsAccount = header.payment_status !== 'unpaid';
+    const isDistribution = invoiceType === 'distribution';
     const payload = {
       date: header.date,
       payment_status: header.payment_status,
       account_id: needsAccount ? header.account_id || null : null,
-      invoice_type: invoiceType,
+      invoice_type: isDistribution ? 'purchase' : invoiceType,
+      is_distributed: isDistribution,
       warehouse_id: invoiceType === 'purchase' ? header.warehouse_id : undefined,
       branch_id:   invoiceType === 'expense' ? header.branch_id   || null : undefined,
       division_id: invoiceType === 'expense' ? header.division_id || null : undefined,
@@ -325,6 +376,12 @@ export default function InvoiceForm() {
             vendor_id: header.vendor_id || null,
             // Omitted (0) tells the backend to use the item's own units.
             conversion_factor: Number(r.conversion_factor) > 0 ? Number(r.conversion_factor) : 0,
+            ...(isDistribution && {
+              // Zero-quantity rows (an auto row with nothing left) carry nothing.
+              allocations: r.allocations
+                .map((a, ai) => ({ ...destToPayload(a.dest), quantity: allocQty(r, ai) }))
+                .filter(a => a.quantity > 0),
+            }),
           })),
     };
 
@@ -371,7 +428,7 @@ export default function InvoiceForm() {
       {!isEdit && (
         <div style={{ marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {['purchase', 'expense'].map(type => (
+            {['purchase', 'distribution', 'expense'].map(type => (
               <button
                 key={type}
                 type="button"
@@ -383,7 +440,7 @@ export default function InvoiceForm() {
                   color: invoiceType === type ? '#4f8ef7' : '#666',
                 }}
               >
-                {type === 'purchase' ? 'Pembelian (tambah stok)' : 'Pengeluaran (tanpa stok)'}
+                {{ purchase: 'Pembelian (tambah stok)', distribution: 'Pembelian Distribusi (multi tujuan)', expense: 'Pengeluaran (tanpa stok)' }[type]}
               </button>
             ))}
             {templates.length > 0 && (
@@ -484,7 +541,7 @@ export default function InvoiceForm() {
               </select>
             </div>
           )}
-          {(invoiceType === 'purchase' || invoiceType === 'expense') && (
+          {(invoiceType === 'purchase' || invoiceType === 'distribution' || invoiceType === 'expense') && (
             <div className="form-group" style={{ margin: 0 }}>
               <label>Vendor <span style={{ color: '#aaa', fontWeight: 400 }}>(opsional)</span></label>
               <select
@@ -546,7 +603,7 @@ export default function InvoiceForm() {
 
         {/* Line items */}
         <div style={{ marginBottom: '1rem', fontWeight: 600, fontSize: '0.9rem', color: '#444' }}>
-          {invoiceType === 'expense' ? 'Item Pengeluaran' : 'Item Pembelian'}
+          {invoiceType === 'expense' ? 'Item Pengeluaran' : invoiceType === 'distribution' ? '1. Item Pembelian' : 'Item Pembelian'}
         </div>
         <div style={{ overflowX: 'auto', marginBottom: '0.5rem' }}>
           <table className="invoice-items-table">
@@ -666,7 +723,7 @@ export default function InvoiceForm() {
                   </td>
                 </tr>
               ) : (() => {
-                const purchaseItem = items.find(it => it.id === row.item_id);
+                const purchaseItem = itemById(row.item_id);
                 const showConversion = purchaseItem && !isBaseUnit(purchaseItem.units, row.unit_index);
                 return (
                 <Fragment key={i}>
@@ -674,7 +731,16 @@ export default function InvoiceForm() {
                   <td style={{ minWidth: '180px' }}>
                     <select value={row.item_id} onChange={setPurchaseRow(i, 'item_id')} required style={{ width: '100%' }}>
                       <option value="">Pilih item...</option>
-                      {items.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                      {invoiceType === 'distribution' ? (
+                        <>
+                          <optgroup label="Item stok">
+                            {items.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                          </optgroup>
+                          <optgroup label="Item non-stok (hanya ke cabang)">
+                            {nonStockItems.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
+                          </optgroup>
+                        </>
+                      ) : items.map(it => <option key={it.id} value={it.id}>{it.name}</option>)}
                     </select>
                   </td>
                   <td style={{ minWidth: '80px' }}>
@@ -682,7 +748,7 @@ export default function InvoiceForm() {
                   </td>
                   <td style={{ minWidth: '100px' }}>
                     {(() => {
-                      const selectedItem = items.find(it => it.id === row.item_id);
+                      const selectedItem = itemById(row.item_id);
                       return (
                         <select value={row.unit_index} onChange={setPurchaseRow(i, 'unit_index')} disabled={!selectedItem} style={{ width: '100%' }}>
                           {selectedItem
@@ -720,7 +786,7 @@ export default function InvoiceForm() {
                         quantity={row.quantity}
                         factor={row.conversion_factor}
                         onFactorChange={(v) => setRows(rs => rs.map((r, ri) => ri === i ? { ...r, conversion_factor: v } : r))}
-                        verb="masuk stok"
+                        verb={invoiceType === 'distribution' ? 'didistribusikan' : 'masuk stok'}
                       />
                     </td>
                   </tr>
@@ -738,6 +804,17 @@ export default function InvoiceForm() {
             Total: <span style={{ color: '#4f8ef7', marginLeft: '0.5rem' }}>{idr(grandTotal)}</span>
           </div>
         </div>
+
+        {invoiceType === 'distribution' && (
+          <InvoiceDistribution
+            rows={rows}
+            setRows={setRows}
+            itemById={itemById}
+            warehouses={warehouses}
+            branches={branches}
+            divisions={allDivisions}
+          />
+        )}
 
         {/* Photo upload */}
         <div className="form-group">

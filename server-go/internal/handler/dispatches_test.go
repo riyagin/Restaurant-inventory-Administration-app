@@ -148,16 +148,16 @@ func TestDispatchCreate_FIFODeductionAndAccountBalance(t *testing.T) {
 	// ── Inventory lots ────────────────────────────────────────────────────────
 	var lotCount int
 	pool.QueryRow(bCtx,
-		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2`,
+		`SELECT COUNT(*) FROM inventory WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0`,
 		fix.itemID, fix.warehouseID).Scan(&lotCount)
 	if lotCount != 1 {
-		t.Errorf("lot count = %d, want 1", lotCount)
+		t.Errorf("live lot count = %d, want 1 (lot A depleted, lot B partly used)", lotCount)
 	}
 
 	var remQty float64
 	var remVal int64
 	pool.QueryRow(bCtx,
-		`SELECT quantity::float8, value FROM inventory WHERE item_id = $1 AND warehouse_id = $2`,
+		`SELECT quantity::float8, value FROM inventory WHERE item_id = $1 AND warehouse_id = $2 AND quantity > 0`,
 		fix.itemID, fix.warehouseID).Scan(&remQty, &remVal)
 	if remQty < 2.999 || remQty > 3.001 {
 		t.Errorf("remaining lot qty = %.4f, want ~3", remQty)

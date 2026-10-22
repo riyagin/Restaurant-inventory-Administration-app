@@ -55,6 +55,7 @@ type invoiceListRow struct {
 	AccountID       pgtype.UUID        `json:"account_id"`
 	AccountName     pgtype.Text        `json:"account_name"`
 	DispatchID      pgtype.UUID        `json:"dispatch_id"`
+	IsDistributed   bool               `json:"is_distributed"`
 	TotalAmount     int64              `json:"total_amount"`
 }
 
@@ -181,7 +182,7 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 			       inv.branch_id, b.name AS branch_name,
 			       inv.division_id, dv.name AS division_name,
 			       inv.account_id, a.name AS account_name,
-			       inv.dispatch_id,
+			       inv.dispatch_id, inv.is_distributed,
 			       COALESCE(SUM(ii.quantity * ii.price), 0)::BIGINT AS total
 			FROM invoices inv
 			LEFT JOIN warehouses w  ON w.id  = inv.warehouse_id
@@ -220,7 +221,7 @@ func (h *InvoicesHandler) List(w http.ResponseWriter, r *http.Request) {
 			&row.BranchID, &row.BranchName,
 			&row.DivisionID, &row.DivisionName,
 			&row.AccountID, &row.AccountName,
-			&row.DispatchID,
+			&row.DispatchID, &row.IsDistributed,
 			&row.TotalAmount,
 			&tc,
 		); err != nil {
@@ -282,13 +283,31 @@ func (h *InvoicesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		items = []*db.GetInvoiceItemsRow{}
 	}
 
+	distributed, err := isDistributedInvoice(ctx, h.pool, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
+		return
+	}
+	allocations := []invoiceAllocationView{}
+	if distributed {
+		if allocations, err = listInvoiceAllocationViews(ctx, h.pool, id); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil alokasi faktur")
+			return
+		}
+	}
+
 	type invoiceDetail struct {
 		*db.GetInvoiceByIDRow
-		Items []*db.GetInvoiceItemsRow `json:"items"`
+		IsDistributed bool                     `json:"is_distributed"`
+		Items         []*db.GetInvoiceItemsRow `json:"items"`
+		// One row per destination; each names its line by invoice_item_id.
+		Allocations []invoiceAllocationView `json:"allocations"`
 	}
 	respondJSON(w, http.StatusOK, invoiceDetail{
 		GetInvoiceByIDRow: invoice,
+		IsDistributed:     distributed,
 		Items:             items,
+		Allocations:       allocations,
 	})
 }
 
@@ -305,6 +324,8 @@ type invoiceItemInput struct {
 	Price            int64   `json:"price"`
 	Description      string  `json:"description"`
 	ConversionFactor float64 `json:"conversion_factor"`
+	// Only on a distributed invoice: where this line's quantity goes.
+	Allocations []invoiceAllocationInput `json:"allocations"`
 }
 
 // Create — POST /api/invoices
@@ -323,6 +344,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ReferenceNumber   string             `json:"reference_number"`
 		ExpenseCategoryID string             `json:"expense_category_id"`
 		PaymentDate       string             `json:"payment_date"`
+		IsDistributed     bool               `json:"is_distributed"`
 		Items             []invoiceItemInput `json:"items"`
 	}
 	if err := parseBody(r, &body); err != nil {
@@ -337,7 +359,15 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if invoiceType == "" {
 		invoiceType = "purchase"
 	}
-	if invoiceType == "purchase" && body.WarehouseID == "" {
+	if body.IsDistributed {
+		// A distributed invoice is a purchase whose destinations live on its
+		// lines; a header destination would contradict them.
+		if invoiceType != "purchase" {
+			respondError(w, http.StatusBadRequest, "faktur distribusi harus berjenis pembelian")
+			return
+		}
+		body.WarehouseID, body.BranchID, body.DivisionID, body.ExpenseCategoryID = "", "", "", ""
+	} else if invoiceType == "purchase" && body.WarehouseID == "" {
 		respondError(w, http.StatusBadRequest, "warehouse_id diperlukan untuk faktur pembelian")
 		return
 	}
@@ -348,6 +378,14 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	var distLines []distributedLine
+	if body.IsDistributed {
+		if distLines, err = resolveDistributedLines(ctx, h.queries, h.pool, body.Items); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Only expense invoices carry a category; a purchase debits inventory, where
@@ -419,9 +457,26 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	invoiceID := invoice.ID.Bytes
 	var grandTotal int64
+	var debitLines []service.Line
 
-	// 3. Process items
-	for _, it := range body.Items {
+	// 3. Process items. A distributed invoice writes its lines, allocations and
+	// per-warehouse stock in one go and debits each destination's account; the
+	// loop below is the single-destination path.
+	lineItems := body.Items
+	if body.IsDistributed {
+		lineItems = nil
+		if _, err := tx.Exec(ctx, `UPDATE invoices SET is_distributed = true WHERE id = $1`, invoice.ID); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menandai faktur distribusi")
+			return
+		}
+		grandTotal, err = writeDistributedLines(ctx, qtx, tx, invoiceID, invoiceNumber, invoiceDate, distLines, true)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		debitLines = debitLinesFor(allAllocations(distLines), false)
+	}
+	for _, it := range lineItems {
 		var itemID uuid.UUID
 		hasItemID := it.ItemID != ""
 		if hasItemID {
@@ -514,15 +569,18 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// An account that cannot be resolved is left as uuid.Nil and lands in the
 	// suspense account; it is never skipped, which is what used to leave the
 	// entry one-sided.
-	var debitAcctID uuid.UUID
-	if invoiceType == "purchase" {
-		if invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil && invAcctID.Valid {
-			debitAcctID = invAcctID.Bytes
+	if !body.IsDistributed {
+		var debitAcctID uuid.UUID
+		if invoiceType == "purchase" {
+			if invAcctID, err := qtx.GetWarehouseInventoryAccountID(ctx, pgtype.UUID{Bytes: warehouseID, Valid: true}); err == nil && invAcctID.Valid {
+				debitAcctID = invAcctID.Bytes
+			}
+		} else {
+			if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, categoryID, divisionID, branchID); err == nil {
+				debitAcctID = expAcctID
+			}
 		}
-	} else {
-		if expAcctID, err := invoiceExpenseAccountID(ctx, qtx, categoryID, divisionID, branchID); err == nil {
-			debitAcctID = expAcctID
-		}
+		debitLines = []service.Line{service.Dr(debitAcctID, grandTotal)}
 	}
 
 	// Payable is tracked per vendor — each vendor has its own sub-account under
@@ -539,10 +597,7 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		SourceID:    invoiceID,
 		Description: fmt.Sprintf("Faktur %s %s", invoiceType, invoiceNumber),
 		CreatedBy:   middleware.UserIDFromCtx(ctx),
-		Lines: []service.Line{
-			service.Dr(debitAcctID, grandTotal),
-			service.Cr(apAcctID, grandTotal),
-		},
+		Lines:       append(debitLines, service.Cr(apAcctID, grandTotal)),
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mencatat jurnal faktur")
 		return
@@ -630,6 +685,20 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, invoice)
 }
 
+type invoiceUpdateRequest struct {
+	Date              string             `json:"date"`
+	DueDate           string             `json:"due_date"`
+	PaymentMethod     string             `json:"payment_method"`
+	AccountID         string             `json:"account_id"`
+	WarehouseID       string             `json:"warehouse_id"`
+	BranchID          string             `json:"branch_id"`
+	DivisionID        string             `json:"division_id"`
+	VendorID          string             `json:"vendor_id"`
+	ReferenceNumber   string             `json:"reference_number"`
+	ExpenseCategoryID string             `json:"expense_category_id"`
+	Items             []invoiceItemInput `json:"items"`
+}
+
 // Update — PUT /api/invoices/:id
 //
 // Paid and partially paid invoices are editable too: the price agreed at order,
@@ -645,19 +714,7 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Date              string             `json:"date"`
-		DueDate           string             `json:"due_date"`
-		PaymentMethod     string             `json:"payment_method"`
-		AccountID         string             `json:"account_id"`
-		WarehouseID       string             `json:"warehouse_id"`
-		BranchID          string             `json:"branch_id"`
-		DivisionID        string             `json:"division_id"`
-		VendorID          string             `json:"vendor_id"`
-		ReferenceNumber   string             `json:"reference_number"`
-		ExpenseCategoryID string             `json:"expense_category_id"`
-		Items             []invoiceItemInput `json:"items"`
-	}
+	var body invoiceUpdateRequest
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
 		return
@@ -691,6 +748,18 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	oldHeader, err := h.queries.GetInvoiceByID(ctx, invoiceUUID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
+		return
+	}
+
+	// Whether an invoice is distributed is fixed when it is created: the
+	// destinations live in different places in the two shapes.
+	distributed, err := isDistributedInvoice(ctx, h.pool, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
+		return
+	}
+	if distributed {
+		h.updateDistributed(w, r, id, old, oldHeader, body)
 		return
 	}
 
@@ -1231,6 +1300,19 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	distributed, err := isDistributedInvoice(ctx, h.pool, id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data faktur")
+		return
+	}
+	var allocations []storedAllocation
+	if distributed {
+		if allocations, err = loadInvoiceAllocations(ctx, h.pool, id); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengambil alokasi faktur")
+			return
+		}
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -1282,6 +1364,23 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A distributed invoice debited one account per destination; each is
+	// credited back with exactly the value its allocations were booked at.
+	credits := []service.Line{service.Cr(debitAcctID, inv.TotalAmount)}
+	if distributed {
+		if err := reverseDistributedStock(ctx, qtx, id, allocations); err != nil {
+			var ins errInsufficientStock
+			if errors.As(err, &ins) {
+				respondError(w, http.StatusUnprocessableEntity,
+					fmt.Sprintf("tidak dapat menghapus: stok tidak mencukupi untuk item %s", ins.item))
+				return
+			}
+			respondError(w, http.StatusInternalServerError, "gagal membalik stok")
+			return
+		}
+		credits = debitLinesFor(storedToResolved(allocations), true)
+	}
+
 	apAcctID, err := service.VendorPayableAccountID(ctx, qtx, inv.VendorID.Bytes)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil akun hutang vendor")
@@ -1292,7 +1391,7 @@ func (h *InvoicesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// settlement side according to how much had been paid. Dated today rather
 	// than at the invoice date so a deletion never reaches back into a period
 	// that has already been reported on.
-	reversal := []service.Line{service.Cr(debitAcctID, inv.TotalAmount)}
+	reversal := credits
 	switch inv.PaymentStatus {
 	case "paid":
 		reversal = append(reversal, service.Dr(inv.AccountID.Bytes, inv.TotalAmount))

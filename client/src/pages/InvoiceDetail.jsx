@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getInvoice, deleteInvoicePhoto, payInvoice, getAccounts, uploadUrl } from '../api';
 import { isAdminRole } from '../roles';
@@ -91,7 +91,7 @@ export default function InvoiceDetail() {
             {invoice.warehouse_name && <> &nbsp;·&nbsp; {invoice.warehouse_name}</>}
             &nbsp;·&nbsp;
             <span style={{ fontWeight: 600, color: isExpense ? '#e67e22' : '#27ae60' }}>
-              {isExpense ? 'Pengeluaran' : 'Pembelian'}
+              {isExpense ? 'Pengeluaran' : invoice.is_distributed ? 'Pembelian Distribusi' : 'Pembelian'}
             </span>
           </div>
         </div>
@@ -236,7 +236,8 @@ export default function InvoiceDetail() {
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(subtotal)}</td>
                   </tr>
                 ) : (
-                  <tr key={it.id}>
+                  <Fragment key={it.id}>
+                  <tr>
                     <td style={{ fontWeight: 500 }}>{it.item_name}</td>
                     <td style={{ color: '#888', fontSize: '0.85rem' }}>{it.item_code}</td>
                     <td style={{ color: '#555' }}>{it.vendor_name}</td>
@@ -245,6 +246,24 @@ export default function InvoiceDetail() {
                     <td style={{ textAlign: 'right', color: '#555' }}>{idr(it.price)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(subtotal)}</td>
                   </tr>
+                  {invoice.is_distributed && (
+                    <tr>
+                      <td colSpan={7} style={{ paddingTop: 0 }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem 1rem', fontSize: '0.8rem', color: '#555', paddingLeft: '0.75rem', borderLeft: '2px solid #d5e3fb' }}>
+                          {(invoice.allocations ?? []).filter(a => a.invoice_item_id === it.id).map(a => (
+                            <span key={a.id}>
+                              → {a.warehouse_name
+                                ? <>Gudang <strong>{a.warehouse_name}</strong></>
+                                : <strong>{[a.branch_name, a.division_name].filter(Boolean).join(' — ')}</strong>}
+                              {': '}{Number(a.quantity).toLocaleString('id-ID')} {it.units?.[Number(it.unit_index)]?.name ?? ''}
+                              <span style={{ color: '#999' }}> · {idr(a.value)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
