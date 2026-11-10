@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
+import { getEmployees, getBranches, getPositions, getContractAlerts, uploadUrl } from '../../api';
 import { canUseHR } from '../../roles';
 
-const SERVER = 'http://localhost:5000';
 
 const canEdit = canUseHR;
 
@@ -249,7 +248,7 @@ export default function Employees() {
                 <td>
                   {e.photo_path ? (
                     <img
-                      src={`${SERVER}/uploads/${e.photo_path}`}
+                      src={uploadUrl(e.photo_path)}
                       alt={e.full_name}
                       style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e8' }}
                     />

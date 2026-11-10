@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getKasbon } from '../../api';
+import { getKasbon, uploadUrl } from '../../api';
 
 import { fmtDateTime } from '../../time';
-const SERVER = 'http://localhost:5000';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -130,7 +129,7 @@ export default function KasbonDetail() {
           {k.evidence_photo_path && (
             <div className="card">
               <div className="card-header"><h2>Bukti</h2></div>
-              <img src={`${SERVER}/uploads/${k.evidence_photo_path}`} alt="Bukti kasbon" style={{ width: '100%', borderRadius: '8px', border: '1px solid #e8e8e8' }} />
+              <img src={uploadUrl(k.evidence_photo_path)} alt="Bukti kasbon" style={{ width: '100%', borderRadius: '8px', border: '1px solid #e8e8e8' }} />
             </div>
           )}
 

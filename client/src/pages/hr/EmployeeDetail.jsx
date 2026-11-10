@@ -7,6 +7,7 @@ import {
   getLeaveBalance, getEmployeeLeaveRequests,
   getEmployeeKasbons,
   getEmployeeDocuments, uploadEmployeeDocument, downloadEmployeeDocument, deleteEmployeeDocument,
+  uploadUrl,
 } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
 import KasbonFormModal from './KasbonFormModal';
@@ -17,7 +18,6 @@ import { BackdatedBadge } from './LeaveRuleWidgets';
 import { UnusedChip } from './LeaveBalancesPanel';
 
 import { fmtDateTime, todayWIB, ymd } from '../../time';
-const SERVER = 'http://localhost:5000';
 
 const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Dana Kesejahteraan' };
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -936,7 +936,7 @@ function ProfilePhotoCard({ emp, editable, onChanged }) {
     <div className="card" style={{ textAlign: 'center' }}>
       {photo ? (
         <img
-          src={`${SERVER}/uploads/${photo}`}
+          src={uploadUrl(photo)}
           alt={emp.full_name}
           style={{ width: '100%', maxWidth: 220, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }}
         />

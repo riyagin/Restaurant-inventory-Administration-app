@@ -1,9 +1,8 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getFinancialReport, getCashSummaryReport, getHRSettings } from '../api';
+import { getFinancialReport, getCashSummaryReport, getHRSettings, uploadUrl } from '../api';
 
 import { todayWIB } from '../time';
-const SERVER = 'http://localhost:5000';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v ?? 0);
@@ -209,7 +208,7 @@ export default function FinancialStatement() {
           {/* Document header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', borderBottom: '2px solid #333', paddingBottom: '1rem' }}>
             {logoPath && (
-              <img src={`${SERVER}/uploads/${logoPath}`} alt="Logo" style={{ width: 64, height: 64, objectFit: 'contain' }} />
+              <img src={uploadUrl(logoPath)} alt="Logo" style={{ width: 64, height: 64, objectFit: 'contain' }} />
             )}
             <div>
               <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>{companyName}</div>

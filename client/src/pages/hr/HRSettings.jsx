@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom';
 import {
   getHRSettings, updateHRSettings, uploadHRLogo,
   getAttendanceReviewSettings, updateAttendanceReviewSettings,
+  uploadUrl,
 } from '../../api';
 
-const SERVER = 'http://localhost:5000';
 
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
 
@@ -186,7 +186,7 @@ export default function HRSettings() {
           <label>Logo Perusahaan</label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             {logoPath ? (
-              <img src={`${SERVER}/uploads/${logoPath}`} alt="Logo perusahaan" style={{ width: 90, height: 90, objectFit: 'contain', border: '1px solid #e8e8e8', borderRadius: 8, background: '#fafafa' }} />
+              <img src={uploadUrl(logoPath)} alt="Logo perusahaan" style={{ width: 90, height: 90, objectFit: 'contain', border: '1px solid #e8e8e8', borderRadius: 8, background: '#fafafa' }} />
             ) : (
               <div style={{ width: 90, height: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #ccd', borderRadius: 8, color: '#aab', fontSize: 12 }}>Tidak ada</div>
             )}

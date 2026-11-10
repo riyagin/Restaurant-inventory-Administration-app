@@ -4,10 +4,10 @@ import {
   getEmployee, createEmployee, updateEmployee,
   getBranches, getPositions, createPosition,
   uploadEmployeePhoto, deleteEmployeePhoto, getUsers,
+  uploadUrl,
 } from '../../api';
 import SearchSelect from '../../components/SearchSelect';
 
-const SERVER = 'http://localhost:5000';
 
 const empty = {
   employee_code: '', full_name: '', dob: '', join_date: '',
@@ -292,7 +292,7 @@ export default function EmployeeForm() {
             <div className="card-header"><h2>Foto</h2></div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
               {photoPath ? (
-                <img src={`${SERVER}/uploads/${photoPath}`} alt="Foto" style={{ width: 96, height: 96, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }} />
+                <img src={uploadUrl(photoPath)} alt="Foto" style={{ width: 96, height: 96, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }} />
               ) : (
                 <div style={{ width: 96, height: 96, borderRadius: '8px', background: '#eef1f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a93a6' }}>Tidak ada</div>
               )}
