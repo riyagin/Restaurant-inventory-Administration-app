@@ -249,6 +249,24 @@ func approvalNotifications(ctx context.Context, pool *pgxpool.Pool) ([]Notificat
 			Count:    count,
 		})
 	}
+
+	// Shift changes only ever concern today's roster, and one left pending past
+	// its day can no longer be approved — so only today's count is a call to act.
+	var shifts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM shift_change_requests WHERE status = 'pending' AND date >= CURRENT_DATE`).Scan(&shifts); err != nil {
+		return nil, err
+	}
+	if shifts > 0 {
+		out = append(out, Notification{
+			ID:       "approval:shift",
+			Kind:     "approval",
+			Severity: SeverityAlert,
+			Title:    "Perubahan shift hari ini menunggu persetujuan",
+			Detail:   plural(shifts, "pengajuan"),
+			Link:     "/hr/approvals",
+			Count:    shifts,
+		})
+	}
 	return out, nil
 }
 

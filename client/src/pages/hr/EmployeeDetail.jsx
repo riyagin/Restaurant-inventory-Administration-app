@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  getEmployee, deleteEmployee, transitionEmployeeToPermanent, resignEmployee,
+  getEmployee, deleteEmployee, transitionEmployeeToPermanent, resignEmployee, deleteEmployeeFaceData,
   getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents,
   getAttendance, getEmployeePerformance,
   getLeaveBalance, getEmployeeLeaveRequests,
@@ -16,9 +16,10 @@ import { todayLocal, fmtMonth } from './leaveRules';
 import { BackdatedBadge } from './LeaveRuleWidgets';
 import { UnusedChip } from './LeaveBalancesPanel';
 
+import { fmtDateTime, todayWIB, ymd } from '../../time';
 const SERVER = 'http://localhost:5000';
 
-const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)' };
+const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Dana Kesejahteraan' };
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
@@ -120,7 +121,7 @@ function anomalyText(r) {
 function buildAttendancePrintHtml({ employee, month, rows, perf }) {
   const [y, m] = month.split('-').map(Number);
   const monthLabel = new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
-  const printedAt = new Date().toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' });
+  const printedAt = fmtDateTime(new Date(), { dateStyle: 'long', timeStyle: 'short' });
 
   const counts = { present: 0, absent: 0, leave: 0, holiday: 0 };
   rows.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++; });
@@ -208,7 +209,7 @@ function AttendanceTab({ employeeId, employee }) {
   useEffect(() => {
     const [y, m] = month.split('-').map(Number);
     const from = `${month}-01`;
-    const to = new Date(y, m, 0).toISOString().slice(0, 10); // last day of month
+    const to = ymd(new Date(y, m, 0)); // last day of month (toISOString would give the day before in WIB)
     setLoading(true);
     getAttendance({ employee_id: employeeId, date_from: from, date_to: to })
       .then(r => setRows(r.data?.data || []))
@@ -642,7 +643,7 @@ function WageTab({ employeeId, editable, isContract }) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayWIB();
   const [form, setForm] = useState({ base_salary: '', working_days_per_month: '26', effective_date: today });
   const [picked, setPicked] = useState([]); // [{ component_id, amount }]
 
@@ -903,6 +904,66 @@ function WageTab({ employeeId, editable, isContract }) {
   );
 }
 
+const fmtDateTimeOrDash = (d) => fmtDateTime(d) || '-';
+
+// Profile photo: the latest face photo from an attendance device (refreshed by
+// the first face check-in each day), falling back to the photo HR uploaded.
+// For a resigned employee the last photo and face data are kept until HR
+// removes them here.
+function ProfilePhotoCard({ emp, editable, onChanged }) {
+  const [busy, setBusy] = useState(false);
+  const photo = emp.face_photo_path || emp.photo_path;
+  const isFacePhoto = !!emp.face_photo_path;
+  const canDeleteFace = editable && emp.status === 'resigned' && (emp.has_face || emp.face_photo_path);
+
+  const handleDeleteFace = async () => {
+    if (!confirm(
+      `Hapus data wajah dan semua foto absensi ${emp.full_name}?\n\n` +
+      'Data ini tidak dapat dikembalikan.'
+    )) return;
+    setBusy(true);
+    try {
+      await deleteEmployeeFaceData(emp.id);
+      onChanged();
+    } catch (err) {
+      alert(err.response?.data?.error || 'Gagal menghapus data wajah');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ textAlign: 'center' }}>
+      {photo ? (
+        <img
+          src={`${SERVER}/uploads/${photo}`}
+          alt={emp.full_name}
+          style={{ width: '100%', maxWidth: 220, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }}
+        />
+      ) : (
+        <div style={{ width: '100%', height: 200, borderRadius: '8px', background: '#eef1f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a93a6', fontSize: '3rem' }}>
+          {(emp.full_name || '?').charAt(0).toUpperCase()}
+        </div>
+      )}
+      {isFacePhoto && (
+        <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#8a93a6' }}>
+          Foto absensi terakhir · {fmtDateTimeOrDash(emp.face_photo_at)}
+        </div>
+      )}
+      {canDeleteFace && (
+        <button
+          onClick={handleDeleteFace}
+          disabled={busy}
+          className="btn btn-danger btn-sm"
+          style={{ marginTop: '0.75rem', width: '100%' }}
+        >
+          {busy ? 'Menghapus...' : 'Hapus Data Wajah & Foto'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function EmployeeDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -1063,15 +1124,7 @@ export default function EmployeeDetail() {
             </div>
           </div>
 
-          <div className="card" style={{ textAlign: 'center' }}>
-            {emp.photo_path ? (
-              <img src={`${SERVER}/uploads/${emp.photo_path}`} alt={emp.full_name} style={{ width: '100%', maxWidth: 220, borderRadius: '8px', objectFit: 'cover', border: '1px solid #e8e8e8' }} />
-            ) : (
-              <div style={{ width: '100%', height: 200, borderRadius: '8px', background: '#eef1f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a93a6', fontSize: '3rem' }}>
-                {(emp.full_name || '?').charAt(0).toUpperCase()}
-              </div>
-            )}
-          </div>
+          <ProfilePhotoCard emp={emp} editable={editable} onChanged={loadEmployee} />
         </div>
       )}
 
@@ -1101,7 +1154,7 @@ export default function EmployeeDetail() {
 }
 
 function ResignModal({ employee, onClose, onDone }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayWIB();
   const [date, setDate] = useState(today);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -1149,7 +1202,7 @@ function ResignModal({ employee, onClose, onDone }) {
 }
 
 function TransitionPermanentModal({ employee, onClose, onDone }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayWIB();
   const [date, setDate] = useState(today);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
 )
@@ -93,6 +94,10 @@ const (
 	RoleStaff        = "staff"
 	RoleHR           = "hr"
 	RoleStoreManager = "store_manager"
+	// RoleBranchOperator runs one branch's HR paperwork — attendance checks,
+	// kasbon / leave / overtime requests — for that branch's employees only.
+	// See RestrictBranchOperator.
+	RoleBranchOperator = "branch_operator"
 )
 
 // hasRole reports whether the caller may pass a gate.
@@ -152,8 +157,12 @@ func RequireCoreAccess(next http.Handler) http.Handler {
 // admin, manager, staff and the HR-only role — because HR data entry is shared
 // work. What stays restricted is *approving* (RequireManager), not viewing or
 // recording.
+//
+// branch_operator passes this gate too, but only reaches the handful of HR
+// endpoints on branchOperatorRoutes: RestrictBranchOperator has already turned
+// away everything else before routing gets here.
 func RequireHRAccess(next http.Handler) http.Handler {
-	return gate(RoleAdmin, RoleManager, RoleStaff, RoleHR)(next)
+	return gate(RoleAdmin, RoleManager, RoleStaff, RoleHR, RoleBranchOperator)(next)
 }
 
 // RequireReportsAccess guards the reporting surface (financial reports, expense
@@ -202,6 +211,116 @@ func RestrictHRRole(next http.Handler) http.Handler {
 	})
 }
 
+// branchOperatorRoutes is everything the branch operator may call, as
+// "METHOD /path" with "*" standing for exactly one path segment (an id).
+//
+// Method matters here, unlike hrRoleAllowedPrefixes: the operator may read the
+// employee list but not edit employees, file a leave request but not change a
+// leave type. Approve / reject are deliberately absent — they sit behind
+// RequireManager as well, but an allowlist that never mentions them cannot be
+// the thing that drifts.
+var branchOperatorRoutes = []string{
+	// Session + the master data the HR screens read.
+	"POST /api/auth/logout",
+	"GET /api/branches",
+	"GET /api/notifications",
+	// The kasbon form picks its fund source from the chart of accounts.
+	"GET /api/accounts",
+	// Employee pickers (the list is forced to the operator's branch).
+	"GET /api/hr/employees",
+	// Attendance: check, and correct.
+	"GET /api/hr/attendance",
+	"PUT /api/hr/attendance/*",
+	"POST /api/hr/attendance/*/half-day",
+	"DELETE /api/hr/attendance/*/half-day",
+	"POST /api/hr/attendance/*/present-no-punch",
+	"DELETE /api/hr/attendance/*/present-no-punch",
+	// Leave (cuti / izin) requests.
+	"GET /api/hr/leave-types",
+	"GET /api/hr/leave-requests",
+	"POST /api/hr/leave-requests",
+	"POST /api/hr/leave-requests/*/cancel",
+	"GET /api/hr/employees/*/leave-balance",
+	// Kasbon requests.
+	"GET /api/hr/kasbons",
+	"GET /api/hr/kasbons/*",
+	"POST /api/hr/kasbons",
+	"POST /api/hr/kasbons/*/cancel",
+	// Overtime requests.
+	"GET /api/hr/overtime",
+	"POST /api/hr/overtime",
+	"POST /api/hr/overtime/*/cancel",
+}
+
+func matchRoute(pattern, method, path string) bool {
+	pm, pp, _ := strings.Cut(pattern, " ")
+	if pm != method {
+		return false
+	}
+	want := strings.Split(strings.Trim(pp, "/"), "/")
+	got := strings.Split(strings.Trim(path, "/"), "/")
+	if len(want) != len(got) {
+		return false
+	}
+	for i := range want {
+		if want[i] != "*" && want[i] != got[i] {
+			return false
+		}
+	}
+	return true
+}
+
+const branchScopeKey contextKey = "branchScope"
+
+// BranchScopeFromCtx returns the branch the caller is confined to. ok is false
+// for every unscoped role, which is every role but branch_operator.
+func BranchScopeFromCtx(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(branchScopeKey).(uuid.UUID)
+	return id, ok
+}
+
+// RestrictBranchOperator confines the branch_operator role to
+// branchOperatorRoutes and to one branch.
+//
+// Like RestrictHRRole it sits once at the top of the protected group and is
+// closed by default: most routes are open to every authenticated user, and a
+// role added later must not inherit them by accident.
+//
+// The branch is read from the users row on every request rather than carried
+// in the JWT, so reassigning an operator — or changing their role — takes
+// effect immediately instead of when the token expires. Handlers read it with
+// BranchScopeFromCtx and narrow lists / refuse other branches' employees.
+func RestrictBranchOperator(queries *db.Queries) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if RoleFromCtx(r.Context()) != RoleBranchOperator {
+				next.ServeHTTP(w, r)
+				return
+			}
+			allowed := false
+			for _, p := range branchOperatorRoutes {
+				if matchRoute(p, r.Method, r.URL.Path) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				writeAuthError(w, http.StatusForbidden, "akses ditolak")
+				return
+			}
+			branchID, err := queries.GetUserBranchScope(r.Context(), pgtype.UUID{Bytes: UserIDFromCtx(r.Context()), Valid: true})
+			if err != nil || !branchID.Valid {
+				// No row means the account was demoted or deleted after the
+				// token was issued: fail closed.
+				writeAuthError(w, http.StatusForbidden, "akun operator cabang belum ditautkan ke cabang")
+				return
+			}
+			ctx := context.WithValue(r.Context(), branchScopeKey, uuid.UUID(branchID.Bytes))
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 // RequireAdminOrManager allows admin or manager. Semantically identical to
 // RequireAdmin today, exposed under a clearer name.
 func RequireAdminOrManager(next http.Handler) http.Handler {
@@ -216,7 +335,7 @@ func RequireAdminOrManager(next http.Handler) http.Handler {
 // RequireHRAccess / RequireManager), so this is the only place it is granted
 // access.
 func RequireAttendanceAccess(next http.Handler) http.Handler {
-	return gate(RoleAdmin, RoleManager, RoleStaff, RoleHR, RoleStoreManager)(next)
+	return gate(RoleAdmin, RoleManager, RoleStaff, RoleHR, RoleStoreManager, RoleBranchOperator)(next)
 }
 
 // RequireManager allows only the manager role (approval-only actions), plus

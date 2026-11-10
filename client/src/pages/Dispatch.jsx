@@ -4,10 +4,11 @@ import { getItems, getWarehouses, getAllInventory, getBranches, getDivisions, ge
 import UnitConversion from '../components/UnitConversion';
 import { baseUnitIndex, effectiveFactor, formatQty, isBaseUnit } from '../units';
 
+import { todayWIB, wibDate } from '../time';
 // conversion_factor is a one-off unit→base rate for this dispatch only; blank
 // means "use the item's own units".
 const emptyRow = () => ({ item_id: '', quantity: '', unit_index: '0', conversion_factor: '' });
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 const emptyHeader = { warehouse_id: '', branch_id: '', division_id: '', notes: '', dispatch_date: today() };
 
 export default function Dispatch() {
@@ -145,7 +146,7 @@ export default function Dispatch() {
       notes: d.notes ?? '',
       // Preload the dispatch's own date so editing (e.g. just the notes) does
       // not silently move it to today.
-      dispatch_date: d.dispatched_at ? new Date(d.dispatched_at).toISOString().slice(0, 10) : today(),
+      dispatch_date: d.dispatched_at ? wibDate(d.dispatched_at) : today(),
     });
     setRows(d.items.map(it => ({
       item_id: it.item_id,

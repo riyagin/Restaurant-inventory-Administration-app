@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getAccounts, getBranches, getDivisions, getDivisionCategories, getWarehouses, parsePosXlsx, confirmPosImport, getPosImports, deletePosImport } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { fmtDateTime } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
@@ -1228,7 +1229,7 @@ export default function SalesImport() {
                     <td style={{ textAlign: 'right', fontWeight: 700, color: '#27ae60' }}>{idr(imp.total_amount)}</td>
                     <td style={{ color: '#888', fontSize: '0.82rem' }}>{imp.source_file || '—'}</td>
                     <td style={{ color: '#888', fontSize: '0.82rem' }}>{imp.created_by_name || '—'}</td>
-                    <td style={{ color: '#888', fontSize: '0.82rem' }}>{new Date(imp.created_at).toLocaleString('id-ID')}</td>
+                    <td style={{ color: '#888', fontSize: '0.82rem' }}>{fmtDateTime(imp.created_at, { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
                     <td style={{ color: '#aaa', fontSize: '0.75rem', userSelect: 'none' }}>{expandedImport === imp.id ? '▼' : '▶'}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <button

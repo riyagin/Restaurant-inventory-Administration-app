@@ -7,9 +7,10 @@ import {
   closePayrollPeriod, markPayrollPeriodPaid, getPositions, getBranches,
   downloadPayslip, downloadPeriodPayslips, getEmployee,
   getWageComponents, getPayrollBonusEligible, applyPayrollBonus,
-  retryPayrollPosting,
+  retryPayrollPosting, getPayrollLineAttendanceCuts,
 } from '../../api';
 
+import { fmtTime as fmtWIBTime } from '../../time';
 // Classify an employee's saved bank into an export bucket.
 function classifyBank(name) {
   const s = (name || '').toLowerCase();
@@ -51,6 +52,7 @@ const SORT_COLUMNS = {
   overtime:               { numeric: true,  get: (l) => numVal(l.overtime_amount) + numVal(l.overtime_hourly_amount) + numVal(l.public_holiday_amount) },
   kasbon_deduction:       { numeric: true,  get: (l) => numVal(l.kasbon_deduction) },
   unpaid_leave_deduction: { numeric: true,  get: (l) => numVal(l.unpaid_leave_deduction) },
+  attendance_cut_deduction: { numeric: true, get: (l) => numVal(l.attendance_cut_deduction) },
   net_pay:                { numeric: true,  get: (l) => numVal(l.net_pay) },
   performance_score:      { numeric: true,  get: (l) => (l.performance_score === null || l.performance_score === undefined ? null : Number(l.performance_score)) },
   reviewed:               { numeric: true,  get: (l) => (l.reviewed ? 1 : 0) },
@@ -124,6 +126,7 @@ export default function PayrollPeriodDetail() {
   const [order, setOrder] = useState('asc');
 
   const [drawerLineId, setDrawerLineId] = useState(null);
+  const [cutLineId, setCutLineId] = useState(null);
   const [showBonusModal, setShowBonusModal] = useState(false);
   // Ledger posting status for this period, written by the background poster.
   // null for periods closed before automatic posting existed (those were posted
@@ -209,7 +212,7 @@ export default function PayrollPeriodDetail() {
 
   const totalGross = lines.reduce((a, l) => a + numVal(l.gross_pay), 0);
   const totalNet = lines.reduce((a, l) => a + numVal(l.net_pay), 0);
-  const totalDeductions = lines.reduce((a, l) => a + numVal(l.component_deduction_total) + numVal(l.kasbon_deduction) + numVal(l.unpaid_leave_deduction) + numVal(l.half_day_deduction), 0);
+  const totalDeductions = lines.reduce((a, l) => a + numVal(l.component_deduction_total) + numVal(l.kasbon_deduction) + numVal(l.unpaid_leave_deduction) + numVal(l.half_day_deduction) + numVal(l.attendance_cut_deduction), 0);
 
   const reviewedCount = summary?.reviewed_count ?? lines.filter((l) => l.reviewed).length;
   const lineCount = summary?.line_count ?? lines.length;
@@ -465,6 +468,7 @@ export default function PayrollPeriodDetail() {
                 { key: 'overtime', label: 'Lembur', align: 'right' },
                 { key: 'kasbon_deduction', label: 'Kasbon', align: 'right' },
                 { key: 'unpaid_leave_deduction', label: 'Pot. Cuti', align: 'right' },
+                { key: 'attendance_cut_deduction', label: 'Telat/Pulang Awal', align: 'right' },
                 { key: 'net_pay', label: 'Gaji Bersih', align: 'right' },
                 { key: 'performance_score', label: 'Skor', align: 'center' },
                 { key: 'reviewed', label: '✓', align: 'center' },
@@ -477,7 +481,7 @@ export default function PayrollPeriodDetail() {
           </thead>
           <tbody>
             {lines.length === 0 ? (
-              <tr><td colSpan={downloadablePayslips ? 13 : 12} style={{ padding: 16, color: '#889' }}>Tidak ada baris.</td></tr>
+              <tr><td colSpan={downloadablePayslips ? 14 : 13} style={{ padding: 16, color: '#889' }}>Tidak ada baris.</td></tr>
             ) : sortedLines.map((l) => (
               <tr key={l.id} onClick={() => setDrawerLineId(l.id)} style={{ borderTop: '1px solid #eef0f4', cursor: 'pointer' }}>
                 <td style={{ padding: 10 }}>
@@ -492,6 +496,14 @@ export default function PayrollPeriodDetail() {
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(numVal(l.overtime_amount) + numVal(l.overtime_hourly_amount) + numVal(l.public_holiday_amount))}</td>
                 <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.kasbon_deduction)}</td>
                 <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.unpaid_leave_deduction)}</td>
+                <td style={{ padding: 10, textAlign: 'right' }}>
+                  {numVal(l.attendance_cut_deduction) > 0 ? (
+                    <button onClick={(e) => { e.stopPropagation(); setCutLineId(l.id); }} title="Lihat rincian per hari"
+                      style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: '#c5221f', textDecoration: 'underline dotted', font: 'inherit' }}>
+                      {fmtIDR(l.attendance_cut_deduction)}
+                    </button>
+                  ) : fmtIDR(0)}
+                </td>
                 <td style={{ padding: 10, textAlign: 'right', fontWeight: 700 }}>{fmtIDR(l.net_pay)}</td>
                 <td style={{ padding: 10, textAlign: 'center' }}><ScoreBadge score={l.performance_score} /></td>
                 <td style={{ padding: 10, textAlign: 'center' }}>{l.reviewed ? <span style={{ color: '#1e7e34', fontWeight: 700 }}>✓</span> : ''}</td>
@@ -511,7 +523,7 @@ export default function PayrollPeriodDetail() {
               <tr style={{ background: '#f8f9fb', fontWeight: 700, borderTop: '2px solid #e6e8ee' }}>
                 <td style={{ padding: 10 }} colSpan={3}>Total</td>
                 <td style={{ padding: 10, textAlign: 'right' }} colSpan={3}>Bruto: {fmtIDR(totalGross)}</td>
-                <td style={{ padding: 10, textAlign: 'right' }} colSpan={3}>Potongan: {fmtIDR(totalDeductions)}</td>
+                <td style={{ padding: 10, textAlign: 'right' }} colSpan={4}>Potongan: {fmtIDR(totalDeductions)}</td>
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(totalNet)}</td>
                 <td colSpan={downloadablePayslips ? 3 : 2}></td>
               </tr>
@@ -528,6 +540,8 @@ export default function PayrollPeriodDetail() {
           onSaved={async () => { setDrawerLineId(null); await refreshAll(); }}
         />
       )}
+
+      {cutLineId && <AttendanceCutModal lineId={cutLineId} onClose={() => setCutLineId(null)} />}
 
       {showBonusModal && (
         <BonusDistributionModal
@@ -723,6 +737,106 @@ function BonusDistributionModal({ periodId, onClose, onApplied }) {
   );
 }
 
+const fmtTime = (iso) => fmtWIBTime(iso) || '—';
+const fmtMin = (m) => (m ? `${m} mnt` : '—');
+
+// Per-day breakdown of a line's late-arrival / early-departure cut. The line's
+// figure is frozen at generation; the days are recomputed from attendance now,
+// so a correction made since shows up here as a mismatch until the line is
+// regenerated.
+function AttendanceCutModal({ lineId, onClose }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getPayrollLineAttendanceCuts(lineId)
+      .then(({ data }) => setData(data))
+      .catch((err) => setError(err.response?.data?.error || 'Gagal memuat rincian'));
+  }, [lineId]);
+
+  const days = data?.live?.days || [];
+  const th = { padding: '8px 10px', textAlign: 'right', fontWeight: 600, fontSize: 12, color: '#556' };
+  const td = { padding: '7px 10px', textAlign: 'right', borderTop: '1px solid #eef0f4' };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: 860, maxWidth: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,.18)' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e6e8ee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Potongan Telat / Pulang Awal</h2>
+            {data && <div style={{ fontSize: 13, color: '#667', marginTop: 2 }}>{data.employee_name} · {data.employee_code} · upah harian {fmtIDR(data.daily_rate)}</div>}
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 0, fontSize: 22, cursor: 'pointer', color: '#889' }}>×</button>
+        </div>
+        <div style={{ padding: 20, overflow: 'auto' }}>
+          {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 12, borderRadius: 8 }}>{error}</div>}
+          {!data && !error && <div style={{ color: '#889' }}>Memuat…</div>}
+          {data && (
+            <>
+              <p style={{ margin: '0 0 12px', fontSize: 13, color: '#556' }}>
+                Menit telat dan menit pulang awal masing-masing dibulatkan ke atas per {data.block_minutes} menit,
+                lalu dihargai upah harian × menit ÷ panjang shift hari itu (maks. satu hari).
+                Hari tanpa shift memakai jam cabang ({(data.branch_paid_minutes / 60).toLocaleString('id-ID')} jam).
+              </p>
+              {data.stale && (
+                <div style={{ background: '#fff8e1', color: '#a06800', padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 13 }}>
+                  Absensi berubah sejak baris dibuat: tersimpan {fmtIDR(data.line_amount)}, dihitung ulang {fmtIDR(data.live.amount)}.
+                  Regenerasi baris untuk memperbarui.
+                </div>
+              )}
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#f1f3f7' }}>
+                    <th style={{ ...th, textAlign: 'left' }}>Tanggal</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Shift</th>
+                    <th style={th}>Masuk</th>
+                    <th style={th}>Pulang</th>
+                    <th style={th}>Telat</th>
+                    <th style={th}>Pulang Awal</th>
+                    <th style={th}>Dipotong</th>
+                    <th style={th}>Jam Kerja</th>
+                    <th style={th}>Potongan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {days.length === 0 ? (
+                    <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: '#889' }}>Tidak ada hari telat atau pulang awal.</td></tr>
+                  ) : days.map((d) => (
+                    <tr key={d.date} style={d.half_day ? { color: '#889' } : undefined}>
+                      <td style={{ ...td, textAlign: 'left' }}>{new Date(d.date + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}</td>
+                      <td style={{ ...td, textAlign: 'center' }}>{d.shift_code || '—'}</td>
+                      <td style={td}>{fmtTime(d.check_in)}</td>
+                      <td style={td}>{fmtTime(d.check_out)}</td>
+                      <td style={td}>{fmtMin(d.late_minutes)}</td>
+                      <td style={td}>{fmtMin(d.early_minutes)}</td>
+                      <td style={td}>{d.half_day ? 'setengah hari*' : `${d.cut_minutes} mnt${d.capped ? ' (maks)' : ''}`}</td>
+                      <td style={td}>{(d.paid_minutes / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam</td>
+                      <td style={{ ...td, color: d.amount ? '#c5221f' : undefined, fontWeight: 600 }}>{d.half_day ? '—' : fmtIDR(d.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: '#f8f9fb', fontWeight: 700 }}>
+                    <td style={{ ...td, textAlign: 'left' }} colSpan={6}>Total</td>
+                    <td style={td}>{data.live.minutes} mnt</td>
+                    <td style={td}></td>
+                    <td style={{ ...td, color: '#c5221f' }}>{fmtIDR(data.live.amount)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+              {days.some((d) => d.half_day) && (
+                <div style={{ fontSize: 12, color: '#889', marginTop: 8 }}>
+                  * Hari yang dikoreksi menjadi setengah hari dipotong lewat Potongan Setengah Hari, bukan di sini — agar tidak terpotong dua kali.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function calcAmounts(line, mult, overtimeDays, overtimeHours, holidayDays, components) {
   if (!line || !mult) return null;
   const overtimeAmt = Math.round(Number(overtimeDays) * Number(line.daily_rate) * mult.overtime);
@@ -734,7 +848,7 @@ function calcAmounts(line, mult, overtimeDays, overtimeHours, holidayDays, compo
   // and is only surfaced as a separate informational total.
   const dailyPaidTotal = components.filter(c => c.type === 'daily_allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const gross = Number(line.base_salary) + allowTotal + bonusTotal + overtimeAmt + overtimeHourlyAmt + holidayAmt;
-  const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction) - Number(line.half_day_deduction || 0);
+  const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction) - Number(line.half_day_deduction || 0) - Number(line.attendance_cut_deduction || 0);
   return { overtimeAmt, overtimeHourlyAmt, holidayAmt, gross, net, dailyPaidTotal };
 }
 
@@ -1018,6 +1132,12 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, color: '#c5221f', fontSize: 12 }}>
                   <span>Potongan Setengah Hari ({Number(line.half_day_hours || 0).toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam)</span>
                   <span>−{fmtIDR(line.half_day_deduction)}</span>
+                </div>
+              )}
+              {numVal(line.attendance_cut_deduction) > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, color: '#c5221f', fontSize: 12 }}>
+                  <span>Potongan Telat / Pulang Awal ({(Number(line.attendance_cut_minutes || 0) / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 })} jam)</span>
+                  <span>−{fmtIDR(line.attendance_cut_deduction)}</span>
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>

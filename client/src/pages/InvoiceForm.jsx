@@ -7,10 +7,11 @@ import InvoiceDistribution from '../components/InvoiceDistribution';
 import { newAllocation, allocQty, unallocated, destToPayload, allocationToDest, ALLOC_TOLERANCE } from '../invoiceAllocation';
 import { isBaseUnit } from '../units';
 
+import { todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
-const today = new Date().toISOString().split('T')[0];
+const today = todayWIB();
 
 // conversion_factor is a one-off unit→base rate for this invoice only; blank
 // means "use the item's own units".

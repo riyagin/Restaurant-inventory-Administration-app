@@ -109,7 +109,9 @@ WHERE status = 'active';
 -- name: GetAttendanceRecordByEmployeeDate :one
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note
+       is_early_leave, early_leave_minutes, is_missing_checkout, note,
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+       is_leave_punch, excused_by, review_resolved
 FROM attendance_records
 WHERE employee_id = $1 AND date = $2;
 
@@ -117,7 +119,8 @@ WHERE employee_id = $1 AND date = $2;
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
        is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+       is_leave_punch, excused_by, review_resolved
 FROM attendance_records
 WHERE id = $1;
 
@@ -125,16 +128,20 @@ WHERE id = $1;
 INSERT INTO attendance_records (
     id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
     check_in_photo_path, device_id, status, is_late, late_minutes,
-    is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch
+    is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch,
+    is_leave_punch, is_half_day, half_day_lost_minutes, half_day_type, excused_by
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
-    $12, $13, $14, $15, $16, $17
+    $12, $13, $14, $15, $16, $17, $18,
+    $19, $20, $21, $22
 )
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
-          is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch;
+          is_early_leave, early_leave_minutes, is_missing_checkout, note,
+          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+          is_leave_punch, excused_by, review_resolved;
 
 -- name: UpdateAttendanceRecord :one
 UPDATE attendance_records SET
@@ -155,12 +162,15 @@ UPDATE attendance_records SET
     half_day_lost_minutes = $15,
     half_day_type = $16,
     is_missing_checkin = $17,
-    is_no_punch = $18
-WHERE id = $19
+    is_no_punch = $18,
+    is_leave_punch = $19,
+    excused_by = $20
+WHERE id = $21
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
           is_early_leave, early_leave_minutes, is_missing_checkout, note,
-          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch;
+          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+          is_leave_punch, excused_by, review_resolved;
 
 -- name: InsertAbsentRecord :exec
 INSERT INTO attendance_records (id, employee_id, date, status)

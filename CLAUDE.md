@@ -75,6 +75,11 @@ go run ./server-go/cmd/seed-hr
 # then create that month's payroll period and generate its lines
 go run ./server-go/cmd/seed-month-attendance -month=2026-07
 go run ./server-go/cmd/seed-month-attendance -components=false -payroll=false  # attendance only
+
+# Sandbox for the late/early pay cut: 11 SIM-CUT employees (Rp 60.000/day) on real shifts,
+# one scenario each, plus that month's payroll lines — prints expected vs. frozen cut
+go run ./server-go/cmd/seed-attendance-cuts -month=2026-10
+go run ./server-go/cmd/seed-attendance-cuts -clean   # remove every SIM-CUT row
 ```
 
 ---
@@ -128,6 +133,7 @@ server-go/
       warehouses.go
       hr_employees.go
       hr_wages.go
+      shifts.go
       hr_import.go
       attendance.go
       attendance_device.go
@@ -258,10 +264,13 @@ The Express backend lives in `server/index.js` (~3271 lines). All routes, middle
 | KasbonDetail | `/hr/kasbon/:id` | Manager+ |
 | PayrollDashboard | `/hr/payroll` | Manager+ |
 | PayrollPeriodDetail | `/hr/payroll/:id` | Manager+ |
+| BenefitFund | `/hr/benefit-fund` | HR roles (Dana Kesejahteraan: sick claims, per-employee health/pension balances, pension payout — payout is manager-only) |
+| AttendanceCutSimulator | `/hr/payroll/attendance-cut` | Manager+ (calculator for the late/early pay cut, linked from PayrollDashboard) |
 | HRSettings | `/hr/settings` | HR roles (company data, signatory, document numbering, payslip/attendance config + quick links) |
 | OnboardingWizard | `/hr/onboarding` | HR roles (animated multi-step: creates employee + uploads signed docs) |
 | DocumentGenerator | `/hr/documents` | HR roles (generate PKWT/PKWTT/Surat Peringatan/Paklaring as DOCX/PDF) |
 | HRDashboard | `/` for the `hr` role | Shortcut map of every HR page — replaces the operational dashboard |
+| BranchOperatorDashboard | `/` for the `branch_operator` role | Absensi, Koreksi Kehadiran, Pengajuan, Kasbon — the role's whole app |
 | StaffKPI | `/hr/kpi` | HR roles (daily-task definitions + staff KPIs + monthly scorecards) |
 
 ### Templates page
@@ -277,7 +286,7 @@ The three lists stay three tables — an invoice template carries a type, a disp
 - `NotificationBell.jsx` — navbar bell (sits left of the user block); polls `/api/notifications` every 2 min and on every navigation
 
 ### HR navigation
-The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan / Harian / Berkala / Pengaturan. It had grown past twenty flat entries, and cadence is the axis that predicts what someone is looking for when they open it. The HR-only role gets those four as its whole navbar; the operational navbar flattens them into one dropdown but keeps the group names as headings. `HRDashboard` uses the same four groups, so the vocabulary matches wherever you are.
+The HR menu is grouped by **function**: Karyawan / Absensi / Izin & Pengajuan / Gaji & Tunjangan / Kinerja / Kebijakan (`HR_GROUPS` in `App.jsx`). Each subsystem's screens, including its imports and settings, live in one section; the Kebijakan section holds the rules the other sections run on. The HR-only role gets these six as its whole navbar. The operational navbar has one HR dropdown with each group as a collapsible section (`{ section, links }` entries, rendered by `NavSection`), and the section holding the current page opens by default. `HRDashboard` uses the same six groups, so the vocabulary matches wherever you are.
 
 ### API Layer (`client/src/api.js`)
 - Axios instance with `Authorization: Bearer <token>` header
@@ -304,7 +313,7 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 
 | Table | Purpose |
 |---|---|
-| `users` | Auth — username, password_hash, role (superuser\|admin\|manager\|staff\|hr\|store_manager) |
+| `users` | Auth — username, password_hash, role (superuser\|admin\|manager\|staff\|hr\|store_manager\|branch_operator), branch_id (set **iff** role = branch_operator, table CHECK) |
 | `token_blocklist` | Revoked JWT jti values with expiry |
 | `accounts` | Chart of accounts — hierarchical (parent_id), types: asset/liability/equity/revenue/expense, system-protected |
 | `warehouses` | Physical storage locations, linked to an inventory CoA account |
@@ -351,7 +360,10 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 | `daily_task_completions` | Manual-type completions only; derived types are answered by the data |
 | `staff_kpis` | Staff targets measured against a daily task — metric (completion_rate/same_day_rate/completed_count), target_value, weight |
 | `hr_contract_templates` | Reusable PKWT/PKWTT condition presets — position, place of work, wage, job description, contract_months. Company-level fields are deliberately absent; they live in `hr_settings` |
-| `employees` | HR employee master — code, name, position, branch, bank details, status |
+| `employees` | HR employee master — code, name, position, branch, bank details, status, home `division_id`, `is_delivery_staff` |
+| `shift_definitions` | Per-branch shift versions — code, name, one or two segments (start1/end1, optional start2/end2 for a split "jumping" shift), break_minutes, delivery_only, colour |
+| `shift_assignments` | The **approved** roster — one shift per employee per day, optional division override (NULL = home division). No row = not rostered |
+| `shift_change_requests` | A non-manager's change to *today's* roster, awaiting approval — pending/approved/rejected/superseded; at most one pending per cell |
 | `positions` | Job positions catalog (Kasir, Koki, etc.) |
 | `wage_components` | Catalog of wage component types (allowance/bonus/deduction/daily_allowance, fixed/variable) |
 | `employee_wage_structures` | Versioned wage structures per employee — base_salary, daily_rate, effective_date |
@@ -372,6 +384,8 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 | `kasbon_installments` | Per-installment schedule for a kasbon (deducted on payroll close) |
 | `payroll_periods` | Payroll period header — month, status (open/closed/paid) |
 | `payroll_lines` | Per-employee line within a period — gross, deductions, net, reviewed flag |
+| `benefit_claims` | Sick claims against an employee's monthly benefit allowance — total, covered (paid from Dana Kesehatan), excess (→ `kasbon_id`), frozen monthly/available figures, status paid/cancelled |
+| `benefit_fund_movements` | Per-employee signed ledger of the benefit funds (`health` / `pension`): contribution, claim, claim_reversal, sweep_out/sweep_in, payout, opening. A balance is a SUM, never a counter |
 | `payroll_postings` | Queue/status of a closed period's automatic ledger posting — status, attempts, last_error, journal_entry_id |
 | `operational_expense_amortizations` | Month-by-month schedule of an annual rent payment (`operational_expenses.billing = 'annual'`) — period_month, amount, frozen expense + prepaid accounts, status (scheduled/posted/cancelled), journal_entry_id |
 | `hr_settings` | Company-level HR config (singleton, id=1) — company_name, address, logo_path, payslip footer, absence grace days, **plus the document-generation defaults**: company_phone/email/city, signatory_name/position/national_id, doc_number_format + doc_number_counter, doc_working_hours, doc_payment_info, doc_probation_months |
@@ -414,6 +428,9 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 - **Sewa can be paid a year up front, and is then an asset, not a month's expense.** An operational expense with `billing = 'annual'` (Sewa only; `due_date` required and is the first day of the lease year, `period_month` is its month) debits the branch's **"Sewa Dibayar di Muka - &lt;Cabang&gt;"** (10501-10599 under the system parent 10500, created on the branch's first annual rent by `handler.ensurePrepaidRentAccount`, linked via `branches.prepaid_rent_account_id`). Kept **outside 11000-19999** for the same reason petty cash sits below the inventory accounts: `GetNextInventoryAccountNumber` is MAX + 1 over that span. The payment writes twelve `operational_expense_amortizations` rows (`service.AmortizationSchedule`: equal twelfths, remainder on the last), and each becomes `Dr <category account> Cr Sewa Dibayar di Muka` **only once its month has started** — posting all twelve on the day of payment would date entries in the future, and `accounts.balance` moves on post, so the balance sheet would show next year's rent as used. Months already started are caught up inside the create transaction; the rest are posted by `service.AmortizationPoster` (startup + hourly, capped at `MaxAmortizationAttempts`). An entry is dated the first of its month, or the payment date if that is later — catch-up never reaches back into a month already reported on. Amortization entries use `source_type = 'operational_expense'` with the **payment's** id, so per-branch ledger attribution works unchanged. Cancelling reverses in one entry: Dr the payment source, Cr prepaid for what is still prepaid, Cr the expense for the months already posted; scheduled months become `cancelled` and never post. The Statistik page (`/api/reports/operational-expenses`) reads annual rent **through the schedule**, one twelfth per month, never as one row on its due month
 - **Employees work seven days a week; days off are paid leave from a monthly allowance.** Every work schedule is `{1..7}` (migration 077, and `DefaultSchedule`). Each `uses_quota` leave type draws on **4 days per calendar month** (`service.DefaultMonthlyLeaveQuota`), and a Saturday or Sunday off costs **2** (`service.LeaveDayCost`) because those are the outlets' busiest days — so one weekend fills a month. Public holidays and days the employee checked in cost nothing. A leave spanning month-end draws on both months (`QuotaCostByMonth`), and approval refuses it if *either* month would overdraw (`QuotaExceededError` names the month). Usage lives in `leave_quota_usage`, written by `service.ApproveLeave`. Cancelling refunds only days **after today**: a past day off stays consumed, otherwise cancelling old leave would inflate the unused balance. **Unused days do not carry over** — they are an indicator (Cuti → "Sisa Jatah Libur", employee Cuti tab, `GET /api/hr/leave-balances?month=`) that evaluation usually converts to cash; nothing pays them out automatically
 - **Leave planning cannot be backdated quietly.** `POST /api/hr/leave-requests` with a start date before today (server's business date, `handler.today()`) returns 409 `backdated_requires_confirmation` unless the body carries `confirm_backdated: true`. The request is then frozen as `leave_requests.is_backdated`, badged "MUNDUR TANGGAL", and must be approved **individually** by a manager/owner — `bulk-approve` refuses it. The flag is set from the server's date, never trusted from the client. All three create forms (Cuti, Pengajuan, Perencanaan Tenaga Kerja) go through `pages/hr/leaveRules.js` `submitLeaveRequest`, which shows the warning prompt
+- **Shifts are rostered from manpower planning under a date rule the server enforces** (`handler/shifts.go`): a day before today is read-only for everyone; today's roster changes only with a manager's approval — anyone else's edit becomes a `shift_change_requests` row and the approved roster stays in force until it is decided (a manager's own edit applies directly and supersedes any open request); future days apply directly. A request whose day has passed can only be rejected. Each branch owns its own shift definitions; a shift must belong to the employee's branch, a `delivery_only` shift needs `employees.is_delivery_staff` (un-flagging someone still rostered on one from today on is refused), and an approved-leave day cannot be rostered. Coverage is judged per **division**: a day counts towards the assignment's division override, else the employee's home division. Attendance uses the approved shift: `service.ScheduleWithShift` replaces the branch schedule's start/end for that employee and day (a split shift is judged first-segment start → last-segment end, since attendance has one check-in/out per day); with no assignment the branch schedule applies unchanged. Payroll's hourly rate still comes from the branch schedule. A shift that was ever rostered is deactivated, not deleted
+- **Arriving late and leaving early cost the same thing: the pay for the minutes not worked.** On every present day that carries `is_late` / `is_early_leave` (both already exclude the grace / tolerance window), each end is rounded **up** to a 15-minute block on its own (`service.AttendanceCutBlockMinutes`), the sum is capped at the day, and priced as `daily_rate × minutes ÷ that day's paid minutes` — the rostered shift's segments minus `break_minutes`, else the branch's work_start → work_end. Pricing per minute of the day's own length (not via a rounded hourly rate) is what makes a full cut exactly one day's pay. The total is frozen onto `payroll_lines.attendance_cut_minutes` / `attendance_cut_deduction` at generation and subtracted in `CalcLine`; `GET /api/hr/payroll/lines/:id/attendance-cuts` recomputes the per-day breakdown live and flags `stale` when a correction landed after generation. Half-day corrections are skipped here — they already pay through `half_day_deduction`, and cutting them again would charge the day twice. The simulator (`POST /api/hr/payroll/attendance-cut/simulate`, page `/hr/payroll/attendance-cut`) runs hand-entered times through the same `ComputeAnomalies` + `ComputeAttendanceCut`, so it cannot drift from what payroll deducts
+- **Dana Kesejahteraan (migration 085, `service/benefit_fund.go`)**: `wage_components.type = 'benefit_fund'` is an *employer* monthly allowance — like `daily_allowance` it never enters gross/net (every payroll switch only sums the types it names). A sick claim in month M is paid from M's allowance minus claims already covered in M (`Dr Dana Kesehatan Karyawan 21100 / Cr <kas>`); anything above it becomes a **pending** kasbon so manager approval still applies. Closing payroll M posts, in the same poster transaction as the payroll entry, `Dr Beban Gaji - <cabang> / Cr Dana Kesehatan` (the line's `benefit_fund` component snapshot) and sweeps the unused part `Dr Dana Kesehatan / Cr Dana Pensiun Karyawan 21200` — so the health fund nets to zero monthly (it sits in debit between a claim and payday) and only pension accumulates. Claims into a month whose period is closed are refused. Pension is paid out only for a non-active employee, manager-only, and only once none of their payroll periods is open/unposted; the payout first **settles the final month** itself (payroll only generates lines for active employees, so a resign-month claim would otherwise leave the health fund in debit forever), and period posting skips employees already settled for that month. Outstanding kasbon is *not* netted against the payout. Test data: `go run ./cmd/seed-benefit-fund` (SIM-DK-01/02/03; `-clean` reverses its journal entries before deleting)
 - `wage_components.type = 'daily_allowance'` (e.g. uang makan) is disbursed manually in cash each day, outside payroll. It is still snapshotted into `payroll_line_components` (honouring `calc_method`, so a `per_present_day` rate resolves to rate × present days) and printed on the payslip as information, but it must never enter `allowance_total` / `gross_pay` / `net_pay` — counting it would pay it twice. Use the `service.ComponentType*` constants when switching on the type
 
 ---
@@ -506,9 +523,11 @@ The HR menu is grouped by **how often you touch it**, not by subsystem: Karyawan
 
 **HR Leave** (12): leave-types CRUD; leave-requests GET/POST/cancel/approve/reject/bulk-approve/bulk-reject; employee leave-balance GET (`?year=` → twelve monthly balances) / PUT (`{month, quota_days}` override); GET /api/hr/leave-balances?month= (every active employee — the unused-leave indicator); employee leave-requests GET
 
+**HR Shifts** (10): GET /api/hr/manpower-planning (`?date=&days=&branch_id=` — now carries each day's shift + pending change, each employee's division/DO flag, each branch's shifts and divisions); CRUD /api/hr/shifts; PUT /api/hr/shift-assignments (`{entries:[{employee_id,date,shift_id|null,division_id|null}], reason}`, atomic; response says per cell `applied`/`pending`/`unchanged`); GET /api/hr/shift-change-requests; POST /:id/approve|reject (manager); PUT /api/hr/employees/:id/shift-profile (home division + DO flag)
+
 **HR Kasbon** (8): GET/POST /api/hr/kasbons; GET/:id; PUT/:id; POST process/cancel/approve/reject
 
-**HR Payroll** (12): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip; period payslips (single PDF, two slips per A4-landscape page — cut down the middle for two A5-portrait slips)
+**HR Payroll** (14): periods GET/POST/:id/lines/regenerate-line/close/mark-paid/post-accounting; lines review/unreview/payslip/attendance-cuts; attendance-cut/simulate; period payslips (single PDF, two slips per A4-landscape page — cut down the middle for two A5-portrait slips)
 
 **HR Settings** (3): GET/PUT /api/hr/settings; POST /api/hr/settings/logo — HR roles (this is where the company data feeding payslips *and* generated documents lives)
 
@@ -544,10 +563,11 @@ Only per-letter fields live on the generator form. Everything that belongs to th
 - **staff**: Same reach as admin — items, inventory, invoices, accounts, branches, users, HR — **except** reports (`/api/reports/*`, `/api/expense-report`) and the activity log. Cannot approve requests.
 - **hr**: Confined to the HR module. Gets its own navbar and its own dashboard (`HRDashboard`, a shortcut map of every HR page) instead of the operational one. Cannot approve requests.
 - **store_manager**: Attendance record entry/correction only (`RequireAttendanceAccess`); rejected everywhere else.
+- **branch_operator**: One branch's HR paperwork — check and correct attendance, file leave / overtime / kasbon requests for that branch's employees. Approves nothing, cannot process (disburse) a kasbon, cannot open employee profiles, wages, payroll or anything outside HR. Its own navbar and dashboard (`BranchOperatorDashboard`). Scoped twice, both closed by default: `middleware.RestrictBranchOperator` admits only the `METHOD /path` entries on `branchOperatorRoutes` (asserted by `TestBranchOperatorRoutes`), and it puts the operator's branch — re-read from `users.branch_id` on **every request**, not carried in the JWT, so reassignment is immediate — into the context. Every handler on that list must then either force its list onto `scopedBranch(r)` or call `requireEmployeeInScope` on the employee the request is about (`handler/branch_scope.go`). **Adding a route to the allowlist without one of those two leaks other branches' data.** The frontend mirrors it with `ConfineBranchOperator` in `App.jsx`. The operator is kept off `/profile` because it saves through `PUT /api/users/:id`
 - **device-key**: Machine accounts for fingerprint/face attendance devices; authenticated via `X-Device-Key` header (no JWT); access only to `/api/hr/attendance/device/*` endpoints.
 - Roles are named as constants in `middleware/auth.go` and every gate is built from one `gate(...)` helper, so adding a role means touching that file and nothing else. **`superuser` is not listed in any gate** — `hasRole` short-circuits on it, so a role defined as "all capabilities" cannot drift out of a gate added later. The exported `middleware.HasRole` carries the same bypass for the few handlers that check a role inline instead of behind a gate. The gates are `RequireAdmin` / `RequireAdminOrManager` (admin+manager), `RequireCoreAccess` (admin+manager+staff), `RequireHRAccess` (admin+manager+staff+hr), `RequireReportsAccess` (admin+manager), `RequireManager` (approvals), `RequireAttendanceAccess`, and `DeviceAuth`.
 - **`RestrictHRRole` is the exception to per-route gating**: most non-HR routes are deliberately open to every authenticated user, so scoping the `hr` role by adding middleware to each of them would mean getting it right on every future route. Instead it sits once at the top of the protected group and denies the `hr` role anything outside an allowlist (`/api/hr/*`, `/api/auth/*`, branches, divisions, accounts) — closed by default. Do not "fix" this by scattering per-route checks.
-- The frontend mirrors all of this in `client/src/roles.js` (`canUseHR`, `canViewReports`, `canUseCore`, `canApprove`, `isAdminRole`, `isHROnly`, `isSuperuser`) — used by the `RequireHR` / `RequireReports` / `RequireCore` route guards and to build the navbar. Pages that gate a single button (delete invoice, cancel a daily purchase or setoran, record a petty cash count, clear the activity log, approve a request) must call `isAdminRole()` / `canApprove()` rather than comparing `role === 'admin'` inline — the inline form is how superuser silently loses a capability. Hidden links are a courtesy; the server is the control.
+- The frontend mirrors all of this in `client/src/roles.js` (`canUseHR`, `canViewReports`, `canUseCore`, `canApprove`, `isAdminRole`, `isHROnly`, `isSuperuser`, `isBranchOperator`, `canUseBranchHR`) — used by the `RequireHR` / `RequireReports` / `RequireCore` route guards and to build the navbar. Pages that gate a single button (delete invoice, cancel a daily purchase or setoran, record a petty cash count, clear the activity log, approve a request) must call `isAdminRole()` / `canApprove()` rather than comparing `role === 'admin'` inline — the inline form is how superuser silently loses a capability. Hidden links are a courtesy; the server is the control.
 
 ---
 

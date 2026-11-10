@@ -13,7 +13,7 @@ func dThr(s string) time.Time {
 	return t
 }
 
-func TestMonthsWorkedCeil(t *testing.T) {
+func TestMonthsWorked(t *testing.T) {
 	cases := []struct {
 		name       string
 		join, ref  string
@@ -21,18 +21,19 @@ func TestMonthsWorkedCeil(t *testing.T) {
 	}{
 		{"exactly one year", "2025-04-01", "2026-04-01", 12},
 		{"over one year", "2024-01-01", "2026-04-01", 27},
-		{"partial rounds up", "2026-01-15", "2026-04-01", 3},   // 2m16d -> 3
-		{"exact whole months", "2026-01-15", "2026-04-15", 3},  // exactly 3
-		{"just under a month rounds to 1", "2026-03-20", "2026-04-01", 1},
-		{"one day counts as a month", "2026-03-31", "2026-04-01", 1},
+		{"PKWT made permanent Jan, Lebaran Mar", "2026-01-15", "2026-03-20", 2},
+		{"day of month ignored (later day)", "2026-01-01", "2026-03-31", 2},
+		{"day of month ignored (earlier day)", "2026-01-31", "2026-03-01", 2},
+		{"previous month counts as 1", "2026-03-31", "2026-04-01", 1},
+		{"same calendar month", "2026-03-01", "2026-03-20", 0},
 		{"joined after payment date", "2026-05-01", "2026-04-01", 0},
 		{"same day", "2026-04-01", "2026-04-01", 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := MonthsWorkedCeil(dThr(c.join), dThr(c.ref))
+			got := MonthsWorked(dThr(c.join), dThr(c.ref))
 			if got != c.wantMonths {
-				t.Fatalf("MonthsWorkedCeil(%s,%s) = %d, want %d", c.join, c.ref, got, c.wantMonths)
+				t.Fatalf("MonthsWorked(%s,%s) = %d, want %d", c.join, c.ref, got, c.wantMonths)
 			}
 		})
 	}
@@ -48,7 +49,9 @@ func TestComputeThrEntitlement(t *testing.T) {
 		{"full year -> 1 month", "2024-01-01", "2026-04-01", 3_000_000},
 		{"exactly 12 months -> 1 month", "2025-04-01", "2026-04-01", 3_000_000},
 		{"3/12 proportional", "2026-01-15", "2026-04-01", 750_000},     // 3/12 * 3,000,000
+		{"2/12 permanent Jan, Lebaran Mar", "2026-01-15", "2026-03-20", 500_000},
 		{"1/12 proportional", "2026-03-20", "2026-04-01", 250_000},     // 1/12 * 3,000,000
+		{"same month -> nothing", "2026-03-01", "2026-03-20", 0},
 		{"not yet entitled", "2026-05-01", "2026-04-01", 0},
 	}
 	for _, c := range cases {

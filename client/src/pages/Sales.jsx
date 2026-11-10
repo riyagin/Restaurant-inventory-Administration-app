@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { getAccounts, getBranches, getDivisions, getSales, createSale, deleteSale } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
-const today = new Date().toISOString().split('T')[0];
+const today = todayWIB();
 const emptyForm = { account_id: '', amount: '', description: '', date: today, branch_id: '', division_id: '' };
 
 export default function Sales() {

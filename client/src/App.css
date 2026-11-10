@@ -209,6 +209,28 @@ body {
   font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
   color: var(--ink-4);
 }
+/* Collapsible section inside a dropdown (the HR menu, grouped by function). */
+.nav-dropdown-menu:has(.nav-dropdown-section) { min-width: 240px; max-height: calc(100vh - 80px); overflow-y: auto; }
+.nav-dropdown-section + .nav-dropdown-section { border-top: 1px solid var(--line-soft); }
+.nav-dropdown-section-btn {
+  display: flex; justify-content: space-between; align-items: center;
+  width: 100%; padding: 0.55rem 1rem;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: 0.875rem; font-weight: 600; color: var(--ink);
+  text-align: left;
+}
+.nav-dropdown-section-btn:hover { background: var(--surface-2); }
+.nav-dropdown-section-btn .caret { font-size: 0.5rem; color: var(--ink-4); }
+.nav-dropdown-section-links { padding-bottom: 0.25rem; }
+.nav-dropdown-menu .nav-dropdown-section-links a { padding-left: 1.75rem; }
+.mobile-subsection-btn {
+  display: flex; justify-content: space-between; align-items: center;
+  width: 100%; padding: 0.6rem 1.25rem 0.6rem 2rem;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  color: var(--nav-ink-strong); font-size: 0.9rem; font-weight: 600; text-align: left;
+}
+.mobile-subsection-btn .caret { font-size: 0.5rem; opacity: 0.6; }
+.mobile-section-links .mobile-subsection-links a { padding-left: 3rem; }
 .mobile-section-heading {
   padding: 0.5rem 0 0.2rem;
   font-size: 0.7rem; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;

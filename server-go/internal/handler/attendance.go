@@ -58,8 +58,13 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 	} else if strings.TrimSpace(q.Get("date")) != "" {
 		add("ar.date = $%d", strings.TrimSpace(q.Get("date")))
 	}
-	if v := strings.TrimSpace(q.Get("branch_id")); v != "" {
-		add("e.branch_id = $%d::uuid", v)
+	branchFilter := strings.TrimSpace(q.Get("branch_id"))
+	if b, ok := scopedBranchString(r); ok {
+		// A branch operator sees their own branch whatever the filter says.
+		branchFilter = b
+	}
+	if branchFilter != "" {
+		add("e.branch_id = $%d::uuid", branchFilter)
 	}
 	if v := strings.TrimSpace(q.Get("employee_id")); v != "" {
 		add("ar.employee_id = $%d::uuid", v)
@@ -77,7 +82,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		conds[len(conds)-1] = fmt.Sprintf("(lower(e.full_name) LIKE $%d OR lower(e.employee_code) LIKE $%d)", len(args), len(args))
 	}
 	if strings.EqualFold(q.Get("anomaly_only"), "true") {
-		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout OR ar.is_missing_checkin)")
+		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout OR ar.is_missing_checkin OR ar.is_leave_punch)")
 	}
 	if strings.EqualFold(q.Get("half_day_only"), "true") {
 		conds = append(conds, "ar.is_half_day")
@@ -127,6 +132,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		    ar.device_id, ar.status, ar.is_late, ar.late_minutes,
 		    ar.is_early_leave, ar.early_leave_minutes, ar.is_missing_checkout, ar.note,
 		    ar.is_half_day, ar.half_day_lost_minutes, ar.half_day_type, ar.is_missing_checkin, ar.is_no_punch,
+		    ar.is_leave_punch, ar.excused_by,
 		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name,
 		    COALESCE(d.branch_id <> e.branch_id, false) AS is_remote,
 		    db.name AS clock_in_branch_name
@@ -168,6 +174,11 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		HalfDayType        pgtype.Text        `json:"half_day_type"`
 		IsMissingCheckin   bool               `json:"is_missing_checkin"`
 		IsNoPunch          bool               `json:"is_no_punch"`
+		// is_leave_punch: punched on an approved leave day (status stays 'leave').
+		IsLeavePunch       bool               `json:"is_leave_punch"`
+		// excused_by: the approved permit that shaped the day (late_arrival |
+		// early_departure | off_site), null when none.
+		ExcusedBy          pgtype.Text        `json:"excused_by"`
 		FullName           string             `json:"full_name"`
 		EmployeeCode      string             `json:"employee_code"`
 		BranchID          pgtype.UUID        `json:"branch_id"`
@@ -188,6 +199,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			&x.DeviceID, &x.Status, &x.IsLate, &x.LateMinutes,
 			&x.IsEarlyLeave, &x.EarlyLeaveMinutes, &x.IsMissingCheckout, &x.Note,
 			&x.IsHalfDay, &x.HalfDayLostMinutes, &x.HalfDayType, &x.IsMissingCheckin, &x.IsNoPunch,
+			&x.IsLeavePunch, &x.ExcusedBy,
 			&x.FullName, &x.EmployeeCode, &x.BranchID, &x.BranchName,
 			&x.IsRemote, &x.ClockInBranchName,
 		); err != nil {
@@ -247,6 +259,9 @@ func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, existing.EmployeeID) {
+		return
+	}
 
 	state := service.StateFromRecord(existing)
 
@@ -290,8 +305,12 @@ func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Recompute anomalies against the branch schedule.
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
-	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID, existing.Date.Time)
+	// Anomalies plus any approved permit for the day (Izin / Dinas Luar).
+	if err := service.ComputeDay(ctx, h.queries, existing.EmployeeID, state, sched); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		return
+	}
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -393,9 +412,12 @@ func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, existing.EmployeeID) {
+		return
+	}
 
 	state := service.StateFromRecord(existing)
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID, existing.Date.Time)
 
 	if hdType == "late" {
 		// Resolve the corrected entry time: an explicit start_time overrides the
@@ -433,8 +455,14 @@ func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	state.Status = "present"
 	state.IsHalfDay = true
 	state.HalfDayType = hdType
+	// Set by hand: no longer the effect of a permit (a rebuild must keep it).
+	state.ExcusedBy = ""
 
-	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+	// Anomalies plus any approved permit for the day (Izin / Dinas Luar).
+	if err := service.ComputeDay(ctx, h.queries, existing.EmployeeID, state, sched); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		return
+	}
 
 	label := "datang siang"
 	if hdType == "early" {
@@ -486,14 +514,22 @@ func (h *AttendanceHandler) ClearHalfDay(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, existing.EmployeeID) {
+		return
+	}
 
 	state := service.StateFromRecord(existing)
 	state.IsHalfDay = false
 	state.HalfDayLostMinutes = 0
 	state.HalfDayType = ""
+	state.ExcusedBy = ""
 
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
-	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID, existing.Date.Time)
+	// Anomalies plus any approved permit for the day (Izin / Dinas Luar).
+	if err := service.ComputeDay(ctx, h.queries, existing.EmployeeID, state, sched); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		return
+	}
 
 	note := textOrEmpty(existing.Note)
 	updated, err := h.persistCorrection(ctx, existing, state, note, "Membatalkan koreksi setengah hari")
@@ -541,6 +577,9 @@ func (h *AttendanceHandler) MarkPresentNoPunch(w http.ResponseWriter, r *http.Re
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, existing.EmployeeID) {
+		return
+	}
 
 	// Present but with no punches. Clear any punches and any half-day classification
 	// (a no-punch day is neither a late nor an early half day).
@@ -554,8 +593,12 @@ func (h *AttendanceHandler) MarkPresentNoPunch(w http.ResponseWriter, r *http.Re
 	state.HalfDayType = ""
 	state.HalfDayLostMinutes = 0
 
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
-	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID, existing.Date.Time)
+	// Anomalies plus any approved permit for the day (Izin / Dinas Luar).
+	if err := service.ComputeDay(ctx, h.queries, existing.EmployeeID, state, sched); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		return
+	}
 
 	updated, err := h.persistCorrection(ctx, existing, state, body.Note,
 		fmt.Sprintf("Koreksi hadir tanpa absen: %s", body.Note))
@@ -586,6 +629,9 @@ func (h *AttendanceHandler) ClearPresentNoPunch(w http.ResponseWriter, r *http.R
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kehadiran")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, existing.EmployeeID) {
+		return
+	}
 
 	state := service.StateFromRecord(existing)
 	state.Status = "absent"
@@ -594,8 +640,12 @@ func (h *AttendanceHandler) ClearPresentNoPunch(w http.ResponseWriter, r *http.R
 	state.CheckOut = nil
 	state.CheckOutSource = ""
 
-	sched := h.scheduleForEmployee(ctx, existing.EmployeeID)
-	service.ComputeAnomalies(state, sched, service.DayIsOver(existing.Date.Time, sched, time.Now()))
+	sched := h.scheduleForEmployee(ctx, existing.EmployeeID, existing.Date.Time)
+	// Anomalies plus any approved permit for the day (Izin / Dinas Luar).
+	if err := service.ComputeDay(ctx, h.queries, existing.EmployeeID, state, sched); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		return
+	}
 
 	note := textOrEmpty(existing.Note)
 	updated, err := h.persistCorrection(ctx, existing, state, note, "Membatalkan koreksi hadir tanpa absen (ditandai absen)")
@@ -658,18 +708,19 @@ func textOrEmpty(t pgtype.Text) string {
 }
 
 // scheduleForEmployee resolves the branch schedule for an employee, falling back
-// to the default schedule.
-func (h *AttendanceHandler) scheduleForEmployee(ctx context.Context, employeeID pgtype.UUID) service.Schedule {
+// to the default schedule, with the hours replaced by the employee's rostered
+// shift on that date when there is one.
+func (h *AttendanceHandler) scheduleForEmployee(ctx context.Context, employeeID pgtype.UUID, date time.Time) service.Schedule {
 	var branchID pgtype.UUID
 	row := h.pool.QueryRow(ctx, `SELECT branch_id FROM employees WHERE id = $1`, employeeID)
 	if err := row.Scan(&branchID); err != nil || !branchID.Valid {
-		return service.DefaultSchedule()
+		return service.ScheduleWithShift(ctx, h.pool, service.DefaultSchedule(), employeeID, date)
 	}
-	ws, err := h.queries.GetWorkScheduleByBranch(ctx, branchID)
-	if err != nil || ws == nil {
-		return service.DefaultSchedule()
+	sched := service.DefaultSchedule()
+	if ws, err := h.queries.GetWorkScheduleByBranch(ctx, branchID); err == nil && ws != nil {
+		sched = service.ScheduleFromRow(ws)
 	}
-	return service.ScheduleFromRow(ws)
+	return service.ScheduleWithShift(ctx, h.pool, sched, employeeID, date)
 }
 
 // ── Reconcile — POST /api/hr/attendance/reconcile?date=YYYY-MM-DD ─────────────

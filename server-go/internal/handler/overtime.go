@@ -40,6 +40,9 @@ func (h *OvertimeHandler) List(w http.ResponseWriter, r *http.Request) {
 	empIDStr := strings.TrimSpace(q.Get("employee_id"))
 	status := strings.TrimSpace(q.Get("status"))
 	branchIDStr := strings.TrimSpace(q.Get("branch_id"))
+	if b, ok := scopedBranchString(r); ok {
+		branchIDStr = b
+	}
 
 	type row struct {
 		ID                string  `json:"id"`
@@ -164,6 +167,9 @@ func (h *OvertimeHandler) Create(w http.ResponseWriter, r *http.Request) {
 	empID, err := parseUUID(body.EmployeeID)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "employee_id tidak valid")
+		return
+	}
+	if !requireEmployeeInScope(w, r, h.queries, pgtype.UUID{Bytes: empID, Valid: true}) {
 		return
 	}
 	if body.Hours <= 0 {
@@ -329,8 +335,24 @@ func (h *OvertimeHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		"hanya pengajuan berstatus menunggu yang dapat ditolak")
 }
 
-// Cancel — POST /api/hr/overtime/{id}/cancel (admin/manager)
+// Cancel — POST /api/hr/overtime/{id}/cancel (admin/manager, and a branch
+// operator for their own branch's requests)
 func (h *OvertimeHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	if _, scoped := scopedBranch(r); scoped {
+		id, err := parseUUID(chi.URLParam(r, "id"))
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "ID tidak valid")
+			return
+		}
+		req, err := h.queries.GetOvertimeRequestByID(r.Context(), pgtype.UUID{Bytes: id, Valid: true})
+		if err != nil {
+			respondError(w, http.StatusNotFound, "permintaan lembur tidak ditemukan")
+			return
+		}
+		if !requireEmployeeInScope(w, r, h.queries, req.EmployeeID) {
+			return
+		}
+	}
 	h.decide(w, r, func(ctx context.Context, id, decidedBy pgtype.UUID, note pgtype.Text) (any, pgtype.UUID, error) {
 		row, err := h.queries.CancelOvertimeRequest(ctx, &db.CancelOvertimeRequestParams{ID: id, DecidedBy: decidedBy, DecisionNote: note})
 		if err != nil {

@@ -5,8 +5,10 @@ import {
   setAttendanceHalfDay, clearAttendanceHalfDay,
   markAttendanceNoPunch, clearAttendanceNoPunch,
 } from '../../api';
+import { todayWIB, wibHHMM, wibRFC3339 } from '../../time';
 import { StatusChip, SourceBadge, fmtTime } from './AttendanceDashboard';
 import { ManualViolationModal } from './PerformanceDashboard';
+import { isBranchOperator } from '../../roles';
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
@@ -16,30 +18,18 @@ function toLocalISO(d) {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
-const todayStr = () => toLocalISO(new Date());
+const todayStr = () => todayWIB();
 
 function fmtDate(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-// Builds an RFC3339 timestamp from a date (YYYY-MM-DD) + time (HH:MM) using the
-// browser's local UTC offset, so the server reads the wall-clock entry hour the
-// manager intended (not a UTC-shifted one).
-function toRFC3339(dateIso, timeHHMM) {
-  const off = -new Date().getTimezoneOffset(); // minutes east of UTC
-  const sign = off >= 0 ? '+' : '-';
-  const abs = Math.abs(off);
-  const oh = String(Math.floor(abs / 60)).padStart(2, '0');
-  const om = String(abs % 60).padStart(2, '0');
-  return `${dateIso}T${timeHHMM}:00${sign}${oh}:${om}`;
-}
+// The manager types a WIB wall-clock time (the branch clock), whatever zone the
+// browser is in, so it is sent with an explicit +07:00 offset.
+const toRFC3339 = (dateIso, timeHHMM) => wibRFC3339(dateIso, timeHHMM);
 
-// HH:MM in local time from a stored timestamp, for pre-filling a time input.
-function timeInputValue(ts, fallback = '08:00') {
-  if (!ts) return fallback;
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
+// HH:MM on the WIB clock from a stored timestamp, for pre-filling a time input.
+const timeInputValue = (ts, fallback = '08:00') => wibHHMM(ts, fallback);
 
 const fmtHours = (mins) => (mins / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 });
 
@@ -184,11 +174,14 @@ const labelStyle = { display: 'block', fontSize: '0.8rem', fontWeight: 600, colo
 // ── main page ───────────────────────────────────────────────────────────────
 
 export default function AttendanceCorrections() {
-  const monthAgo = () => { const d = new Date(); d.setDate(d.getDate() - 30); return toLocalISO(d); };
+  const monthAgo = () => { const d = new Date(todayWIB() + 'T00:00:00'); d.setDate(d.getDate() - 30); return toLocalISO(d); };
 
   const [dateFrom, setDateFrom]   = useState(monthAgo());
   const [dateTo, setDateTo]       = useState(todayStr());
   const [branchId, setBranchId]   = useState('');
+  // Branch operators correct attendance but do not reach employee profiles or
+  // performance penalties, and their list is already one branch.
+  const operator = isBranchOperator();
   const [search, setSearch]       = useState('');
   const [statusFilter, setStatusFilter] = useState(''); // '', 'present', 'absent'
   const [halfDayOnly, setHalfDayOnly] = useState(false);
@@ -272,10 +265,12 @@ export default function AttendanceCorrections() {
             <label style={{ fontSize: '0.75rem', color: '#888', display: 'block' }}>Sampai</label>
             <input type="date" value={dateTo} min={dateFrom} max={todayStr()} onChange={e => setDateTo(e.target.value)} />
           </div>
-          <select value={branchId} onChange={e => setBranchId(e.target.value)} style={{ fontSize: '0.85rem' }}>
-            <option value="">Semua Cabang</option>
-            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
+          {!operator && (
+            <select value={branchId} onChange={e => setBranchId(e.target.value)} style={{ fontSize: '0.85rem' }}>
+              <option value="">Semua Cabang</option>
+              {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          )}
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ fontSize: '0.85rem' }}>
             <option value="">Semua Status</option>
             <option value="present">Hadir</option>
@@ -322,9 +317,13 @@ export default function AttendanceCorrections() {
             ) : rows.map(r => (
               <tr key={r.id} style={{ borderTop: '1px solid #f0f0f0', background: r.is_half_day ? '#fffbe9' : '#fff' }}>
                 <td style={tdStyle}>
-                  <Link to={`/hr/employees/${r.employee_id}`} style={{ fontWeight: 600, color: '#1a1a2e', textDecoration: 'none' }}>
-                    {r.full_name}
-                  </Link>
+                  {operator ? (
+                    <span style={{ fontWeight: 600, color: '#1a1a2e' }}>{r.full_name}</span>
+                  ) : (
+                    <Link to={`/hr/employees/${r.employee_id}`} style={{ fontWeight: 600, color: '#1a1a2e', textDecoration: 'none' }}>
+                      {r.full_name}
+                    </Link>
+                  )}
                   <div style={{ fontSize: '0.72rem', color: '#999', fontFamily: 'monospace' }}>{r.employee_code}</div>
                 </td>
                 <td style={tdStyle}>{fmtDate(r.date)}</td>
@@ -345,6 +344,11 @@ export default function AttendanceCorrections() {
                   ) : r.is_no_punch ? (
                     <span style={{ background: '#ede7f6', color: '#5e35b1', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.76rem' }}>
                       Hadir Tanpa Absen
+                    </span>
+                  ) : r.is_leave_punch ? (
+                    <span title="Karyawan absen di hari cuti yang sudah disetujui. Status tetap cuti; tinjau di Penyesuaian Evaluasi."
+                      style={{ background: '#e3f2fd', color: '#1565c0', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.76rem' }}>
+                      Absen saat Cuti
                     </span>
                   ) : r.is_late ? (
                     <span style={{ background: '#fdecea', color: '#c62828', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.76rem' }}>
@@ -373,9 +377,11 @@ export default function AttendanceCorrections() {
                         Tandai Setengah Hari
                       </button>
                     ) : null}
-                    <button className="btn btn-secondary btn-sm" onClick={() => setPenaltyRec(r)}>
-                      + Pelanggaran
-                    </button>
+                    {!operator && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => setPenaltyRec(r)}>
+                        + Pelanggaran
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>

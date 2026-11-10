@@ -300,6 +300,7 @@ WHERE ($1::text = '' OR k.status = $1)
   AND ($3::text = '' OR lower(e.full_name) LIKE '%' || lower($3) || '%'
        OR lower(e.employee_code) LIKE '%' || lower($3) || '%'
        OR lower(k.kasbon_number) LIKE '%' || lower($3) || '%')
+  AND ($4::uuid IS NULL OR e.branch_id = $4)
 ORDER BY k.created_at DESC
 `
 
@@ -307,6 +308,7 @@ type ListKasbonsParams struct {
 	Status     string      `json:"status"`
 	EmployeeID pgtype.UUID `json:"employee_id"`
 	Q          string      `json:"q"`
+	BranchID   pgtype.UUID `json:"branch_id"`
 }
 
 type ListKasbonsRow struct {
@@ -334,7 +336,12 @@ type ListKasbonsRow struct {
 }
 
 func (q *Queries) ListKasbons(ctx context.Context, arg *ListKasbonsParams) ([]*ListKasbonsRow, error) {
-	rows, err := q.db.Query(ctx, listKasbons, arg.Status, arg.EmployeeID, arg.Q)
+	rows, err := q.db.Query(ctx, listKasbons,
+		arg.Status,
+		arg.EmployeeID,
+		arg.Q,
+		arg.BranchID,
+	)
 	if err != nil {
 		return nil, err
 	}

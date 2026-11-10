@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { getAccounts, createAccount, updateAccount, deleteAccount, getBranches } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { fmtInstantDate } from '../time';
 // The chart of accounts, readable one branch at a time.
 //
 // Two different things are true of a branch and an account, and the page keeps
@@ -318,7 +319,7 @@ export default function Accounts() {
 
   const downloadExcel = () => {
     const wb = XLSX.utils.book_new();
-    const today = new Date().toLocaleDateString('id-ID');
+    const today = fmtInstantDate(new Date(), { day: 'numeric', month: 'numeric', year: 'numeric' });
 
     // Helper: flatten accounts for a type recursively
     const flattenType = (type) => {

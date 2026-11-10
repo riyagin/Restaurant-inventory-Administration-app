@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getHRSettings, updateHRSettings, uploadHRLogo } from '../../api';
+import {
+  getHRSettings, updateHRSettings, uploadHRLogo,
+  getAttendanceReviewSettings, updateAttendanceReviewSettings,
+} from '../../api';
 
 const SERVER = 'http://localhost:5000';
 
@@ -63,6 +66,8 @@ export default function HRSettings() {
   const fileRef = useRef(null);
 
   const set = (k) => (e) => setS((v) => ({ ...v, [k]: e.target.value }));
+  // Review of days far outside the shift (separate endpoint, same save button).
+  const [review, setReview] = useState({ review_late_minutes: 120, review_early_minutes: 120, allow_backdated_permission: true });
 
   const load = async () => {
     setLoading(true);
@@ -73,6 +78,8 @@ export default function HRSettings() {
         ...Object.fromEntries(Object.keys(emptySettings).map((k) => [k, data[k] ?? emptySettings[k]])),
       });
       setLogoPath(data.logo_path?.String ?? data.logo_path ?? '');
+      const rv = await getAttendanceReviewSettings().catch(() => null);
+      if (rv?.data) setReview(rv.data);
     } catch {
       setError('Gagal memuat pengaturan');
     } finally {
@@ -95,6 +102,11 @@ export default function HRSettings() {
         absence_grace_days: Math.max(0, Number(s.absence_grace_days) || 0),
         doc_number_counter: Math.max(1, Number(s.doc_number_counter) || 1),
         doc_probation_months: Math.min(3, Math.max(0, Number(s.doc_probation_months) || 0)),
+      });
+      await updateAttendanceReviewSettings({
+        review_late_minutes: Math.max(0, Number(review.review_late_minutes) || 0),
+        review_early_minutes: Math.max(0, Number(review.review_early_minutes) || 0),
+        allow_backdated_permission: !!review.allow_backdated_permission,
       });
       setMsg('Pengaturan tersimpan.');
     } catch (err) {
@@ -254,6 +266,30 @@ export default function HRSettings() {
           hint="Jumlah hari absen tanpa izin yang tidak mengurangi skor evaluasi tiap bulan. Absen melebihi angka ini baru menurunkan skor.">
           <input type="number" min={0} value={s.absence_grace_days} onChange={set('absence_grace_days')} style={{ maxWidth: 140 }} />
         </Field>
+      </div>
+
+      <div className="card" style={{ marginTop: 20 }}>
+        <h2 style={{ margin: '0 0 4px', fontSize: 16 }}>Izin &amp; Peninjauan Absensi</h2>
+        <p style={{ margin: '0 0 16px', fontSize: 13, color: '#667' }}>
+          Hari dengan datang sangat terlambat atau pulang sangat awal tanpa izin muncul di
+          Penyesuaian Evaluasi untuk ditinjau manajer: diberi izin susulan (menjadi setengah hari)
+          atau tetap dihitung terlambat/pulang awal.
+        </p>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <Field label="Tinjau jika terlambat ≥ (menit)" hint="Default 120 menit (2 jam).">
+            <input type="number" min={0} max={1440} value={review.review_late_minutes}
+              onChange={(e) => setReview((v) => ({ ...v, review_late_minutes: e.target.value }))} style={{ maxWidth: 140 }} />
+          </Field>
+          <Field label="Tinjau jika pulang awal ≥ (menit)" hint="Default 120 menit (2 jam).">
+            <input type="number" min={0} max={1440} value={review.review_early_minutes}
+              onChange={(e) => setReview((v) => ({ ...v, review_early_minutes: e.target.value }))} style={{ maxWidth: 140 }} />
+          </Field>
+        </div>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, marginTop: 4 }}>
+          <input type="checkbox" checked={!!review.allow_backdated_permission}
+            onChange={(e) => setReview((v) => ({ ...v, allow_backdated_permission: e.target.checked }))} />
+          Izinkan izin susulan (untuk tanggal yang sudah lewat, ditandai MUNDUR TANGGAL)
+        </label>
       </div>
 
       {/* One save for every section above — the page is long enough that a

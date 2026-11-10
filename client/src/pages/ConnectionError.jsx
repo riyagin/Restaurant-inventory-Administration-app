@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { checkHealth, API_BASE_URL } from '../api';
 import { reportConnectionUp } from '../connection';
 
+import { fmtTime as fmtWIBTime } from '../time';
 // Full-screen overlay shown whenever the backend is unreachable. Rendered above
 // the app rather than replacing it, so whatever the user had open is still there
 // once the connection comes back.
@@ -30,8 +31,7 @@ const KIND_COPY = {
 // is already struggling, then holds at 30s.
 const BACKOFF = [5, 10, 15, 30];
 
-const fmtTime = (d) =>
-  d ? new Date(d).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : null;
+const fmtTime = (d) => fmtWIBTime(d, { seconds: true });
 
 export default function ConnectionError({ kind, detail, since }) {
   const copy = KIND_COPY[kind] || KIND_COPY.network;

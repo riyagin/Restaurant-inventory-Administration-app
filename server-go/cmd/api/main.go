@@ -50,6 +50,13 @@ func formatUptime(d time.Duration) string {
 }
 
 func main() {
+	// The business runs on WIB. Timestamps are stored as timestamptz instants, so
+	// this changes nothing that is stored; it makes every wall-clock reading in the
+	// process (pgx decodes timestamptz into time.Local, and time.Now() feeds the
+	// business date of invoices, stock moves, leave, kasbon…) follow the WIB day
+	// even when the host — typically a VPS — runs on UTC.
+	time.Local = service.WIB
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
@@ -120,7 +127,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				yesterday := time.Now().AddDate(0, 0, -1)
+				yesterday := service.TodayWIB().AddDate(0, 0, -1)
 				bg := context.Background()
 				if _, err := service.ReconcileAbsent(bg, queries, yesterday); err != nil {
 					log.Printf("attendance reconcile error: %v", err)
@@ -134,6 +141,40 @@ func main() {
 				} else {
 					log.Printf("performance evaluation completed for %s", yesterday.Format("2006-01-02"))
 				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Photo purge. Attendance devices send a face photo at enrollment and with
+	// the first check-in of each day. Per employee, photos older than two days
+	// are removed and at most six are kept, but the latest photo is never
+	// removed, so the HR profile (including a resigned employee's) keeps one.
+	// It also removes the per-check-in attendance photos older builds stored,
+	// after letting anyone without a face photo adopt their latest one.
+	// Runs at startup and then hourly so a restart never delays it a day.
+	go func() {
+		purge := func() {
+			if n, err := service.CleanupAttendancePhotos(context.Background(), pool, cfg.UploadsDir); err != nil {
+				log.Printf("attendance photo cleanup error: %v", err)
+			} else if n > 0 {
+				log.Printf("attendance photo cleanup: removed %d file(s)", n)
+			}
+			n, err := service.PurgeOldFacePhotos(context.Background(), pool, cfg.UploadsDir, time.Now())
+			if err != nil {
+				log.Printf("face photo purge error: %v", err)
+			} else if n > 0 {
+				log.Printf("face photo purge: removed %d photo(s)", n)
+			}
+		}
+		purge()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				purge()
 			case <-ctx.Done():
 				return
 			}
@@ -196,9 +237,12 @@ func main() {
 	// starts. Runs at startup to catch up any month a stopped server missed.
 	service.NewAmortizationPoster(pool, queries).Start(ctx)
 	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
+	attendancePermissionHandler := handler.NewAttendancePermissionHandler(pool, queries)
+	shiftHandler := handler.NewShiftHandler(pool, queries)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 	thrHandler := handler.NewThrHandler(pool, queries)
+	benefitFundHandler := handler.NewBenefitFundHandler(pool, queries)
 	thrHandler.SetUploadsDir(cfg.UploadsDir)
 	hrDocumentsHandler := handler.NewHRDocumentsHandler(pool, queries)
 	hrDocumentsHandler.SetUploadsDir(cfg.UploadsDir)
@@ -263,6 +307,9 @@ func main() {
 		// its screens read). Applied once here rather than per-route, because most
 		// routes below are deliberately open to every authenticated user.
 		r.Use(appmiddleware.RestrictHRRole)
+		// Same idea for branch_operator, which is additionally confined to one
+		// branch: handlers read it via middleware.BranchScopeFromCtx.
+		r.Use(appmiddleware.RestrictBranchOperator(queries))
 		r.Post("/api/auth/logout", authHandler.Logout)
 
 		// Users — all authenticated
@@ -527,6 +574,7 @@ func main() {
 			r.Delete("/api/hr/employees/{id}", hrEmployeesHandler.Delete)
 			r.Post("/api/hr/employees/{id}/photo", hrEmployeesHandler.UploadPhoto)
 			r.Delete("/api/hr/employees/{id}/photo", hrEmployeesHandler.DeletePhoto)
+			r.Delete("/api/hr/employees/{id}/face", hrEmployeesHandler.DeleteFaceData)
 			r.Post("/api/hr/positions", hrEmployeesHandler.CreatePosition)
 			r.Put("/api/hr/positions/{id}", hrEmployeesHandler.UpdatePosition)
 			r.Delete("/api/hr/positions/{id}", hrEmployeesHandler.DeletePosition)
@@ -630,6 +678,9 @@ func main() {
 			r.Post("/api/hr/performance/policies-import", performanceHandler.ImportPolicies)
 			// Scores & breakdown
 			r.Get("/api/hr/performance/scores", performanceHandler.ListScores)
+			// Penyesuaian Evaluasi: preview a month's re-evaluation, then apply it
+			r.Get("/api/hr/performance/adjustments", performanceHandler.AdjustmentPreview)
+			r.Post("/api/hr/performance/adjustments/apply", performanceHandler.AdjustmentApply)
 			r.Get("/api/hr/employees/{id}/performance", performanceHandler.EmployeePerformance)
 			// Violations
 			r.Post("/api/hr/performance/violations", performanceHandler.CreateManualViolation)
@@ -669,6 +720,25 @@ func main() {
 			r.Post("/api/hr/leave-requests/bulk-reject", leaveHandler.BulkRejectLeaveRequests)
 		})
 
+		// HR Shifts — per-branch shift definitions and the daily roster edited
+		// from manpower planning. Today's roster changes by non-managers queue
+		// as change requests (see handler/shifts.go for the date rule).
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireHRAccess)
+			r.Get("/api/hr/shifts", shiftHandler.ListShifts)
+			r.Post("/api/hr/shifts", shiftHandler.CreateShift)
+			r.Put("/api/hr/shifts/{id}", shiftHandler.UpdateShift)
+			r.Delete("/api/hr/shifts/{id}", shiftHandler.DeleteShift)
+			r.Put("/api/hr/shift-assignments", shiftHandler.SaveShiftAssignments)
+			r.Get("/api/hr/shift-change-requests", shiftHandler.ListShiftChangeRequests)
+			r.Put("/api/hr/employees/{id}/shift-profile", shiftHandler.UpdateEmployeeShiftProfile)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/shift-change-requests/{id}/approve", shiftHandler.ApproveShiftChange)
+			r.Post("/api/hr/shift-change-requests/{id}/reject", shiftHandler.RejectShiftChange)
+		})
+
 		// HR Kasbon (cash advance) — list and detail viewable by all authenticated.
 		r.Get("/api/hr/kasbons", kasbonHandler.List)
 		r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
@@ -680,6 +750,22 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
 			r.Post("/api/hr/kasbons/{id}/cancel", kasbonHandler.Cancel)
 		})
+		// Dana Kesejahteraan Karyawan (health benefit + pension fund, migration 085).
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireHRAccess)
+			r.Get("/api/hr/benefit-fund/summary", benefitFundHandler.Summary)
+			r.Get("/api/hr/benefit-fund/employees/{id}", benefitFundHandler.EmployeeDetail)
+			r.Get("/api/hr/benefit-fund/claims", benefitFundHandler.ListClaims)
+			r.Get("/api/hr/benefit-fund/claims/preview", benefitFundHandler.PreviewClaim)
+			r.Post("/api/hr/benefit-fund/claims", benefitFundHandler.CreateClaim)
+			r.Post("/api/hr/benefit-fund/claims/{id}/cancel", benefitFundHandler.CancelClaim)
+		})
+		// Paying out a pension balance is a large one-off disbursement: manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/benefit-fund/employees/{id}/payout", benefitFundHandler.Payout)
+		})
+
 		// HR Kasbon approval / rejection — manager only.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireManager)
@@ -702,6 +788,24 @@ func main() {
 			r.Post("/api/hr/overtime/{id}/reject", overtimeHandler.Reject)
 		})
 
+		// Attendance permits (Izin Masuk Siang / Izin Pulang Awal / Dinas Luar) and
+		// the review of flagged days — read/create/cancel: HR access.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireHRAccess)
+			r.Get("/api/hr/attendance-permissions", attendancePermissionHandler.List)
+			r.Post("/api/hr/attendance-permissions", attendancePermissionHandler.Create)
+			r.Post("/api/hr/attendance-permissions/{id}/cancel", attendancePermissionHandler.Cancel)
+			r.Get("/api/hr/attendance/review-settings", attendancePermissionHandler.GetReviewSettings)
+			r.Put("/api/hr/attendance/review-settings", attendancePermissionHandler.UpdateReviewSettings)
+			r.Post("/api/hr/attendance/{id}/review", attendancePermissionHandler.SetReviewed)
+		})
+		// Attendance permit approval / rejection — manager only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/attendance-permissions/{id}/approve", attendancePermissionHandler.Approve)
+			r.Post("/api/hr/attendance-permissions/{id}/reject", attendancePermissionHandler.Reject)
+		})
+
 		// HR Payroll (penggajian).
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireHRAccess)
@@ -720,6 +824,8 @@ func main() {
 			r.Get("/api/hr/payroll/lines/{id}/review", payrollHandler.GetLineReview)
 			r.Post("/api/hr/payroll/lines/{id}/review", payrollHandler.ReviewLine)
 			r.Post("/api/hr/payroll/lines/{id}/unreview", payrollHandler.UnreviewLine)
+			r.Get("/api/hr/payroll/lines/{id}/attendance-cuts", payrollHandler.GetLineAttendanceCuts)
+			r.Post("/api/hr/payroll/attendance-cut/simulate", payrollHandler.SimulateAttendanceCut)
 
 			// Payslips (slip gaji) — PDF single + ZIP batch. Reject open periods (409).
 			r.Get("/api/hr/payroll/lines/{id}/payslip", payslipHandler.DownloadPayslip)

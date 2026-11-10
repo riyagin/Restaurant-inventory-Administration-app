@@ -1,5 +1,6 @@
 import { createLeaveRequest } from '../../api';
 
+import { todayWIB } from '../../time';
 // Shared leave rules for every form that creates a leave request (Cuti,
 // Pengajuan, Perencanaan Tenaga Kerja). The server is authoritative for both
 // rules; this module only warns early and previews.
@@ -13,10 +14,10 @@ import { createLeaveRequest } from '../../api';
 
 export const WEEKEND_COST = 2;
 
-// Local (not UTC) date: before 07:00 WIB, toISOString() still reports yesterday.
+// Today on the WIB calendar, whatever zone the browser is in (toISOString()
+// would report yesterday before 07:00 WIB; the browser's own date is wrong off WIB).
 export function todayLocal() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return todayWIB();
 }
 
 export const isBackdated = (startDate) => !!startDate && startDate < todayLocal();

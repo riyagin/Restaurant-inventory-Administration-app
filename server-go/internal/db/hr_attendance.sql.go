@@ -140,7 +140,9 @@ const getAttendanceRecordByEmployeeDate = `-- name: GetAttendanceRecordByEmploye
 
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note
+       is_early_leave, early_leave_minutes, is_missing_checkout, note,
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+       is_leave_punch, excused_by, review_resolved
 FROM attendance_records
 WHERE employee_id = $1 AND date = $2
 `
@@ -171,6 +173,14 @@ func (q *Queries) GetAttendanceRecordByEmployeeDate(ctx context.Context, arg *Ge
 		&i.EarlyLeaveMinutes,
 		&i.IsMissingCheckout,
 		&i.Note,
+		&i.IsHalfDay,
+		&i.HalfDayLostMinutes,
+		&i.HalfDayType,
+		&i.IsMissingCheckin,
+		&i.IsNoPunch,
+		&i.IsLeavePunch,
+		&i.ExcusedBy,
+		&i.ReviewResolved,
 	)
 	return &i, err
 }
@@ -179,7 +189,8 @@ const getAttendanceRecordByID = `-- name: GetAttendanceRecordByID :one
 SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
        check_in_photo_path, device_id, status, is_late, late_minutes,
        is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
+       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+       is_leave_punch, excused_by, review_resolved
 FROM attendance_records
 WHERE id = $1
 `
@@ -209,6 +220,9 @@ func (q *Queries) GetAttendanceRecordByID(ctx context.Context, id pgtype.UUID) (
 		&i.HalfDayType,
 		&i.IsMissingCheckin,
 		&i.IsNoPunch,
+		&i.IsLeavePunch,
+		&i.ExcusedBy,
+		&i.ReviewResolved,
 	)
 	return &i, err
 }
@@ -285,36 +299,45 @@ const insertAttendanceRecord = `-- name: InsertAttendanceRecord :one
 INSERT INTO attendance_records (
     id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
     check_in_photo_path, device_id, status, is_late, late_minutes,
-    is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch
+    is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch,
+    is_leave_punch, is_half_day, half_day_lost_minutes, half_day_type, excused_by
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
-    $12, $13, $14, $15, $16, $17
+    $12, $13, $14, $15, $16, $17, $18,
+    $19, $20, $21, $22
 )
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
-          is_early_leave, early_leave_minutes, is_missing_checkout, note, is_missing_checkin, is_no_punch
+          is_early_leave, early_leave_minutes, is_missing_checkout, note,
+          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+          is_leave_punch, excused_by, review_resolved
 `
 
 type InsertAttendanceRecordParams struct {
-	EmployeeID        pgtype.UUID        `json:"employee_id"`
-	Date              pgtype.Date        `json:"date"`
-	CheckIn           pgtype.Timestamptz `json:"check_in"`
-	CheckOut          pgtype.Timestamptz `json:"check_out"`
-	CheckInSource     pgtype.Text        `json:"check_in_source"`
-	CheckOutSource    pgtype.Text        `json:"check_out_source"`
-	CheckInPhotoPath  pgtype.Text        `json:"check_in_photo_path"`
-	DeviceID          pgtype.UUID        `json:"device_id"`
-	Status            string             `json:"status"`
-	IsLate            bool               `json:"is_late"`
-	LateMinutes       int32              `json:"late_minutes"`
-	IsEarlyLeave      bool               `json:"is_early_leave"`
-	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
-	IsMissingCheckout bool               `json:"is_missing_checkout"`
-	Note              pgtype.Text        `json:"note"`
-	IsMissingCheckin  bool               `json:"is_missing_checkin"`
-	IsNoPunch         bool               `json:"is_no_punch"`
+	EmployeeID         pgtype.UUID        `json:"employee_id"`
+	Date               pgtype.Date        `json:"date"`
+	CheckIn            pgtype.Timestamptz `json:"check_in"`
+	CheckOut           pgtype.Timestamptz `json:"check_out"`
+	CheckInSource      pgtype.Text        `json:"check_in_source"`
+	CheckOutSource     pgtype.Text        `json:"check_out_source"`
+	CheckInPhotoPath   pgtype.Text        `json:"check_in_photo_path"`
+	DeviceID           pgtype.UUID        `json:"device_id"`
+	Status             string             `json:"status"`
+	IsLate             bool               `json:"is_late"`
+	LateMinutes        int32              `json:"late_minutes"`
+	IsEarlyLeave       bool               `json:"is_early_leave"`
+	EarlyLeaveMinutes  int32              `json:"early_leave_minutes"`
+	IsMissingCheckout  bool               `json:"is_missing_checkout"`
+	Note               pgtype.Text        `json:"note"`
+	IsMissingCheckin   bool               `json:"is_missing_checkin"`
+	IsNoPunch          bool               `json:"is_no_punch"`
+	IsLeavePunch       bool               `json:"is_leave_punch"`
+	IsHalfDay          bool               `json:"is_half_day"`
+	HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
+	HalfDayType        pgtype.Text        `json:"half_day_type"`
+	ExcusedBy          pgtype.Text        `json:"excused_by"`
 }
 
 func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttendanceRecordParams) (*AttendanceRecord, error) {
@@ -336,6 +359,11 @@ func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttenda
 		arg.Note,
 		arg.IsMissingCheckin,
 		arg.IsNoPunch,
+		arg.IsLeavePunch,
+		arg.IsHalfDay,
+		arg.HalfDayLostMinutes,
+		arg.HalfDayType,
+		arg.ExcusedBy,
 	)
 	var i AttendanceRecord
 	err := row.Scan(
@@ -355,8 +383,14 @@ func (q *Queries) InsertAttendanceRecord(ctx context.Context, arg *InsertAttenda
 		&i.EarlyLeaveMinutes,
 		&i.IsMissingCheckout,
 		&i.Note,
+		&i.IsHalfDay,
+		&i.HalfDayLostMinutes,
+		&i.HalfDayType,
 		&i.IsMissingCheckin,
 		&i.IsNoPunch,
+		&i.IsLeavePunch,
+		&i.ExcusedBy,
+		&i.ReviewResolved,
 	)
 	return &i, err
 }
@@ -697,12 +731,15 @@ UPDATE attendance_records SET
     half_day_lost_minutes = $15,
     half_day_type = $16,
     is_missing_checkin = $17,
-    is_no_punch = $18
-WHERE id = $19
+    is_no_punch = $18,
+    is_leave_punch = $19,
+    excused_by = $20
+WHERE id = $21
 RETURNING id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
           check_in_photo_path, device_id, status, is_late, late_minutes,
           is_early_leave, early_leave_minutes, is_missing_checkout, note,
-          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
+          is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch,
+          is_leave_punch, excused_by, review_resolved
 `
 
 type UpdateAttendanceRecordParams struct {
@@ -724,6 +761,8 @@ type UpdateAttendanceRecordParams struct {
 	HalfDayType        pgtype.Text        `json:"half_day_type"`
 	IsMissingCheckin   bool               `json:"is_missing_checkin"`
 	IsNoPunch          bool               `json:"is_no_punch"`
+	IsLeavePunch       bool               `json:"is_leave_punch"`
+	ExcusedBy          pgtype.Text        `json:"excused_by"`
 	ID                 pgtype.UUID        `json:"id"`
 }
 
@@ -747,6 +786,8 @@ func (q *Queries) UpdateAttendanceRecord(ctx context.Context, arg *UpdateAttenda
 		arg.HalfDayType,
 		arg.IsMissingCheckin,
 		arg.IsNoPunch,
+		arg.IsLeavePunch,
+		arg.ExcusedBy,
 		arg.ID,
 	)
 	var i AttendanceRecord
@@ -772,6 +813,9 @@ func (q *Queries) UpdateAttendanceRecord(ctx context.Context, arg *UpdateAttenda
 		&i.HalfDayType,
 		&i.IsMissingCheckin,
 		&i.IsNoPunch,
+		&i.IsLeavePunch,
+		&i.ExcusedBy,
+		&i.ReviewResolved,
 	)
 	return &i, err
 }

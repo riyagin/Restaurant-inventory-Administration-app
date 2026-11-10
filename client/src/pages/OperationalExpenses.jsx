@@ -10,6 +10,7 @@ import { isAdminRole } from '../roles';
 import Icon from '../components/Icon';
 import { OP_KINDS } from './operationalKinds';
 
+import { todayWIB } from '../time';
 // Beban Operasional — the standing bills of keeping a branch open.
 //
 // Listrik, air, sewa, iuran keamanan. Not goods, so no items, no units, no
@@ -35,7 +36,7 @@ const addMonthsYm = (ym, n) => {
   const d = new Date(y, m - 1 + n, 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 const monthStart = () => today().slice(0, 8) + '01';
 
 export default function OperationalExpenses() {

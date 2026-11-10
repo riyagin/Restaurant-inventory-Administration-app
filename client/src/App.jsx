@@ -66,6 +66,7 @@ import AttendanceCorrections from './pages/hr/AttendanceCorrections';
 import FaceDashboard from './pages/hr/FaceDashboard';
 import FaceUnregistered from './pages/hr/FaceUnregistered';
 import PerformanceDashboard from './pages/hr/PerformanceDashboard';
+import EvaluationAdjustments from './pages/hr/EvaluationAdjustments';
 import PerformancePolicies from './pages/hr/PerformancePolicies';
 import Requests from './pages/hr/Requests';
 import KasbonDashboard from './pages/hr/KasbonDashboard';
@@ -73,7 +74,9 @@ import KasbonForm from './pages/hr/KasbonForm';
 import KasbonDetail from './pages/hr/KasbonDetail';
 import PayrollDashboard from './pages/hr/PayrollDashboard';
 import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
+import AttendanceCutSimulator from './pages/hr/AttendanceCutSimulator';
 import ThrDashboard from './pages/hr/ThrDashboard';
+import BenefitFund from './pages/hr/BenefitFund';
 import ThrRunDetail from './pages/hr/ThrRunDetail';
 import Approvals from './pages/hr/Approvals';
 import HRSettings from './pages/hr/HRSettings';
@@ -81,10 +84,12 @@ import ManpowerPlanning from './pages/hr/ManpowerPlanning';
 import DocumentGenerator from './pages/hr/DocumentGenerator';
 import OnboardingWizard from './pages/hr/OnboardingWizard';
 import HRDashboard from './pages/hr/HRDashboard';
+import BranchOperatorDashboard from './pages/hr/BranchOperatorDashboard';
+import { BRANCH_OPERATOR_TILES } from './pages/hr/branchOperator';
 import StaffDashboard from './pages/StaffDashboard';
 import StaffKPI from './pages/hr/StaffKPI';
 import NotificationBell from './components/NotificationBell';
-import { getUser, canUseHR, canViewReports, canUseCore, isHROnly, isStaffDesk, isSuperuser } from './roles';
+import { getUser, canUseHR, canViewReports, canUseCore, isHROnly, isStaffDesk, isSuperuser, isBranchOperator, canUseBranchHR, operatorBranch } from './roles';
 import './App.css';
 
 function RequireAuth({ children }) {
@@ -105,6 +110,31 @@ function RequireReports({ children }) {
 
 function RequireCore({ children }) {
   return canUseCore() ? children : <Navigate to="/" replace />;
+}
+
+// The HR screens a branch operator shares with the HR desk.
+function RequireBranchHR({ children }) {
+  return canUseBranchHR() ? children : <Navigate to="/" replace />;
+}
+
+// Everywhere a branch operator may go. Several HR routes carry no guard at all
+// (they are open to every HR-capable role), so rather than guarding each one
+// against this role, it is confined here once — the same closed-by-default
+// shape as middleware.RestrictBranchOperator on the server.
+const BRANCH_OPERATOR_PATHS = [
+  // Not /profile: it saves through PUT /api/users/:id, which this role cannot call.
+  /^\/$/,
+  /^\/hr\/attendance$/, /^\/hr\/attendance\/corrections$/,
+  /^\/hr\/(requests|leave|overtime)$/,
+  /^\/hr\/kasbon(\/.*)?$/,
+];
+
+function ConfineBranchOperator({ children }) {
+  const { pathname } = useLocation();
+  if (isBranchOperator() && !BRANCH_OPERATOR_PATHS.some((re) => re.test(pathname))) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
 }
 
 function NavDropdown({ label, paths, children }) {
@@ -160,64 +190,68 @@ function MobileSection({ label, paths, children }) {
 // ── Navigation model ────────────────────────────────────────────────────────
 // One description of the menu, rendered twice (desktop dropdowns and the mobile
 // drawer) so the two can't drift apart. A group is { label, links }, a link is
-// [path, label], 'divider' inserts a rule, and { heading } labels a section
-// inside a long menu.
+// [path, label], 'divider' inserts a rule, { heading } labels a stretch of a
+// long menu, and { section, links } is a collapsible section inside it.
 const DIV = 'divider';
-const head = (text) => ({ heading: text });
 
-// The HR module, grouped by **how often you touch it** rather than by subsystem.
-// It had grown to twenty-odd flat entries, which is unscannable; cadence is the
-// axis that actually predicts what someone is looking for when they open the
-// menu. The HR-only role gets these four as its whole navbar.
+// A collapsible section inside a dropdown: { section, links }.
+const sub = (label, links) => ({ section: label, links });
+
+// The HR module, grouped by **function**: each section is one subsystem, so
+// whoever is looking for "the attendance thing" or "the policy thing" opens one
+// section and finds everything for it there. The HR-only role gets these
+// sections as its whole navbar; everyone else gets them as collapsible
+// sections inside a single HR dropdown.
 const HR_GROUPS = [
   { label: 'Karyawan', links: [
-    ['/hr/employees', 'Karyawan'],
+    ['/hr/employees', 'Data Karyawan'],
     ['/hr/onboarding', 'Onboarding Karyawan'],
     ['/hr/documents', 'Dokumen HR'],
     ['/hr/manpower', 'Rencana Tenaga Kerja'],
+    DIV,
+    ['/hr/import', 'Impor Karyawan'],
   ] },
-  // Every working day.
-  { label: 'Harian', links: [
-    ['/hr/attendance', 'Absensi'],
+  { label: 'Absensi', links: [
+    ['/hr/attendance', 'Dasbor Absensi'],
     ['/hr/attendance/corrections', 'Koreksi Kehadiran'],
-    DIV,
-    ['/hr/requests', 'Pengajuan'],
-    ['/hr/approvals', 'Persetujuan'],
-    ['/hr/kasbon', 'Kasbon'],
-  ] },
-  // Once a month, or once a year.
-  { label: 'Berkala', links: [
-    ['/hr/payroll', 'Penggajian'],
-    ['/hr/thr', 'THR'],
-    DIV,
-    ['/hr/performance', 'Evaluasi'],
-    ['/hr/kpi', 'KPI & Tugas Harian'],
-  ] },
-  // Set up once, revisited rarely.
-  { label: 'Pengaturan', links: [
-    ['/hr/settings', 'Pengaturan HR'],
-    ['/hr/positions', 'Jabatan'],
-    ['/hr/wage-components', 'Komponen Gaji'],
-    ['/hr/performance/policies', 'Kebijakan Kinerja'],
-    ['/hr/attendance/settings', 'Pengaturan Absensi'],
     DIV,
     ['/hr/face', 'Wajah & Perangkat'],
     ['/hr/attendance/import', 'Impor Sidik Jari'],
-    ['/hr/import', 'Impor Karyawan'],
+  ] },
+  // Leave, overtime and sick requests, and the queue that approves them.
+  { label: 'Izin & Pengajuan', links: [
+    ['/hr/requests', 'Pengajuan'],
+    ['/hr/approvals', 'Persetujuan'],
+  ] },
+  { label: 'Gaji & Tunjangan', links: [
+    ['/hr/payroll', 'Penggajian'],
+    ['/hr/thr', 'THR'],
+    ['/hr/benefit-fund', 'Dana Kesejahteraan'],
+    ['/hr/kasbon', 'Kasbon'],
+  ] },
+  { label: 'Kinerja', links: [
+    ['/hr/performance', 'Evaluasi'],
+    ['/hr/performance/adjustments', 'Penyesuaian Evaluasi'],
+    ['/hr/kpi', 'KPI & Tugas Harian'],
+  ] },
+  // The rules the other sections run on.
+  { label: 'Kebijakan', links: [
+    ['/hr/settings', 'Pengaturan HR'],
+    ['/hr/positions', 'Jabatan'],
+    ['/hr/wage-components', 'Komponen Gaji'],
+    ['/hr/attendance/settings', 'Pengaturan Absensi'],
+    ['/hr/performance/policies', 'Kebijakan Kinerja'],
   ] },
 ];
 
-// For the operational navbar HR is one dropdown among many, so the same groups
-// are flattened into it — but with their names kept as headings. A twenty-item
-// list is only navigable if it tells you where you are in it.
-const HR_COMBINED = HR_GROUPS.flatMap((g, i) => [
-  ...(i === 0 ? [] : [DIV]),
-  head(g.label),
-  ...g.links.filter((l) => l !== DIV),
-]);
+// For the operational navbar HR is one dropdown among many, so each group
+// becomes a collapsible section inside it rather than a twenty-item flat list.
+const HR_COMBINED = HR_GROUPS.map((g) => sub(g.label, g.links));
 
-function buildNav({ hrOnly, hr, reports }) {
+function buildNav({ hrOnly, operator, hr, reports }) {
   if (hrOnly) return HR_GROUPS;
+  // Four screens need no dropdowns: each is a top-level link.
+  if (operator) return BRANCH_OPERATOR_TILES.map((t) => ({ label: t.label, to: t.to }));
   const groups = [
     { label: 'Inventaris', links: [
       ['/inventory', 'Inventaris'],
@@ -291,18 +325,43 @@ function buildNav({ hrOnly, hr, reports }) {
 }
 
 const isLink = (l) => Array.isArray(l);
-const groupPaths = (g) => (g.to ? [g.to] : g.links.filter(isLink).map(([to]) => to));
+const linkPaths = (links) => links.flatMap((l) => (isLink(l) ? [l[0]] : l.section ? linkPaths(l.links) : []));
+const groupPaths = (g) => (g.to ? [g.to] : linkPaths(g.links));
+
+// A section inside a dropdown or the mobile drawer. It starts open when it holds
+// the current page, so reopening the menu lands you where you already are.
+function NavSection({ label, paths, mobile, children }) {
+  const { pathname } = useLocation();
+  const [open, setOpen] = useState(() => paths.some((p) => pathname.startsWith(p)));
+  return (
+    <div className={mobile ? 'mobile-subsection' : 'nav-dropdown-section'}>
+      <button
+        type="button"
+        className={mobile ? 'mobile-subsection-btn' : 'nav-dropdown-section-btn'}
+        // The dropdown closes on any click inside it; a section toggle is not a choice.
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        aria-expanded={open}
+      >
+        {label} <span className="caret" aria-hidden="true">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && <div className={mobile ? 'mobile-subsection-links' : 'nav-dropdown-section-links'}>{children}</div>}
+    </div>
+  );
+}
 
 function Nav() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const user = getUser();
   const hrOnly = isHROnly(user?.role);
+  const operator = isBranchOperator(user?.role);
+  const homeLabel = hrOnly ? 'Dasbor HR' : operator ? 'Dasbor Cabang' : 'Dasbor';
   // The dark red bar is the standing reminder that this session can do
   // anything, approvals included — worth noticing before you act, not after.
   const superuser = isSuperuser(user?.role);
   const groups = buildNav({
     hrOnly,
+    operator,
     hr: canUseHR(user?.role),
     reports: canViewReports(user?.role),
   });
@@ -332,6 +391,21 @@ function Nav() {
     return !groupPaths(group).some((p) => p !== to && p.startsWith(to) && pathname.startsWith(p));
   };
 
+  // The entries of one dropdown (or drawer section), sections included.
+  // Dividers are dropped on mobile, where every row is already full-width.
+  const menuItems = (group, links, mobile) => links.map((l, i) => {
+    if (l === DIV) return mobile ? null : <div key={`div-${i}`} className="nav-dropdown-divider" />;
+    if (l.heading) return <div key={`h-${i}`} className={mobile ? 'mobile-section-heading' : 'nav-dropdown-heading'}>{l.heading}</div>;
+    if (l.section) {
+      return (
+        <NavSection key={`s-${l.section}`} label={l.section} paths={linkPaths(l.links)} mobile={mobile}>
+          {menuItems(group, l.links, mobile)}
+        </NavSection>
+      );
+    }
+    return <Link key={l[0]} to={l[0]} className={activeIn(group, l[0]) ? 'active' : ''}>{l[1]}</Link>;
+  });
+
   const logout = async () => {
     try {
       const token = localStorage.getItem('token');
@@ -356,17 +430,13 @@ function Nav() {
 
       {/* Desktop nav */}
       <div className="nav-links nav-links-desktop">
-        {link('/', hrOnly ? 'Dasbor HR' : 'Dasbor')}
+        {link('/', homeLabel)}
         {groups.map((g) => (g.to ? (
           <Link key={g.label} to={g.to} className={isActive(g.to) ? 'active' : ''}
             aria-current={isActive(g.to) ? 'page' : undefined}>{g.label}</Link>
         ) : (
           <NavDropdown key={g.label} label={g.label} paths={groupPaths(g)}>
-            {g.links.map((l, i) => {
-              if (l === DIV) return <div key={`div-${i}`} className="nav-dropdown-divider" />;
-              if (l.heading) return <div key={`h-${i}`} className="nav-dropdown-heading">{l.heading}</div>;
-              return <Link key={l[0]} to={l[0]} className={activeIn(g, l[0]) ? 'active' : ''}>{l[1]}</Link>;
-            })}
+            {menuItems(g, g.links, false)}
           </NavDropdown>
         )))}
       </div>
@@ -381,6 +451,7 @@ function Nav() {
           <Link to="/profile" className="nav-user-name" title={`Profil: ${user.username}`}>
             <span className="nav-avatar" aria-hidden="true">{user.username.slice(0, 1)}</span>
             {user.username}
+            {operator && operatorBranch()?.name && <span style={{ opacity: 0.7 }}>· {operatorBranch().name}</span>}
           </Link>
           <button onClick={logout} className="btn-nav">Keluar</button>
         </div>
@@ -396,16 +467,13 @@ function Nav() {
       {/* Mobile drawer */}
       {drawerOpen && (
         <div className="mobile-drawer">
-          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>{hrOnly ? 'Dasbor HR' : 'Dasbor'}</Link>
+          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>{homeLabel}</Link>
 
           {groups.map((g) => (g.to ? (
             <Link key={g.label} to={g.to} className={`mobile-link${isActive(g.to) ? ' active' : ''}`}>{g.label}</Link>
           ) : (
             <MobileSection key={g.label} label={g.label} paths={groupPaths(g)}>
-              {g.links.filter((l) => l !== DIV).map((l, i) => (l.heading
-                ? <div key={`h-${i}`} className="mobile-section-heading">{l.heading}</div>
-                : <Link key={l[0]} to={l[0]} className={activeIn(g, l[0]) ? 'active' : ''}>{l[1]}</Link>
-              ))}
+              {menuItems(g, g.links, true)}
             </MobileSection>
           )))}
 
@@ -425,7 +493,7 @@ function Layout({ children }) {
   return (
     <>
       <Nav />
-      <main className="main-content">{children}</main>
+      <main className="main-content"><ConfineBranchOperator>{children}</ConfineBranchOperator></main>
     </>
   );
 }
@@ -449,7 +517,7 @@ export default function App() {
           <RequireAuth>
             <Layout>
               <Routes>
-                <Route path="/" element={isHROnly() ? <HRDashboard /> : isStaffDesk() ? <StaffDashboard /> : <Dashboard />} />
+                <Route path="/" element={isHROnly() ? <HRDashboard /> : isBranchOperator() ? <BranchOperatorDashboard /> : isStaffDesk() ? <StaffDashboard /> : <Dashboard />} />
                 <Route path="/items" element={<RequireCore><Items /></RequireCore>} />
                 <Route path="/items/new" element={<RequireCore><ItemForm /></RequireCore>} />
                 <Route path="/items/edit/:id" element={<RequireCore><ItemForm /></RequireCore>} />
@@ -520,25 +588,28 @@ export default function App() {
                 <Route path="/hr/positions" element={<RequireHR><Positions /></RequireHR>} />
                 <Route path="/hr/wage-components" element={<RequireHR><WageComponents /></RequireHR>} />
                 <Route path="/hr/attendance" element={<AttendanceDashboard />} />
-                <Route path="/hr/attendance/corrections" element={<RequireHR><AttendanceCorrections /></RequireHR>} />
+                <Route path="/hr/attendance/corrections" element={<RequireBranchHR><AttendanceCorrections /></RequireBranchHR>} />
                 <Route path="/hr/attendance/import" element={<RequireHR><FingerprintImport /></RequireHR>} />
                 <Route path="/hr/attendance/settings" element={<RequireHR><AttendanceSettings /></RequireHR>} />
                 <Route path="/hr/face" element={<RequireHR><FaceDashboard /></RequireHR>} />
                 <Route path="/hr/face/unregistered" element={<RequireHR><FaceUnregistered /></RequireHR>} />
                 <Route path="/hr/performance" element={<RequireHR><PerformanceDashboard /></RequireHR>} />
+                <Route path="/hr/performance/adjustments" element={<RequireHR><EvaluationAdjustments /></RequireHR>} />
                 <Route path="/hr/performance/policies" element={<RequireHR><PerformancePolicies /></RequireHR>} />
-                <Route path="/hr/requests" element={<RequireHR><Requests /></RequireHR>} />
+                <Route path="/hr/requests" element={<RequireBranchHR><Requests /></RequireBranchHR>} />
                 <Route path="/hr/approvals" element={<RequireHR><Approvals /></RequireHR>} />
                 {/* back-compat: old leave/overtime links land on the merged requests screen */}
-                <Route path="/hr/leave" element={<RequireHR><Requests /></RequireHR>} />
+                <Route path="/hr/leave" element={<RequireBranchHR><Requests /></RequireBranchHR>} />
                 <Route path="/hr/manpower" element={<ManpowerPlanning />} />
                 <Route path="/hr/kasbon" element={<KasbonDashboard />} />
-                <Route path="/hr/kasbon/new" element={<RequireHR><KasbonForm /></RequireHR>} />
+                <Route path="/hr/kasbon/new" element={<RequireBranchHR><KasbonForm /></RequireBranchHR>} />
                 <Route path="/hr/kasbon/:id" element={<KasbonDetail />} />
-                <Route path="/hr/overtime" element={<RequireHR><Requests /></RequireHR>} />
+                <Route path="/hr/overtime" element={<RequireBranchHR><Requests /></RequireBranchHR>} />
                 <Route path="/hr/payroll" element={<RequireHR><PayrollDashboard /></RequireHR>} />
+                <Route path="/hr/payroll/attendance-cut" element={<RequireHR><AttendanceCutSimulator /></RequireHR>} />
                 <Route path="/hr/payroll/:id" element={<RequireHR><PayrollPeriodDetail /></RequireHR>} />
                 <Route path="/hr/thr" element={<RequireHR><ThrDashboard /></RequireHR>} />
+                <Route path="/hr/benefit-fund" element={<RequireHR><BenefitFund /></RequireHR>} />
                 <Route path="/hr/thr/:id" element={<RequireHR><ThrRunDetail /></RequireHR>} />
                 <Route path="/hr/settings" element={<RequireHR><HRSettings /></RequireHR>} />
                 <Route path="/hr/kpi" element={<RequireHR><StaffKPI /></RequireHR>} />

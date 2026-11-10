@@ -7,6 +7,7 @@ import {
 import { isAdminRole } from '../roles';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { shiftTodayWIB, todayWIB } from '../time';
 // Setoran — cash leaving one place and arriving in another.
 //
 // Two movements share this page because they are the same event: the branch
@@ -16,7 +17,7 @@ import CurrencyInput from '../components/CurrencyInput';
 // occasionally routes money somewhere the dropdown did not predict.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 
 const TYPES = [
   { value: 'setoran', label: 'Setoran ke rekening', hint: 'Kas cabang → rekening bank pemilik' },
@@ -36,8 +37,7 @@ export default function Setoran() {
   const [filterBranch, setFilterBranch] = useState('');
   const [filterType, setFilterType] = useState('');
   const [from, setFrom] = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 30);
-    return d.toISOString().slice(0, 10);
+    return shiftTodayWIB(-30);
   });
   const [to, setTo] = useState(today());
 

@@ -7,7 +7,7 @@ import (
 
 func mustTime(t *testing.T, s string) time.Time {
 	t.Helper()
-	parsed, err := time.Parse("2006-01-02 15:04", s)
+	parsed, err := time.ParseInLocation("2006-01-02 15:04", s, WIB) // attendance wall clock is WIB
 	if err != nil {
 		t.Fatalf("bad test time %q: %v", s, err)
 	}

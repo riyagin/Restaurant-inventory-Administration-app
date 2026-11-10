@@ -288,6 +288,9 @@ func (h *LeaveHandler) ListLeaveRequests(w http.ResponseWriter, r *http.Request)
 		}
 		params.Year = int32(yr)
 	}
+	if b, ok := scopedBranch(r); ok {
+		params.BranchID = b
+	}
 
 	rows, err := h.queries.ListLeaveRequests(ctx, params)
 	if err != nil {
@@ -334,6 +337,9 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	empID, err := parseUUID(strings.TrimSpace(body.EmployeeID))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "karyawan tidak valid")
+		return
+	}
+	if !requireEmployeeInScope(w, r, h.queries, pgtype.UUID{Bytes: empID, Valid: true}) {
 		return
 	}
 	typeID, err := parseUUID(strings.TrimSpace(body.LeaveTypeID))
@@ -738,6 +744,9 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, req.EmployeeID) {
+		return
+	}
 	if req.Status == "cancelled" || req.Status == "rejected" {
 		respondError(w, http.StatusBadRequest, "pengajuan cuti sudah tidak aktif")
 		return
@@ -759,7 +768,7 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 
 	// Reverse quota + attendance side-effects only if the request was approved.
 	if req.Status == "approved" {
-		if err := service.CancelApprovedLeave(ctx, qtx, req, leaveType, time.Now().UTC()); err != nil {
+		if err := service.CancelApprovedLeave(ctx, qtx, req, leaveType, service.TodayWIB()); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membatalkan efek persetujuan cuti")
 			return
 		}
@@ -807,7 +816,7 @@ func yearParam(r *http.Request) int32 {
 			return int32(yr)
 		}
 	}
-	return int32(time.Now().UTC().Year())
+	return int32(service.TodayWIB().Year())
 }
 
 // GetLeaveBalance — GET /api/hr/employees/:id/leave-balance?year=
@@ -823,6 +832,9 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pgEmpID := pgtype.UUID{Bytes: id, Valid: true}
 	year := int(yearParam(r))
+	if !requireEmployeeInScope(w, r, h.queries, pgEmpID) {
+		return
+	}
 
 	if _, err := h.queries.GetEmployeeByID(ctx, pgEmpID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -929,34 +941,56 @@ type manpowerDay struct {
 	Date      string `json:"date"`
 	Status    string `json:"status"` // "hadir" | "cuti" | "pending"
 	LeaveType string `json:"leave_type,omitempty"`
+	// Rostered shift in force (approved). DivisionID is the day's override; the
+	// employee's home division applies when it is empty.
+	ShiftID    string `json:"shift_id,omitempty"`
+	DivisionID string `json:"division_id,omitempty"`
+	// An open change to today's roster awaiting a manager. PendingShiftID is
+	// empty when the request removes the shift.
+	PendingRequestID  string `json:"pending_request_id,omitempty"`
+	PendingShiftID    string `json:"pending_shift_id,omitempty"`
+	PendingDivisionID string `json:"pending_division_id,omitempty"`
 }
 
 type manpowerEmployee struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	Position string        `json:"position"`
-	Days     []manpowerDay `json:"days"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Position        string        `json:"position"`
+	DivisionID      string        `json:"division_id"`
+	DivisionName    string        `json:"division_name"`
+	IsDeliveryStaff bool          `json:"is_delivery_staff"`
+	Days            []manpowerDay `json:"days"`
 	// LeaveBalance is the paid-leave allowance for each month the window touches,
 	// so the planner sees how much day-off budget is left before adding more.
 	LeaveBalance []service.MonthlyLeaveBalance `json:"leave_balance"`
 }
 
+type manpowerDivision struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type manpowerBranch struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
+	Shifts    []*shiftDefinition `json:"shifts"`
+	Divisions []manpowerDivision `json:"divisions"`
 	Employees []manpowerEmployee `json:"employees"`
 }
 
 type manpowerPlanningResponse struct {
 	StartDate string           `json:"start_date"`
+	Today     string           `json:"today"`
 	Dates     []string         `json:"dates"`
 	Branches  []manpowerBranch `json:"branches"`
 }
 
-// GetManpowerPlanning — GET /api/hr/manpower-planning?date=YYYY-MM-DD&days=N
-// Returns all active employees grouped by branch with their leave status for N days
-// starting from the given date (default: today UTC). N is clamped to [7, 31]
-// (default 7) — a flexible view range from one week up to one month.
+// GetManpowerPlanning — GET /api/hr/manpower-planning?date=YYYY-MM-DD&days=N&branch_id=
+// Returns all active employees grouped by branch with their leave status and
+// rostered shift for N days starting from the given date (default: today UTC).
+// N is clamped to [7, 31] (default 7) — a flexible view range from one week up
+// to one month. Each branch carries its shift definitions (inactive ones too, so
+// a day rostered on a retired shift still renders) and its divisions.
 func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -969,7 +1003,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	} else {
-		startDate = time.Now().UTC().Truncate(24 * time.Hour)
+		startDate = service.TodayWIB()
 	}
 
 	numDays := 7
@@ -992,28 +1026,37 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		dates[i] = startDate.AddDate(0, 0, i).Format("2006-01-02")
 	}
 
-	// 1. All active employees with branch + position info.
+	branchFilter := strings.TrimSpace(r.URL.Query().Get("branch_id"))
+
+	// 1. All active employees with branch + position + division info.
 	empRows, err := h.pool.Query(ctx, `
 		SELECT e.id::text, e.full_name,
 		       COALESCE(e.branch_id::text, ''), COALESCE(b.name, 'Tanpa Cabang'),
-		       COALESCE(p.name, '')
+		       COALESCE(p.name, ''),
+		       COALESCE(e.division_id::text, ''), COALESCE(d.name, ''), e.is_delivery_staff
 		FROM employees e
 		LEFT JOIN branches b ON b.id = e.branch_id
 		LEFT JOIN positions p ON p.id = e.position_id
+		LEFT JOIN divisions d ON d.id = e.division_id
 		WHERE e.status = 'active'
+		  AND ($1 = '' OR e.branch_id::text = $1)
 		ORDER BY COALESCE(b.name, 'Tanpa Cabang'), e.full_name
-	`)
+	`, branchFilter)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
 		return
 	}
 	defer empRows.Close()
 
-	type empInfo struct{ id, name, branchID, branchName, position string }
+	type empInfo struct {
+		id, name, branchID, branchName, position, divisionID, divisionName string
+		deliveryStaff                                                     bool
+	}
 	var employees []empInfo
 	for empRows.Next() {
 		var e empInfo
-		if err := empRows.Scan(&e.id, &e.name, &e.branchID, &e.branchName, &e.position); err != nil {
+		if err := empRows.Scan(&e.id, &e.name, &e.branchID, &e.branchName, &e.position,
+			&e.divisionID, &e.divisionName, &e.deliveryStaff); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
 			return
 		}
@@ -1098,12 +1141,67 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// 4. Build response grouped by branch preserving order from the query.
+	// 4. Roster: the approved shift per cell, plus open change requests. A
+	// request for a day already gone is left out — it can only be rejected, and
+	// that happens on the approvals page.
+	type rosterCell struct{ shiftID, divisionID, reqID, reqShiftID, reqDivisionID string }
+	roster := map[string]map[string]*rosterCell{} // employee id → date → cell
+	cellFor := func(empID, d string) *rosterCell {
+		if roster[empID] == nil {
+			roster[empID] = map[string]*rosterCell{}
+		}
+		if roster[empID][d] == nil {
+			roster[empID][d] = &rosterCell{}
+		}
+		return roster[empID][d]
+	}
+	rosterRows, err := h.pool.Query(ctx, `
+		SELECT employee_id::text, to_char(date, 'YYYY-MM-DD'), shift_id::text, COALESCE(division_id::text, '')
+		FROM shift_assignments WHERE date BETWEEN $1 AND $2`, startPg, endPg)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jadwal shift")
+		return
+	}
+	for rosterRows.Next() {
+		var empID, d, shiftID, divID string
+		if err := rosterRows.Scan(&empID, &d, &shiftID, &divID); err != nil {
+			rosterRows.Close()
+			respondError(w, http.StatusInternalServerError, "gagal membaca jadwal shift")
+			return
+		}
+		c := cellFor(empID, d)
+		c.shiftID, c.divisionID = shiftID, divID
+	}
+	rosterRows.Close()
+	reqRows, err := h.pool.Query(ctx, `
+		SELECT id::text, employee_id::text, to_char(date, 'YYYY-MM-DD'),
+		       COALESCE(shift_id::text, ''), COALESCE(division_id::text, '')
+		FROM shift_change_requests
+		WHERE status = 'pending' AND date BETWEEN GREATEST($1::date, $3::date) AND $2`,
+		startPg, endPg, pgtype.Date{Time: now, Valid: true})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan shift")
+		return
+	}
+	for reqRows.Next() {
+		var id, empID, d, shiftID, divID string
+		if err := reqRows.Scan(&id, &empID, &d, &shiftID, &divID); err != nil {
+			reqRows.Close()
+			respondError(w, http.StatusInternalServerError, "gagal membaca pengajuan shift")
+			return
+		}
+		c := cellFor(empID, d)
+		c.reqID, c.reqShiftID, c.reqDivisionID = id, shiftID, divID
+	}
+	reqRows.Close()
+
+	// 5. Build response grouped by branch preserving order from the query.
 	branchMap := map[string]*manpowerBranch{}
 	var branchOrder []string
 	for _, e := range employees {
 		if _, ok := branchMap[e.branchID]; !ok {
-			branchMap[e.branchID] = &manpowerBranch{ID: e.branchID, Name: e.branchName}
+			branchMap[e.branchID] = &manpowerBranch{ID: e.branchID, Name: e.branchName,
+				Shifts: []*shiftDefinition{}, Divisions: []manpowerDivision{}}
 			branchOrder = append(branchOrder, e.branchID)
 		}
 		days := make([]manpowerDay, numDays)
@@ -1113,16 +1211,55 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 				day.Status = entry.status
 				day.LeaveType = entry.leaveType
 			}
+			if c := roster[e.id][d]; c != nil {
+				day.ShiftID, day.DivisionID = c.shiftID, c.divisionID
+				day.PendingRequestID, day.PendingShiftID, day.PendingDivisionID = c.reqID, c.reqShiftID, c.reqDivisionID
+			}
 			days[i] = day
 		}
 		branchMap[e.branchID].Employees = append(branchMap[e.branchID].Employees, manpowerEmployee{
-			ID:           e.id,
-			Name:         e.name,
-			Position:     e.position,
-			Days:         days,
-			LeaveBalance: balanceBy[e.id],
+			ID:              e.id,
+			Name:            e.name,
+			Position:        e.position,
+			DivisionID:      e.divisionID,
+			DivisionName:    e.divisionName,
+			IsDeliveryStaff: e.deliveryStaff,
+			Days:            days,
+			LeaveBalance:    balanceBy[e.id],
 		})
 	}
+
+	// 6. Each branch's shifts and divisions.
+	shifts, err := loadShiftDefinitions(ctx, h.pool, branchFilter, true)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil daftar shift")
+		return
+	}
+	for _, s := range shifts {
+		if b, ok := branchMap[s.BranchID]; ok {
+			b.Shifts = append(b.Shifts, s)
+		}
+	}
+	divRows, err := h.pool.Query(ctx, `
+		SELECT id::text, branch_id::text, name FROM divisions
+		WHERE ($1 = '' OR branch_id::text = $1) ORDER BY name`, branchFilter)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil divisi")
+		return
+	}
+	for divRows.Next() {
+		var d manpowerDivision
+		var branchID string
+		if err := divRows.Scan(&d.ID, &branchID, &d.Name); err != nil {
+			divRows.Close()
+			respondError(w, http.StatusInternalServerError, "gagal membaca divisi")
+			return
+		}
+		if b, ok := branchMap[branchID]; ok {
+			b.Divisions = append(b.Divisions, d)
+		}
+	}
+	divRows.Close()
 
 	branches := make([]manpowerBranch, len(branchOrder))
 	for i, id := range branchOrder {
@@ -1131,6 +1268,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 
 	respondJSON(w, http.StatusOK, manpowerPlanningResponse{
 		StartDate: startDate.Format("2006-01-02"),
+		Today:     now.Format("2006-01-02"),
 		Dates:     dates,
 		Branches:  branches,
 	})

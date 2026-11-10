@@ -127,9 +127,11 @@ func (p *CSVFingerprintParser) Parse(file io.Reader) ([]ParsedPunch, []string, e
 	return punches, rowErrors, nil
 }
 
+// parseFingerprintTime parses a device timestamp. Layouts without an offset are
+// device wall-clock times, which are WIB; RFC3339 keeps its own offset.
 func parseFingerprintTime(raw string, layouts []string) (time.Time, bool) {
 	for _, l := range layouts {
-		if t, err := time.Parse(l, raw); err == nil {
+		if t, err := time.ParseInLocation(l, raw, WIB); err == nil {
 			return t, true
 		}
 	}
@@ -175,7 +177,8 @@ func (p *DATFingerprintParser) Parse(file io.Reader) ([]ParsedPunch, []string, e
 		}
 
 		rawTs := strings.TrimSpace(fields[1])
-		ts, err := time.Parse("2006-01-02 15:04:05", rawTs)
+		// The device clock runs on WIB and the export carries no offset.
+		ts, err := time.ParseInLocation("2006-01-02 15:04:05", rawTs, WIB)
 		if err != nil {
 			rowErrors = append(rowErrors, fmt.Sprintf("baris %d: format waktu \"%s\" tidak dikenal", lineNum, rawTs))
 			continue

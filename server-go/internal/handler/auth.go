@@ -78,14 +78,27 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userInfo := map[string]any{
+		"id":       userID,
+		"username": user.Username,
+		"role":     user.Role,
+	}
+	// A branch operator's screens are labelled with, and filtered to, their
+	// branch. This is for display only — the server re-reads the scope on every
+	// request (middleware.RestrictBranchOperator).
+	if user.Role == middleware.RoleBranchOperator {
+		if bid, err := h.queries.GetUserBranchScope(r.Context(), user.ID); err == nil && bid.Valid {
+			userInfo["branch_id"] = bid
+			if b, err := h.queries.GetBranchByID(r.Context(), bid); err == nil {
+				userInfo["branch_name"] = b.Name
+			}
+		}
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"token":        accessToken,
 		"refreshToken": refreshToken,
-		"user": map[string]any{
-			"id":       userID,
-			"username": user.Username,
-			"role":     user.Role,
-		},
+		"user":         userInfo,
 	})
 }
 

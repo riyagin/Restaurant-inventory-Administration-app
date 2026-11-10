@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { getEnumerations, createEnumeration, deleteEnumeration, getItems, getWarehouses } from '../api';
 
+import { todayWIB } from '../time';
 const fmt      = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
 const fmtRp    = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(n);
-const today    = new Date().toISOString().split('T')[0];
+const today    = todayWIB();
 
 export default function Enumerations() {
   const [records, setRecords]       = useState([]);

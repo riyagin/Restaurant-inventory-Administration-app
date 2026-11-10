@@ -115,7 +115,7 @@ func ScoreStaffKPIs(ctx context.Context, pool *pgxpool.Pool, month time.Time) ([
 	from := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
 	to := from.AddDate(0, 1, -1)
 	// The month may not be over; nobody is judged on days that haven't happened.
-	if today := time.Now().UTC().Truncate(24 * time.Hour); to.After(today) {
+	if today := TodayWIB(); to.After(today) {
 		to = today
 	}
 	if to.Before(from) {

@@ -40,7 +40,7 @@ func validRuleType(t string) bool {
 func firstOfMonthDate(monthStr string) (time.Time, error) {
 	monthStr = strings.TrimSpace(monthStr)
 	if monthStr == "" {
-		now := time.Now()
+		now := service.TodayWIB()
 		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC), nil
 	}
 	if len(monthStr) == 7 {
@@ -639,30 +639,9 @@ func (h *PerformanceHandler) Evaluate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	if err := qtx.DeleteAutoViolationsForRange(ctx, &db.DeleteAutoViolationsForRangeParams{
-		From: pgtype.Date{Time: from, Valid: true},
-		To:   pgtype.Date{Time: to, Valid: true},
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mereset pelanggaran otomatis")
-		return
-	}
-
-	// Reconcile absent records for each past day in the range before evaluating.
-	// Without this, employees with no attendance record (missed nightly reconcile)
-	// are invisible to the evaluation engine.
-	yesterday := time.Now().AddDate(0, 0, -1)
-	reconcileTo := to
-	if reconcileTo.After(yesterday) {
-		reconcileTo = yesterday
-	}
-	for d := from; !d.After(reconcileTo); d = d.AddDate(0, 0, 1) {
-		if _, err := service.ReconcileAbsent(ctx, qtx, d); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menjalankan rekonsiliasi absen")
-			return
-		}
-	}
-
-	if err := service.EvaluateRange(ctx, qtx, from, to); err != nil {
+	// Reset the range's auto violations, mark absent the past days with no record
+	// (missed nightly reconcile), and evaluate again from the current records.
+	if err := service.ReevaluateRange(ctx, qtx, from, to); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menjalankan evaluasi kinerja")
 		return
 	}

@@ -53,6 +53,32 @@ type AttendanceDevice struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type AttendancePermission struct {
+	ID           pgtype.UUID        `json:"id"`
+	EmployeeID   pgtype.UUID        `json:"employee_id"`
+	Date         pgtype.Date        `json:"date"`
+	Type         string             `json:"type"`
+	Reason       string             `json:"reason"`
+	Status       string             `json:"status"`
+	IsBackdated  bool               `json:"is_backdated"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DecidedBy    pgtype.UUID        `json:"decided_by"`
+	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
+	DecisionNote pgtype.Text        `json:"decision_note"`
+}
+
+type AttendancePunch struct {
+	ID            pgtype.UUID        `json:"id"`
+	EmployeeID    pgtype.UUID        `json:"employee_id"`
+	PunchedAt     pgtype.Timestamptz `json:"punched_at"`
+	WorkDate      pgtype.Date        `json:"work_date"`
+	Source        string             `json:"source"`
+	DirectionHint pgtype.Text        `json:"direction_hint"`
+	DeviceID      pgtype.UUID        `json:"device_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type AttendanceRecord struct {
 	ID                 pgtype.UUID        `json:"id"`
 	EmployeeID         pgtype.UUID        `json:"employee_id"`
@@ -75,6 +101,9 @@ type AttendanceRecord struct {
 	HalfDayType        pgtype.Text        `json:"half_day_type"`
 	IsMissingCheckin   bool               `json:"is_missing_checkin"`
 	IsNoPunch          bool               `json:"is_no_punch"`
+	IsLeavePunch       bool               `json:"is_leave_punch"`
+	ExcusedBy          pgtype.Text        `json:"excused_by"`
+	ReviewResolved     bool               `json:"review_resolved"`
 }
 
 type Branch struct {
@@ -529,6 +558,8 @@ type PayrollLine struct {
 	OvertimeHourlyAmount    int64              `json:"overtime_hourly_amount"`
 	HalfDayHours            pgtype.Numeric     `json:"half_day_hours"`
 	HalfDayDeduction        int64              `json:"half_day_deduction"`
+	AttendanceCutMinutes    int32              `json:"attendance_cut_minutes"`
+	AttendanceCutDeduction  int64              `json:"attendance_cut_deduction"`
 }
 
 type PayrollLineComponent struct {
@@ -766,6 +797,7 @@ type User struct {
 	PasswordHash string             `json:"password_hash"`
 	Role         string             `json:"role"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	BranchID     pgtype.UUID        `json:"branch_id"`
 }
 
 type Vendor struct {

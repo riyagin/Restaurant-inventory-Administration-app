@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getRecipes, getWarehouses, getProductions, createProduction } from '../api';
 
+import { todayWIB } from '../time';
 const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
-const today = new Date().toISOString().split('T')[0];
+const today = todayWIB();
 
 export default function Productions() {
   const [productions, setProductions] = useState([]);

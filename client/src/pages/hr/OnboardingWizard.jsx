@@ -6,7 +6,8 @@ import {
 } from '../../api';
 import Icon from '../../components/Icon';
 
-const today = () => new Date().toISOString().slice(0, 10);
+import { todayWIB } from '../../time';
+const today = () => todayWIB();
 
 const STEPS = [
   { key: 'pribadi',     title: 'Data Pribadi',  icon: 'user',        desc: 'Identitas & kontak' },

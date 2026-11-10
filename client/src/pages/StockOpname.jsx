@@ -6,6 +6,7 @@ import {
   getStockOpnameDrafts, createStockOpnameDraft, updateStockOpnameDraft, deleteStockOpnameDraft,
 } from '../api';
 
+import { fmtInstantDate } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
@@ -161,7 +162,7 @@ export default function StockOpname() {
 
   const downloadTemplate = () => {
     const warehouseName = selectedWh?.name ?? 'Warehouse';
-    const todayStr = new Date().toLocaleDateString('id-ID', { dateStyle: 'long' });
+    const todayStr = fmtInstantDate(new Date(), { dateStyle: 'long' });
     const COLS = 4;
     const headerRow = ['No.', 'Nama Barang', 'Satuan', 'Qty Aktual'];
     const dataRows  = groups.map((g, i) => [i + 1, g.item_name, g.unit_name ?? '', '']);

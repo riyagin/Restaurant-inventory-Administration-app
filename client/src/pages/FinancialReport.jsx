@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { getFinancialReport, getProfitLossByBranch } from '../api';
 
+import { todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return todayWIB();
 }
 
 function firstOfMonthStr() {

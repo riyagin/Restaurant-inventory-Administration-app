@@ -22,13 +22,42 @@ import (
 //   - hr              — confined to the HR module (middleware.RestrictHRRole).
 //   - store_manager   — scoped to HR attendance record entry/correction only,
 //     see middleware.RequireAttendanceAccess.
+//   - branch_operator — one branch's attendance checks and kasbon / leave /
+//     overtime requests, see middleware.RestrictBranchOperator. The only role
+//     that carries a branch_id, and it must.
 var validUserRoles = map[string]bool{
-	middleware.RoleSuperuser:    true,
-	middleware.RoleAdmin:        true,
-	middleware.RoleManager:      true,
-	middleware.RoleStaff:        true,
-	middleware.RoleHR:           true,
-	middleware.RoleStoreManager: true,
+	middleware.RoleSuperuser:      true,
+	middleware.RoleAdmin:          true,
+	middleware.RoleManager:        true,
+	middleware.RoleStaff:          true,
+	middleware.RoleHR:             true,
+	middleware.RoleStoreManager:   true,
+	middleware.RoleBranchOperator: true,
+}
+
+const invalidRoleMsg = "role harus superuser, admin, manager, staff, hr, store_manager, atau branch_operator"
+
+// resolveUserBranch returns the branch_id to store for a user. A branch
+// operator must name an existing branch; every other role is stored without
+// one whatever the request sent, so switching an operator to another role
+// cleanly drops the scope (the table CHECK refuses a mismatch either way).
+func (h *UsersHandler) resolveUserBranch(r *http.Request, role, raw string) (pgtype.UUID, string) {
+	if role != middleware.RoleBranchOperator {
+		return pgtype.UUID{}, ""
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return pgtype.UUID{}, "operator cabang wajib ditautkan ke satu cabang"
+	}
+	id, err := parseUUID(raw)
+	if err != nil {
+		return pgtype.UUID{}, "cabang tidak valid"
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	if _, err := h.queries.GetBranchByID(r.Context(), pgID); err != nil {
+		return pgtype.UUID{}, "cabang tidak ditemukan"
+	}
+	return pgID, ""
 }
 
 type UsersHandler struct {
@@ -56,6 +85,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
+		BranchID string `json:"branch_id"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -67,7 +97,12 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validUserRoles[body.Role] {
-		respondError(w, http.StatusBadRequest, "role harus superuser, admin, manager, staff, hr, atau store_manager")
+		respondError(w, http.StatusBadRequest, invalidRoleMsg)
+		return
+	}
+	branchID, msg := h.resolveUserBranch(r, body.Role, body.BranchID)
+	if msg != "" {
+		respondError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -81,6 +116,7 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Username:     body.Username,
 		PasswordHash: string(hash),
 		Role:         body.Role,
+		BranchID:     branchID,
 	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal membuat pengguna")
@@ -105,6 +141,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Role     string `json:"role"`
 		Password string `json:"password"`
+		BranchID string `json:"branch_id"`
 	}
 	if err := parseBody(r, &body); err != nil {
 		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
@@ -116,7 +153,12 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validUserRoles[body.Role] {
-		respondError(w, http.StatusBadRequest, "role harus superuser, admin, manager, staff, hr, atau store_manager")
+		respondError(w, http.StatusBadRequest, invalidRoleMsg)
+		return
+	}
+	branchID, msg := h.resolveUserBranch(r, body.Role, body.BranchID)
+	if msg != "" {
+		respondError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -129,6 +171,7 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	user, err := h.queries.UpdateUser(r.Context(), &db.UpdateUserParams{
 		Username: body.Username,
 		Role:     body.Role,
+		BranchID: branchID,
 		ID:       pgID,
 	})
 	if err != nil {
@@ -144,6 +187,11 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if before.Role != body.Role {
 		changes = append(changes, fmt.Sprintf("role: %s → %s", before.Role, body.Role))
+	}
+	if before.BranchID != branchID {
+		// A different branch is a different set of employees this account can
+		// act on — as much a grant as a role change.
+		changes = append(changes, "cabang operator diubah")
 	}
 
 	if body.Password != "" {

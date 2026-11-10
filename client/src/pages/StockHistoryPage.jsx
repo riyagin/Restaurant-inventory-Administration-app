@@ -3,9 +3,10 @@ import { useParams, Link } from 'react-router-dom';
 import { getItem, getWarehouses, getStockHistory } from '../api';
 import { TYPE_LABEL, typeLabel, typeStyle, sourcePath } from '../stockMovements';
 
+import { fmtDateTime } from '../time';
 const idr     = (v) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 const fmt     = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
-const fmtTime = (d) => d ? new Date(d).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+const fmtTime = (d) => fmtDateTime(d, { dateStyle: 'medium', timeStyle: 'short' }) || '—';
 
 export default function StockHistoryPage() {
   const { itemId } = useParams();

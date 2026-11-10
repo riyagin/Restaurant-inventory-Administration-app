@@ -91,6 +91,7 @@ WHERE ($1::text = '' OR k.status = $1)
   AND ($3::text = '' OR lower(e.full_name) LIKE '%' || lower($3) || '%'
        OR lower(e.employee_code) LIKE '%' || lower($3) || '%'
        OR lower(k.kasbon_number) LIKE '%' || lower($3) || '%')
+  AND ($4::uuid IS NULL OR e.branch_id = $4)
 ORDER BY k.created_at DESC;
 
 -- name: GetLastResolvedKasbon :one

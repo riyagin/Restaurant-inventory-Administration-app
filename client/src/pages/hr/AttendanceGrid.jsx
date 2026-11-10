@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getAttendance, getBranches } from '../../api';
+import { fmtTime, todayWIB } from '../../time';
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
@@ -55,10 +56,10 @@ function groupByMonth(dates) {
 // ── period presets ────────────────────────────────────────────────────────────
 
 function getPeriodDates(preset, customFrom, customTo) {
-  const today = toLocalISO(new Date());
+  const today = todayWIB();
 
   if (preset === 'week') {
-    const d = new Date();
+    const d = new Date(today + 'T00:00:00');
     const dow = d.getDay();
     const monday = new Date(d);
     monday.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
@@ -66,8 +67,7 @@ function getPeriodDates(preset, customFrom, customTo) {
   }
 
   if (preset === 'month') {
-    const d = new Date();
-    const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    const from = `${today.slice(0, 7)}-01`;
     return { from, to: today };
   }
 
@@ -88,7 +88,8 @@ function getCellInfo(rec) {
   const multi = parts.length > 1;
 
   if (status === 'absent')  return { bg: '#ffebee', border: '#ef5350', color: '#c62828', label: '' };
-  if (status === 'leave')   return { bg: '#e3f2fd', border: '#42a5f5', color: '#1565c0', label: '' };
+  // A punch on an approved leave day stays leave but is marked for review.
+  if (status === 'leave')   return { bg: '#e3f2fd', border: '#42a5f5', color: '#1565c0', label: rec.is_leave_punch ? '!' : '' };
   if (status === 'holiday') return { bg: '#f3e5f5', border: '#ab47bc', color: '#6a1b9a', label: '' };
 
   // present
@@ -109,6 +110,7 @@ const LEGEND = [
   { bg: '#fff0e0', border: '#ff7043', label: 'Anomali Ganda' },
   { bg: '#ffebee', border: '#ef5350', label: 'Absen' },
   { bg: '#e3f2fd', border: '#42a5f5', label: 'Cuti' },
+  { bg: '#e3f2fd', border: '#42a5f5', label: 'Absen saat Cuti (!)' },
   { bg: '#f3e5f5', border: '#ab47bc', label: 'Libur' },
   { bg: '#f5f5f5', border: '#e0e0e0', label: 'Tidak Ada Data' },
 ];
@@ -128,27 +130,24 @@ function cellTooltip(iso, rec) {
   const STATUS_LABEL = { present: 'Hadir', absent: 'Absen', leave: 'Cuti', holiday: 'Libur' };
   const lines = [`${dateLabel}`, `Status: ${STATUS_LABEL[rec.status] ?? rec.status}`];
 
-  const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : null;
-  const ci = fmtT(rec.check_in);
-  const co = fmtT(rec.check_out);
+  const ci = fmtTime(rec.check_in);
+  const co = fmtTime(rec.check_out);
   if (ci) lines.push(`Masuk: ${ci}`);
   if (co) lines.push(`Pulang: ${co}`);
   if (rec.is_late)             lines.push(`Terlambat ${rec.late_minutes} mnt`);
   if (rec.is_early_leave)      lines.push(`Pulang awal ${rec.early_leave_minutes} mnt`);
   if (rec.is_missing_checkout) lines.push('Tidak absen pulang');
+  if (rec.is_leave_punch)      lines.push('Absen saat cuti (perlu ditinjau)');
   return lines.join('\n');
 }
 
 // ── main component ────────────────────────────────────────────────────────────
 
 export default function AttendanceGrid() {
-  const today = toLocalISO(new Date());
+  const today = todayWIB();
 
   const [preset, setPreset]         = useState('month');
-  const [customFrom, setCustomFrom] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-  });
+  const [customFrom, setCustomFrom] = useState(() => `${today.slice(0, 7)}-01`);
   const [customTo, setCustomTo]     = useState(today);
   const [branchId, setBranchId]     = useState('');
   const [branches, setBranches]     = useState([]);

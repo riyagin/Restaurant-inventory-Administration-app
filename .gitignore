@@ -51,3 +51,6 @@ client/public/favicon.local.*
 
 # Production config — contains server IP, must not be overwritten by git pull
 client/public/config.json
+
+# Employee rules handout (generated PDF)
+Aturan-Absen-Potongan-Poin.pdf

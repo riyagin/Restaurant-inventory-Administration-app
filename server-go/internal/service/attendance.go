@@ -17,6 +17,12 @@ type Schedule struct {
 	GraceMinutes      int   // late beyond work_start + grace = anomaly
 	EarlyLeaveMinutes int   // leaving before work_end - early_leave = anomaly
 	WorkDays          []int // ISO weekday numbers (1=Mon .. 7=Sun)
+
+	// ResumeMinutes: start of a split shift's second segment (0 = single segment).
+	ResumeMinutes int
+	// Rostered: the hours come from the employee's shift assignment, not the
+	// branch default.
+	Rostered bool
 }
 
 // AttendanceState is the mutable per-record state the anomaly/merge functions
@@ -52,11 +58,48 @@ type AttendanceState struct {
 	IsHalfDay          bool
 	HalfDayLostMinutes int
 	HalfDayType        string
+
+	// IsLeavePunch: the employee punched on a day they are on approved leave. The
+	// record keeps status 'leave' (the paid day off is not lost and is not scored
+	// as late/early) and holds the punches; this flag surfaces it for HR review.
+	IsLeavePunch bool
+
+	// Date is the record's work day (any location; Y/M/D only). When set, times
+	// are measured from that day's WIB midnight, so a 00:20 check-out after a
+	// late shift reads as 24:20, not 00:20. Zero = measure within the punch's own
+	// calendar day (legacy callers).
+	Date time.Time
+
+	// ExcusedBy: the approved permit that shaped this day (late_arrival |
+	// early_departure | off_site), "" when none. Lets a permit-made half day be
+	// undone without touching one a manager set by hand.
+	ExcusedBy string
+	// ReviewResolved: a manager reviewed this flagged day and kept it as is.
+	ReviewResolved bool
 }
 
-// minutesSinceMidnight returns the wall-clock minute offset of t within its day.
+// dayMinutes measures t in minutes from the WIB midnight that starts the record's
+// work day (can exceed 1440 for a check-out after midnight).
+func (s *AttendanceState) dayMinutes(t time.Time) int {
+	if s.Date.IsZero() {
+		return minutesSinceMidnight(t)
+	}
+	return MinutesFromWorkDay(s.Date, t)
+}
+
+// MinutesFromWorkDay is the number of whole minutes between the WIB midnight
+// starting `date` (Y/M/D only) and t. Negative before that midnight.
+func MinutesFromWorkDay(date, t time.Time) int {
+	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, WIB)
+	return int(t.Sub(start).Truncate(time.Minute) / time.Minute)
+}
+
+// minutesSinceMidnight returns the WIB wall-clock minute offset of t within its
+// day. Converting first makes the answer independent of the zone the instant was
+// parsed or decoded in (pgx decodes timestamptz into the server's local zone).
 func minutesSinceMidnight(t time.Time) int {
-	return t.Hour()*60 + t.Minute()
+	w := t.In(WIB)
+	return w.Hour()*60 + w.Minute()
 }
 
 // ComputeAnomalies (re)derives the anomaly flags for a record given its branch
@@ -67,8 +110,8 @@ func minutesSinceMidnight(t time.Time) int {
 //   - is_early_leave   = check_out < work_end - early_leave
 //   - is_missing_checkout = has check_in, no check_out, and the day is over
 //
-// Only meaningful for a 'present' record. Absent/leave/holiday records carry no
-// anomaly flags.
+// Only meaningful for a 'present' record. Absent/holiday records carry no
+// anomaly flags; a 'leave' record carries only is_leave_punch (it has punches).
 func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *AttendanceState {
 	// Reset before recomputing so corrections clear stale flags.
 	s.IsLate = false
@@ -78,13 +121,18 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 	s.IsMissingCheckout = false
 	s.IsMissingCheckin = false
 	s.IsNoPunch = false
+	s.IsLeavePunch = false
 
+	if s.Status == "leave" {
+		s.IsLeavePunch = s.CheckIn != nil || s.CheckOut != nil
+		return s
+	}
 	if s.Status != "present" {
 		return s
 	}
 
 	if s.CheckIn != nil {
-		inMin := minutesSinceMidnight(*s.CheckIn)
+		inMin := s.dayMinutes(*s.CheckIn)
 		if inMin > sched.WorkStartMinutes+sched.GraceMinutes {
 			s.IsLate = true
 			s.LateMinutes = inMin - sched.WorkStartMinutes
@@ -92,7 +140,7 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 	}
 
 	if s.CheckOut != nil {
-		outMin := minutesSinceMidnight(*s.CheckOut)
+		outMin := s.dayMinutes(*s.CheckOut)
 		threshold := sched.WorkEndMinutes - sched.EarlyLeaveMinutes
 		if outMin < threshold {
 			s.IsEarlyLeave = true
@@ -132,6 +180,19 @@ func ComputeOvertimeMinutes(checkOut *time.Time, sched Schedule) int {
 		return 0
 	}
 	outMin := minutesSinceMidnight(*checkOut)
+	if outMin <= sched.WorkEndMinutes {
+		return 0
+	}
+	return outMin - sched.WorkEndMinutes
+}
+
+// ComputeOvertimeMinutesOn is ComputeOvertimeMinutes measured from the record's
+// work day, so a check-out after midnight counts its full overtime.
+func ComputeOvertimeMinutesOn(date time.Time, checkOut *time.Time, sched Schedule) int {
+	if checkOut == nil {
+		return 0
+	}
+	outMin := MinutesFromWorkDay(date, *checkOut)
 	if outMin <= sched.WorkEndMinutes {
 		return 0
 	}
@@ -203,11 +264,14 @@ func sourceWins(existingSource, incomingSource string) bool {
 // It returns the updated state (same pointer). Anomalies are NOT recomputed here;
 // the caller runs ComputeAnomalies afterwards.
 func MergeAttendanceEvent(s *AttendanceState, ev AttendanceEvent) *AttendanceState {
-	if s.Status == "" {
-		s.Status = "present"
-	} else if s.Status != "present" {
-		// A real punch overrides absent/holiday; leave stays leave only if the
-		// caller decides — here a physical event means the person was present.
+	switch s.Status {
+	case "present":
+	case "leave":
+		// A punch on an approved leave day keeps the leave: the day off is paid
+		// and must not turn into a late/early working day. The punch is still
+		// stored, and ComputeAnomalies flags the day (is_leave_punch) for HR.
+	default:
+		// A real punch overrides absent/holiday (or a fresh empty state).
 		s.Status = "present"
 	}
 

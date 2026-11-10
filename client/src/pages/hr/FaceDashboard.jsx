@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getFaceOverview } from '../../api';
 
+import { fmtDateTime as fmtWIB } from '../../time';
 // Face & device dashboard — coverage of stored face enrollments plus the health
 // of the attendance-device fleet that captures them. The per-employee list of
 // who is still missing an enrollment lives at /hr/face/unregistered.
@@ -12,8 +13,7 @@ const SOURCE_META = {
   manual:      { label: 'Manual',     color: '#555',    bg: '#eeeeee' },
 };
 
-const fmtDateTime = (ts) =>
-  ts ? new Date(ts).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+const fmtDateTime = (ts) => fmtWIB(ts, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 // "Terakhir aktif" reads better as an age than an absolute timestamp — an
 // operator scanning the fleet wants to spot the kiosk that went quiet.

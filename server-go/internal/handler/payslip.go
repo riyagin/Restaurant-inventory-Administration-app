@@ -81,6 +81,12 @@ func trimDays(n pgtype.Numeric) string {
 	return s
 }
 
+// formatCutHours renders a minute count as hours with at most two decimals
+// (45 → "0.75", 120 → "2").
+func formatCutHours(minutes int32) string {
+	return strconv.FormatFloat(float64(minutes)/60, 'f', -1, 64)
+}
+
 // buildPayslipData assembles the DB-free PayslipData for a single line.
 func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (service.PayslipData, *db.GetPayrollLineForPayslipRow, error) {
 	ctx := r.Context()
@@ -170,6 +176,12 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		deductions = append(deductions, service.PayslipLineItem{
 			Label:  fmt.Sprintf("Setengah Hari (%s jam)", trimDays(line.HalfDayHours)),
 			Amount: line.HalfDayDeduction,
+		})
+	}
+	if line.AttendanceCutDeduction != 0 {
+		deductions = append(deductions, service.PayslipLineItem{
+			Label:  fmt.Sprintf("Telat / Pulang Awal (%s jam)", formatCutHours(line.AttendanceCutMinutes)),
+			Amount: line.AttendanceCutDeduction,
 		})
 	}
 

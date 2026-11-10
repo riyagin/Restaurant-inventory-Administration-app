@@ -5,6 +5,7 @@ import {
   getTaskDefinitions, createTaskDefinition, updateTaskDefinition, deleteTaskDefinition,
 } from '../../api';
 
+import { monthWIB } from '../../time';
 // KPI & daily duties.
 //
 // The two belong on one page because a KPI here is nothing but a target against
@@ -28,7 +29,7 @@ const TASK_TYPES = [
 ];
 const taskTypeOf = (k) => TASK_TYPES.find((t) => t.key === k);
 
-const currentMonth = () => new Date().toISOString().slice(0, 7);
+const currentMonth = () => monthWIB();
 
 const emptyKpi = { name: '', definition_id: '', metric: 'completion_rate', target_value: 95, weight: 1, is_active: true };
 const emptyTask = {

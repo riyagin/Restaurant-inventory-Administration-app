@@ -6,6 +6,7 @@ const TYPE_LABELS = {
   bonus: 'Bonus',
   deduction: 'Potongan',
   daily_allowance: 'Harian (Tunai)',
+  benefit_fund: 'Dana Kesejahteraan',
 };
 
 const CALC_LABELS = {
@@ -131,6 +132,7 @@ export default function WageComponents() {
               <option value="bonus">Bonus</option>
               <option value="deduction">Potongan</option>
               <option value="daily_allowance">Harian (Tunai)</option>
+              <option value="benefit_fund">Dana Kesejahteraan</option>
             </select>
           </div>
           <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 130 }}>
@@ -212,6 +214,7 @@ export default function WageComponents() {
                   <option value="bonus">Bonus</option>
                   <option value="deduction">Potongan</option>
                   <option value="daily_allowance">Harian (Tunai)</option>
+                  <option value="benefit_fund">Dana Kesejahteraan</option>
                 </select>
               </div>
               <div className="form-group">

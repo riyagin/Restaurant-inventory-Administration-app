@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   getLeaveRequests, approveLeaveRequest, rejectLeaveRequest,
   getOvertimeRequests, approveOvertimeRequest, rejectOvertimeRequest,
+  getShiftChangeRequests, approveShiftChange, rejectShiftChange,
+  getAttendancePermissions, approveAttendancePermission, rejectAttendancePermission,
   getBranches,
 } from '../../api';
 import { canApprove } from '../../roles';
@@ -10,6 +12,8 @@ import { BackdatedBadge } from './LeaveRuleWidgets';
 const TYPE_META = {
   leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
   overtime: { label: 'Lembur', bg: '#fff3e0', color: '#b45309' },
+  shift:    { label: 'Shift',  bg: '#ede9fe', color: '#6d28d9' },
+  permission: { label: 'Izin', bg: '#e0f2f1', color: '#00695c' },
 };
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -46,8 +50,43 @@ function normOvertime(o) {
   };
 }
 
-const APPROVE_FNS = { leave: approveLeaveRequest, overtime: approveOvertimeRequest };
-const REJECT_FNS = { leave: rejectLeaveRequest, overtime: rejectOvertimeRequest };
+// An attendance permit (Izin Masuk Siang / Izin Pulang Awal / Dinas Luar): once
+// approved it changes how that day is judged (half day / no late-early flags).
+function normPermission(p) {
+  return {
+    key: `perm-${p.id}`, id: p.id, type: 'permission',
+    employee_name: p.employee_name, employee_code: p.employee_code,
+    branch_id: p.branch_id ?? null,
+    sortDate: p.date,
+    periodLabel: fmtDate(p.date),
+    detail: p.type_label,
+    subtitle: p.reason,
+    is_backdated: p.is_backdated,
+    reason: p.reason,
+  };
+}
+
+// A shift change is always about today's roster; once the day has passed it can
+// only be rejected (the server refuses to approve it).
+function normShift(c) {
+  const code = (name, sc) => (name ? `${name} (${sc})` : 'tanpa shift');
+  return {
+    key: `shift-${c.id}`, id: c.id, type: 'shift',
+    employee_name: c.employee_name, employee_code: c.employee_code,
+    branch_id: c.branch_id ?? null,
+    sortDate: c.date,
+    periodLabel: fmtDate(c.date),
+    detail: c.shift_code || 'hapus',
+    subtitle: `${code(c.prev_shift_name, c.prev_shift_code)} → ${code(c.shift_name, c.shift_code)}`
+      + (c.division_name ? ` · ${c.division_name}` : '')
+      + (c.requested_by_username ? ` · oleh ${c.requested_by_username}` : ''),
+    reason: c.reason,
+    expired: c.expired,
+  };
+}
+
+const APPROVE_FNS = { leave: approveLeaveRequest, overtime: approveOvertimeRequest, shift: approveShiftChange, permission: approveAttendancePermission };
+const REJECT_FNS = { leave: rejectLeaveRequest, overtime: rejectOvertimeRequest, shift: rejectShiftChange, permission: rejectAttendancePermission };
 
 export default function Approvals() {
   const manager = isManager();
@@ -65,13 +104,19 @@ export default function Approvals() {
     const params = { status: 'pending' };
     if (filters.branch_id) params.branch_id = filters.branch_id;
     try {
-      const [lv, ot] = await Promise.all([
-        filters.type === 'overtime' ? Promise.resolve({ data: [] }) : getLeaveRequests(params).catch(() => ({ data: [] })),
-        filters.type === 'leave' ? Promise.resolve({ data: [] }) : getOvertimeRequests(params).catch(() => ({ data: [] })),
+      const want = (t) => !filters.type || filters.type === t;
+      const none = Promise.resolve({ data: [] });
+      const [lv, ot, sh, pm] = await Promise.all([
+        want('leave') ? getLeaveRequests(params).catch(() => ({ data: [] })) : none,
+        want('overtime') ? getOvertimeRequests(params).catch(() => ({ data: [] })) : none,
+        want('shift') ? getShiftChangeRequests(params).catch(() => ({ data: [] })) : none,
+        want('permission') ? getAttendancePermissions(params).catch(() => ({ data: [] })) : none,
       ]);
       const merged = [
         ...(Array.isArray(lv.data) ? lv.data : []).map(normLeave),
         ...(Array.isArray(ot.data) ? ot.data : []).map(normOvertime),
+        ...(Array.isArray(sh.data) ? sh.data : []).map(normShift),
+        ...(Array.isArray(pm.data) ? pm.data : []).map(normPermission),
       ].sort((a, b) => new Date(a.sortDate) - new Date(b.sortDate)); // oldest first — process queue
       setRows(merged);
     } catch {
@@ -90,7 +135,7 @@ export default function Approvals() {
         <h2 style={{ margin: 0 }}>Persetujuan</h2>
         <span style={{ fontSize: '0.85rem', color: '#667' }}>{rows.length} menunggu</span>
       </div>
-      <p style={{ color: '#667', marginTop: 0, fontSize: '0.88rem' }}>Pengajuan cuti dan lembur yang menunggu keputusan manajer.</p>
+      <p style={{ color: '#667', marginTop: 0, fontSize: '0.88rem' }}>Pengajuan cuti, lembur, izin, dan perubahan shift hari ini yang menunggu keputusan manajer.</p>
 
       {!manager && (
         <div style={{ background: '#fff8e1', color: '#a06800', padding: '0.6rem 0.9rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.88rem' }}>
@@ -104,6 +149,8 @@ export default function Approvals() {
           <option value="">Semua jenis</option>
           <option value="leave">Cuti</option>
           <option value="overtime">Lembur</option>
+          <option value="shift">Perubahan shift</option>
+          <option value="permission">Izin (masuk siang / pulang awal / dinas luar)</option>
         </select>
         <select value={filters.branch_id} onChange={e => setFilters({ ...filters, branch_id: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
           <option value="">Semua cabang</option>
@@ -127,13 +174,17 @@ export default function Approvals() {
               <tr key={r.key}>
                 <td><TypeBadge type={r.type} /></td>
                 <td>{r.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{r.employee_code}</div></td>
-                <td style={{ fontSize: '0.88rem', color: '#445' }}>{r.subtitle}<BackdatedBadge request={r} /></td>
+                <td style={{ fontSize: '0.88rem', color: '#445' }}>
+                  {r.subtitle}<BackdatedBadge request={r} />
+                  {r.type === 'shift' && r.reason && <div style={{ fontSize: '0.78rem', color: '#889' }}>Alasan: {r.reason}</div>}
+                  {r.expired && <div style={{ fontSize: '0.78rem', color: '#b91c1c' }}>Tanggal sudah lewat — hanya dapat ditolak</div>}
+                </td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{r.periodLabel}</td>
                 <td style={{ textAlign: 'center' }}>{r.detail}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {manager && (
                     <span style={{ display: 'flex', gap: '0.3rem' }}>
-                      <button className="btn btn-sm btn-primary" onClick={() => setDecision({ action: 'approve', request: r })}>Setujui</button>
+                      {!r.expired && <button className="btn btn-sm btn-primary" onClick={() => setDecision({ action: 'approve', request: r })}>Setujui</button>}
                       <button className="btn btn-sm btn-secondary" onClick={() => setDecision({ action: 'reject', request: r })}>Tolak</button>
                     </span>
                   )}

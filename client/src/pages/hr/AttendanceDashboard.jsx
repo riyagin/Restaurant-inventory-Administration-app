@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getAttendance, getBranches, reconcileAttendance } from '../../api';
+import { fmtTime, todayWIB } from '../../time';
+import { isBranchOperator } from '../../roles';
 import AttendanceGrid from './AttendanceGrid';
 
 // ── branch colour palette ─────────────────────────────────────────────────────
@@ -61,6 +63,13 @@ export function SourceBadge({ source }) {
   );
 }
 
+// The approved permit that shaped a day (see Pengajuan → Izin).
+const EXCUSE_LABEL = {
+  late_arrival: 'Izin Masuk Siang',
+  early_departure: 'Izin Pulang Awal',
+  off_site: 'Dinas Luar',
+};
+
 export function AnomalyChips({ record }) {
   const chips = [];
   if (record.is_late)            chips.push(`Terlambat ${record.late_minutes} mnt`);
@@ -68,6 +77,8 @@ export function AnomalyChips({ record }) {
   if (record.is_missing_checkout) chips.push('Tidak Absen Pulang');
   if (record.is_missing_checkin)  chips.push('Tidak Absen Masuk');
   if (record.is_no_punch)         chips.push('Tidak Absen Masuk & Pulang');
+  if (record.is_leave_punch)      chips.push('Absen saat Cuti');
+  if (record.excused_by)          chips.push(EXCUSE_LABEL[record.excused_by] || 'Izin');
   if (chips.length === 0) return null;
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginTop: '0.4rem' }}>
@@ -80,8 +91,8 @@ export function AnomalyChips({ record }) {
   );
 }
 
-export const fmtTime = (ts) =>
-  ts ? new Date(ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : null;
+// Attendance times are always shown on the WIB clock (see time.js).
+export { fmtTime };
 
 function fmtDateLabel(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -100,7 +111,7 @@ function shiftDate(iso, days) {
   return toLocalISO(d);
 }
 
-const todayStr = () => toLocalISO(new Date());
+const todayStr = () => todayWIB();
 
 // ── card ──────────────────────────────────────────────────────────────────────
 
@@ -254,6 +265,9 @@ export default function AttendanceDashboard() {
   const [allRows, setAllRows]     = useState([]);   // unfiltered by status (for counts)
   const [loading, setLoading]     = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  // A branch operator's list is already confined to their branch by the server,
+  // and reconciling marks absences org-wide — neither control applies.
+  const operator = isBranchOperator();
   const [msg, setMsg]             = useState('');
 
   useEffect(() => {
@@ -364,10 +378,12 @@ export default function AttendanceDashboard() {
 
           {/* filters */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
-            <select value={branchId} onChange={e => setBranchId(e.target.value)} style={{ fontSize: '0.85rem' }}>
-              <option value="">Semua Cabang</option>
-              {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
+            {!operator && (
+              <select value={branchId} onChange={e => setBranchId(e.target.value)} style={{ fontSize: '0.85rem' }}>
+                <option value="">Semua Cabang</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            )}
 
             <input
               value={search}
@@ -383,9 +399,11 @@ export default function AttendanceDashboard() {
             </label>
 
             <button onClick={() => load()} className="btn btn-primary btn-sm">Terapkan</button>
-            <button onClick={handleReconcile} disabled={reconciling} className="btn btn-secondary btn-sm">
-              {reconciling ? 'Memproses…' : 'Rekonsiliasi Absen'}
-            </button>
+            {!operator && (
+              <button onClick={handleReconcile} disabled={reconciling} className="btn btn-secondary btn-sm">
+                {reconciling ? 'Memproses…' : 'Rekonsiliasi Absen'}
+              </button>
+            )}
           </div>
         </div>
 

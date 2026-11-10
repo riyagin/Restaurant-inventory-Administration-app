@@ -116,6 +116,9 @@ func (h *KasbonHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		params.EmployeeID = pgtype.UUID{Bytes: eid, Valid: true}
 	}
+	if b, ok := scopedBranch(r); ok {
+		params.BranchID = b
+	}
 
 	rows, err := h.queries.ListKasbons(ctx, params)
 	if err != nil {
@@ -147,6 +150,9 @@ func (h *KasbonHandler) Get(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil kasbon")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, k.EmployeeID) {
+		return
+	}
 
 	installments, err := h.queries.ListKasbonInstallments(ctx, pgID)
 	if err != nil {
@@ -175,6 +181,9 @@ func (h *KasbonHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "karyawan tidak valid")
 		return
 	}
+	if !requireEmployeeInScope(w, r, h.queries, pgtype.UUID{Bytes: empID, Valid: true}) {
+		return
+	}
 	fundID, err := parseUUID(strings.TrimSpace(body.FundSourceAccountID))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "sumber dana tidak valid")
@@ -200,7 +209,7 @@ func (h *KasbonHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestDateRaw := time.Now().UTC()
+	requestDateRaw := service.TodayWIB() // the request is dated on the WIB business day
 	if err := service.ValidateResolutionWindow(requestDateRaw, resolutionMonth); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -589,6 +598,9 @@ func (h *KasbonHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondError(w, http.StatusInternalServerError, "gagal mengambil kasbon")
+		return
+	}
+	if !requireEmployeeInScope(w, r, h.queries, k.EmployeeID) {
 		return
 	}
 	if !service.CanCancel(k.Status) {

@@ -139,7 +139,8 @@ INSERT INTO payroll_lines (
     component_deduction_total, kasbon_deduction, unpaid_leave_days,
     unpaid_leave_deduction, gross_pay, net_pay, performance_score,
     overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-    half_day_hours, half_day_deduction
+    half_day_hours, half_day_deduction,
+    attendance_cut_minutes, attendance_cut_deduction
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3,
@@ -148,7 +149,8 @@ VALUES (
     $12, $13, $14,
     $15, $16, $17, $18,
     $19, $20, $21,
-    $22, $23
+    $22, $23,
+    $24, $25
 )
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
@@ -156,7 +158,7 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
           overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction
+          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
 `
 
 type CreatePayrollLineParams struct {
@@ -183,6 +185,8 @@ type CreatePayrollLineParams struct {
 	OvertimeHourlyAmount    int64          `json:"overtime_hourly_amount"`
 	HalfDayHours            pgtype.Numeric `json:"half_day_hours"`
 	HalfDayDeduction        int64          `json:"half_day_deduction"`
+	AttendanceCutMinutes    int32          `json:"attendance_cut_minutes"`
+	AttendanceCutDeduction  int64          `json:"attendance_cut_deduction"`
 }
 
 // ── Payroll Lines ────────────────────────────────────────────────────────────
@@ -211,6 +215,8 @@ func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineP
 		arg.OvertimeHourlyAmount,
 		arg.HalfDayHours,
 		arg.HalfDayDeduction,
+		arg.AttendanceCutMinutes,
+		arg.AttendanceCutDeduction,
 	)
 	var i PayrollLine
 	err := row.Scan(
@@ -242,6 +248,8 @@ func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineP
 		&i.OvertimeHourlyAmount,
 		&i.HalfDayHours,
 		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
 	)
 	return &i, err
 }
@@ -389,7 +397,7 @@ SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
        performance_score, reviewed, reviewed_by, reviewed_at, review_note,
        overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-       half_day_hours, half_day_deduction
+       half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
 FROM payroll_lines
 WHERE id = $1
 `
@@ -426,6 +434,8 @@ func (q *Queries) GetPayrollLineByID(ctx context.Context, id pgtype.UUID) (*Payr
 		&i.OvertimeHourlyAmount,
 		&i.HalfDayHours,
 		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
 	)
 	return &i, err
 }
@@ -490,6 +500,7 @@ SELECT
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     l.half_day_hours, l.half_day_deduction,
+    l.attendance_cut_minutes, l.attendance_cut_deduction,
     e.full_name AS employee_name, e.employee_code, e.join_date,
     pos.name AS position_name,
     b.name   AS branch_name,
@@ -526,6 +537,8 @@ type GetPayrollLineForPayslipRow struct {
 	OvertimeHourlyAmount    int64          `json:"overtime_hourly_amount"`
 	HalfDayHours            pgtype.Numeric `json:"half_day_hours"`
 	HalfDayDeduction        int64          `json:"half_day_deduction"`
+	AttendanceCutMinutes    int32          `json:"attendance_cut_minutes"`
+	AttendanceCutDeduction  int64          `json:"attendance_cut_deduction"`
 	EmployeeName            string         `json:"employee_name"`
 	EmployeeCode            string         `json:"employee_code"`
 	JoinDate                pgtype.Date    `json:"join_date"`
@@ -566,6 +579,8 @@ func (q *Queries) GetPayrollLineForPayslip(ctx context.Context, id pgtype.UUID) 
 		&i.OvertimeHourlyAmount,
 		&i.HalfDayHours,
 		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
 		&i.EmployeeName,
 		&i.EmployeeCode,
 		&i.JoinDate,
@@ -627,7 +642,7 @@ const getPayrollPeriodSummary = `-- name: GetPayrollPeriodSummary :one
 SELECT
     COALESCE(SUM(l.gross_pay), 0)::bigint AS total_gross,
     COALESCE(SUM(l.net_pay), 0)::bigint AS total_net,
-    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction + l.half_day_deduction), 0)::bigint AS total_deductions,
+    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction + l.half_day_deduction + l.attendance_cut_deduction), 0)::bigint AS total_deductions,
     COUNT(l.id)::int AS line_count,
     COUNT(l.id) FILTER (WHERE l.reviewed)::int AS reviewed_count
 FROM payroll_lines l
@@ -822,6 +837,7 @@ SELECT
     l.performance_score, l.reviewed, l.reviewed_by, l.reviewed_at, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     l.half_day_hours, l.half_day_deduction,
+    l.attendance_cut_minutes, l.attendance_cut_deduction,
     e.full_name AS employee_name, e.employee_code,
     e.position_id, pos.name AS position_name,
     e.branch_id, b.name AS branch_name
@@ -879,6 +895,8 @@ type ListPayrollLinesForPeriodRow struct {
 	OvertimeHourlyAmount    int64              `json:"overtime_hourly_amount"`
 	HalfDayHours            pgtype.Numeric     `json:"half_day_hours"`
 	HalfDayDeduction        int64              `json:"half_day_deduction"`
+	AttendanceCutMinutes    int32              `json:"attendance_cut_minutes"`
+	AttendanceCutDeduction  int64              `json:"attendance_cut_deduction"`
 	EmployeeName            string             `json:"employee_name"`
 	EmployeeCode            string             `json:"employee_code"`
 	PositionID              pgtype.UUID        `json:"position_id"`
@@ -932,6 +950,8 @@ func (q *Queries) ListPayrollLinesForPeriod(ctx context.Context, arg *ListPayrol
 			&i.OvertimeHourlyAmount,
 			&i.HalfDayHours,
 			&i.HalfDayDeduction,
+			&i.AttendanceCutMinutes,
+			&i.AttendanceCutDeduction,
 			&i.EmployeeName,
 			&i.EmployeeCode,
 			&i.PositionID,
@@ -1200,7 +1220,7 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
           overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction
+          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
 `
 
 type UpdatePayrollLineReviewParams struct {
@@ -1265,6 +1285,8 @@ func (q *Queries) UpdatePayrollLineReview(ctx context.Context, arg *UpdatePayrol
 		&i.OvertimeHourlyAmount,
 		&i.HalfDayHours,
 		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
 	)
 	return &i, err
 }
@@ -1288,4 +1310,77 @@ func (q *Queries) SumHalfDayLostMinutes(ctx context.Context, arg *SumHalfDayLost
 	var total int64
 	err := row.Scan(&total)
 	return total, err
+}
+
+const listAttendanceCutDays = `-- name: ListAttendanceCutDays :many
+SELECT ar.date, ar.check_in, ar.check_out,
+       ar.is_late, ar.late_minutes, ar.is_early_leave, ar.early_leave_minutes, ar.is_half_day,
+       sd.code AS shift_code,
+       (CASE WHEN sd.id IS NULL THEN NULL ELSE
+          EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
+          + COALESCE(EXTRACT(EPOCH FROM (sd.end2 - sd.start2)) / 60, 0)
+          - sd.break_minutes
+        END)::int AS shift_paid_minutes
+FROM attendance_records ar
+LEFT JOIN shift_assignments sa ON sa.employee_id = ar.employee_id AND sa.date = ar.date
+LEFT JOIN shift_definitions sd ON sd.id = sa.shift_id
+WHERE ar.employee_id = $1 AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+  AND (ar.is_late OR ar.is_early_leave OR ar.is_half_day)
+ORDER BY ar.date
+`
+
+type ListAttendanceCutDaysParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+type ListAttendanceCutDaysRow struct {
+	Date              pgtype.Date        `json:"date"`
+	CheckIn           pgtype.Timestamptz `json:"check_in"`
+	CheckOut          pgtype.Timestamptz `json:"check_out"`
+	IsLate            bool               `json:"is_late"`
+	LateMinutes       int32              `json:"late_minutes"`
+	IsEarlyLeave      bool               `json:"is_early_leave"`
+	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
+	IsHalfDay         bool               `json:"is_half_day"`
+	ShiftCode         pgtype.Text        `json:"shift_code"`
+	ShiftPaidMinutes  pgtype.Int4        `json:"shift_paid_minutes"`
+}
+
+// Present days in [from, to] that carry a late / early-leave / half-day flag, with
+// the paid length of the shift rostered that day (segments minus the unpaid break;
+// NULL when no shift was rostered, so the caller falls back to branch hours). The
+// late / early minutes are the ones frozen at punch time, so the cut agrees with
+// what the attendance page shows.
+func (q *Queries) ListAttendanceCutDays(ctx context.Context, arg *ListAttendanceCutDaysParams) ([]*ListAttendanceCutDaysRow, error) {
+	rows, err := q.db.Query(ctx, listAttendanceCutDays, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListAttendanceCutDaysRow
+	for rows.Next() {
+		var i ListAttendanceCutDaysRow
+		if err := rows.Scan(
+			&i.Date,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.IsLate,
+			&i.LateMinutes,
+			&i.IsEarlyLeave,
+			&i.EarlyLeaveMinutes,
+			&i.IsHalfDay,
+			&i.ShiftCode,
+			&i.ShiftPaidMinutes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

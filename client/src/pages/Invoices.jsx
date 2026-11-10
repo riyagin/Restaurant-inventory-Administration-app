@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { getInvoices, deleteInvoice, payInvoice, getAccounts, getBranches, getDivisions, getVendors } from '../api';
 import { isAdminRole } from '../roles';
 
+import { todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
@@ -22,7 +23,7 @@ function StatusBadge({ status }) {
 }
 
 const PAGE_SIZE = 25;
-const todayStr = new Date().toISOString().split('T')[0];
+const todayStr = todayWIB();
 // Today in the *browser's* zone. `todayStr` is UTC, which in WIB (UTC+7) is still
 // yesterday until 07:00 — fine for a rough overdue check, not for a date that
 // becomes the journal date of a payment.

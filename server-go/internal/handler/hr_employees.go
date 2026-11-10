@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -149,6 +150,10 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	search := strings.TrimSpace(q.Get("q"))
 	branchID := strings.TrimSpace(q.Get("branch_id"))
+	if b, ok := scopedBranchString(r); ok {
+		// Branch operators pick from their own roster only.
+		branchID = b
+	}
 	positionID := strings.TrimSpace(q.Get("position_id"))
 	status := strings.TrimSpace(q.Get("status"))
 	employmentType := strings.TrimSpace(q.Get("employment_type"))
@@ -307,7 +312,88 @@ func (h *HREmployeesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
 		return
 	}
-	respondJSON(w, http.StatusOK, emp)
+
+	// Attach the latest face photo sent by an attendance device, so the profile
+	// shows what the employee currently looks like. A lookup failure only hides
+	// the photo; it should not fail the whole profile.
+	out := employeeDetailResponse{GetEmployeeByIDRow: emp}
+	if path, at, ok, ferr := service.LatestFacePhoto(r.Context(), h.pool, emp.ID); ferr != nil {
+		log.Printf("hr employee get: latest face photo failed: %v", ferr)
+	} else if ok {
+		out.FacePhotoPath = &path
+		out.FacePhotoAt = &at
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// employeeDetailResponse is GetEmployeeByIDRow (fields promoted into the same
+// JSON object) plus the latest device face photo.
+type employeeDetailResponse struct {
+	*db.GetEmployeeByIDRow
+	FacePhotoPath *string    `json:"face_photo_path"`
+	FacePhotoAt   *time.Time `json:"face_photo_at"`
+}
+
+// DeleteFaceData — DELETE /api/hr/employees/:id/face
+//
+// Removes an employee's stored face data: the embedding the devices match
+// against and every face photo (rows and files). Resigned employees keep both
+// until HR uses this. Refused for active employees, who need the embedding to
+// check in; re-enrolling on a kiosk replaces it instead.
+func (h *HREmployeesHandler) DeleteFaceData(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	if emp.Status == "active" {
+		respondError(w, http.StatusConflict, "data wajah karyawan aktif tidak dapat dihapus; tandai resign terlebih dahulu")
+		return
+	}
+
+	if _, err := h.pool.Exec(ctx, `
+		UPDATE employees
+		SET face_embedding = NULL,
+		    face_embedding_version = NULL,
+		    face_enrolled_at = NULL,
+		    updated_at = now()
+		WHERE id = $1`, pgID); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghapus data wajah")
+		return
+	}
+
+	removed, err := service.DeleteAllFacePhotos(ctx, h.pool, h.resolveUploadsDir(), pgID)
+	if err != nil {
+		log.Printf("hr employee delete face: delete photos (emp=%s) failed: %v", emp.EmployeeCode, err)
+		respondError(w, http.StatusInternalServerError, "data wajah terhapus, tetapi gagal menghapus foto")
+		return
+	}
+
+	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "DELETE",
+		EntityType:  "employee_face",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menghapus data wajah & %d foto absensi karyawan %s (%s)", removed, emp.FullName, emp.EmployeeCode),
+	})
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"message":        "data wajah berhasil dihapus",
+		"photos_removed": removed,
+	})
 }
 
 // Create — POST /api/hr/employees
@@ -735,6 +821,13 @@ func (h *HREmployeesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Face photo rows cascade with the employee; their files have to be removed
+	// by hand, so collect the names before the rows disappear.
+	facePhotos, err := service.ListFacePhotoPaths(ctx, h.pool, pgID)
+	if err != nil {
+		log.Printf("hr employee delete: list face photos failed: %v", err)
+	}
+
 	if err := h.queries.DeleteEmployee(ctx, pgID); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -749,6 +842,7 @@ func (h *HREmployeesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if emp.PhotoPath.Valid && emp.PhotoPath.String != "" {
 		_ = os.Remove(filepath.Join(h.resolveUploadsDir(), emp.PhotoPath.String))
 	}
+	service.RemoveFacePhotoFiles(h.resolveUploadsDir(), facePhotos)
 
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
 		UserID:      middleware.UserIDFromCtx(ctx),

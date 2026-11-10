@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getDailyReport, getBranches } from '../api';
 
+import { fmtTime as fmtWIBTime, todayWIB } from '../time';
 // Laporan Harian — the day at a glance, with the paperwork underneath it.
 //
 // This page used to open with five stat tiles and then five long tables of
@@ -23,10 +24,9 @@ import { getDailyReport, getBranches } from '../api';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v ?? 0);
 
-const fmtTime = (d) =>
-  d ? new Date(d).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—';
+const fmtTime = (d) => fmtWIBTime(d) || '—';
 
-const todayISO = () => new Date().toISOString().split('T')[0];
+const todayISO = () => todayWIB();
 
 // One hue per measure, held constant across every chart on the page: revenue is
 // always this green and expense always this amber, so a bar's meaning never

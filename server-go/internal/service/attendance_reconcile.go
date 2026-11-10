@@ -118,6 +118,23 @@ func ReconcileAbsent(ctx context.Context, q *db.Queries, date time.Time) (*Recon
 			continue
 		}
 
+		// An approved off-site permit (Dinas Luar) makes a punch-less day present.
+		perms, err := q.ListApprovedPermissionTypes(ctx, &db.ListApprovedPermissionTypesParams{EmployeeID: e.ID, Date: pgDate})
+		if err != nil {
+			return nil, err
+		}
+		offSite := false
+		for _, p := range perms {
+			offSite = offSite || p == "off_site"
+		}
+		if offSite {
+			if _, _, err := RebuildDay(ctx, q, e.ID, dateOnly, ScheduleWithShiftQ(ctx, q, sched, e.ID, dateOnly), RebuildOptions{}); err != nil {
+				return nil, err
+			}
+			res.Skipped++
+			continue
+		}
+
 		if err := q.InsertAbsentRecord(ctx, &db.InsertAbsentRecordParams{
 			EmployeeID: e.ID,
 			Date:       pgDate,

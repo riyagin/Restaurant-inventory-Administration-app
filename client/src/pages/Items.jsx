@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { getItems, deleteItem, createItem, updateItem } from '../api';
 
+import { todayWIB } from '../time';
 // Stock and non-stock items have different history pages: stock items get
 // warehouse balances + movements, non-stock items only ever have invoice lines.
 const historyPath = (item) =>
@@ -120,7 +121,7 @@ function exportItemsExcel(items) {
       ];
     }),
   ];
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = todayWIB();
   writeSheet(rows, `daftar-barang-${stamp}.xlsx`);
 }
 

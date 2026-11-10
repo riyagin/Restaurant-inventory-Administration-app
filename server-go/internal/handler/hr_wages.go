@@ -31,7 +31,8 @@ func NewHRWagesHandler(pool *pgxpool.Pool, queries *db.Queries) *HRWagesHandler 
 func validComponentType(t string) bool {
 	switch t {
 	case service.ComponentTypeAllowance, service.ComponentTypeBonus,
-		service.ComponentTypeDeduction, service.ComponentTypeDailyAllowance:
+		service.ComponentTypeDeduction, service.ComponentTypeDailyAllowance,
+		service.ComponentTypeBenefitFund:
 		return true
 	}
 	return false
@@ -117,7 +118,7 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !validComponentType(body.Type) {
-		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, atau daily_allowance")
+		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, atau benefit_fund")
 		return
 	}
 	calcMethod, ok := resolveCalcMethod(body.CalcMethod)
@@ -189,7 +190,7 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !validComponentType(body.Type) {
-		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, atau daily_allowance")
+		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, atau benefit_fund")
 		return
 	}
 	calcMethod, ok := resolveCalcMethod(body.CalcMethod)

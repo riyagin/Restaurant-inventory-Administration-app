@@ -2,13 +2,14 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getFinancialReport, getCashSummaryReport, getHRSettings } from '../api';
 
+import { todayWIB } from '../time';
 const SERVER = 'http://localhost:5000';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v ?? 0);
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return todayWIB();
 }
 
 function firstOfMonthStr() {

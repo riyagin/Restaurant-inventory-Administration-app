@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { getPayrollPeriods, createPayrollPeriod, deletePayrollPeriod } from '../../api';
 
+import { monthWIB } from '../../time';
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
 const STATUS_COLORS = {
   open:   { bg: '#fff8e1', color: '#a06800' },
@@ -27,7 +28,7 @@ export default function PayrollDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(() => monthWIB());
   const [submitting, setSubmitting] = useState(false);
   const [warnings, setWarnings] = useState([]);
 
@@ -84,10 +85,16 @@ export default function PayrollDashboard() {
     <div style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={{ margin: 0, fontSize: 24 }}>Penggajian</h1>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Link to="/hr/payroll/attendance-cut"
+          style={{ color: '#1967d2', border: '1px solid #c6d4ee', borderRadius: 8, padding: '9px 14px', fontWeight: 600, textDecoration: 'none' }}>
+          Simulasi Potongan
+        </Link>
         <button onClick={() => { setShowForm(true); setWarnings([]); setError(''); }}
           style={{ background: '#1967d2', color: '#fff', border: 0, borderRadius: 8, padding: '10px 16px', fontWeight: 600, cursor: 'pointer' }}>
           + Buat Periode
         </button>
+        </div>
       </div>
 
       {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 12, borderRadius: 8, marginBottom: 12 }}>{error}</div>}

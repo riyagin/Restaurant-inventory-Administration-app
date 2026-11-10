@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getThrRuns, createThrRun, deleteThrRun } from '../../api';
 
+import { todayWIB } from '../../time';
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
 const STATUS_COLORS = {
   open:   { bg: '#fff8e1', color: '#a06800' },
@@ -28,7 +29,7 @@ export default function ThrDashboard() {
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
-  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [paymentDate, setPaymentDate] = useState(() => todayWIB());
   const [submitting, setSubmitting] = useState(false);
   const [warnings, setWarnings] = useState([]);
   const [contractSkipped, setContractSkipped] = useState([]);
@@ -106,9 +107,10 @@ export default function ThrDashboard() {
         </button>
       </div>
       <p style={{ color: '#667', marginTop: 0, marginBottom: 16, fontSize: 13 }}>
-        THR dihitung dari gaji pokok dan masa kerja: masa kerja ≥ 12 bulan menerima 1 bulan gaji pokok,
-        kurang dari itu dihitung proporsional (bulan masa kerja dibulatkan ke atas ÷ 12 × gaji pokok).
-        Karyawan kontrak (PKWT) tidak berhak menerima THR dan dikecualikan dari run.
+        THR hanya untuk karyawan tetap: masa kerja ≥ 12 bulan menerima 1 bulan gaji pokok,
+        kurang dari itu dihitung proporsional (gaji pokok ÷ 12 × jumlah bulan sejak tanggal tetap sampai bulan pembayaran).
+        Contoh: tetap sejak Januari, THR dibayar Maret → 2/12 gaji pokok.
+        Karyawan kontrak (PKWT) dikecualikan dari run — mereka menerima gaji ke-13 di akhir kontrak.
       </p>
 
       {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 12, borderRadius: 8, marginBottom: 12 }}>{error}</div>}

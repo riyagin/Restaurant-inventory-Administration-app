@@ -249,6 +249,13 @@ func (p *PayrollPoster) post(ctx context.Context, periodID pgtype.UUID, actor uu
 		return err
 	}
 
+	// Benefit fund (migration 085): the month's employer contribution into Dana
+	// Kesehatan and the sweep of whatever claims left unused into Dana Pensiun.
+	// Same transaction, so a period is never marked posted with the fund missing.
+	if _, err := PostBenefitFundPeriod(ctx, qtx, period, actor); err != nil {
+		return fmt.Errorf("dana kesejahteraan: %w", err)
+	}
+
 	if err := qtx.MarkPayrollPostingPosted(ctx, &db.MarkPayrollPostingPostedParams{
 		PeriodID:       periodID,
 		JournalEntryID: pgtype.UUID{Bytes: entryID, Valid: entryID != uuid.Nil},

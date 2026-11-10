@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getUsers, createUser, updateUser, deleteUser } from '../api';
+import { getUsers, createUser, updateUser, deleteUser, getBranches } from '../api';
 
 const currentUser = () => { try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; } };
 
@@ -8,6 +8,7 @@ const currentUser = () => { try { return JSON.parse(localStorage.getItem('user')
 const ROLES = [
   ['staff', 'Staff'],
   ['hr', 'HR'],
+  ['branch_operator', 'Operator Cabang'],
   ['manager', 'Manajer'],
   ['admin', 'Admin'],
   ['superuser', 'Superuser'],
@@ -16,13 +17,17 @@ const ROLES = [
 const ROLE_NOTES = {
   staff: 'Akses penuh operasional & HR, kecuali laporan dan log aktivitas. Tidak dapat menyetujui pengajuan.',
   hr: 'Hanya modul HR, dengan dasbor sendiri. Tidak dapat menyetujui pengajuan.',
+  branch_operator: 'Satu cabang saja: cek & koreksi absensi, ajukan cuti, lembur, dan kasbon untuk karyawan cabang tersebut. Tidak dapat menyetujui pengajuan.',
   manager: 'Akses penuh, termasuk menyetujui kasbon, cuti, dan lembur.',
   admin: 'Akses penuh kecuali persetujuan pengajuan.',
   superuser: 'Seluruh akses tanpa terkecuali, termasuk persetujuan pengajuan. Navigasi ditandai merah tua saat login. Berikan hanya kepada pemilik.',
 };
 
-const emptyCreate = { username: '', password: '', confirm: '', role: 'staff' };
-const emptyEdit   = { username: '', role: 'staff' };
+const emptyCreate = { username: '', password: '', confirm: '', role: 'staff', branch_id: '' };
+const emptyEdit   = { username: '', role: 'staff', branch_id: '' };
+
+// Only a branch operator carries a branch; the server drops it for other roles.
+const branchFor = (form) => (form.role === 'branch_operator' ? form.branch_id : '');
 const emptyPw     = { old_password: '', password: '', confirm: '' };
 
 export default function Users() {
@@ -35,10 +40,12 @@ export default function Users() {
   const [pwForm, setPwForm]         = useState(emptyPw);
   const [error, setError]           = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [branches, setBranches]     = useState([]);
 
   const me = currentUser();
   const load = () => getUsers().then(r => setUsers(r.data));
   useEffect(() => { load(); }, []);
+  useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => setBranches([])); }, []);
 
   const fmt = (d) => new Date(d).toLocaleDateString('id-ID');
 
@@ -51,7 +58,7 @@ export default function Users() {
     if (createForm.password !== createForm.confirm) { setError('Konfirmasi password tidak cocok'); return; }
     setSubmitting(true);
     try {
-      await createUser({ username: createForm.username, password: createForm.password, role: createForm.role });
+      await createUser({ username: createForm.username, password: createForm.password, role: createForm.role, branch_id: branchFor(createForm) });
       setShowCreate(false);
       load();
     } catch (err) {
@@ -62,14 +69,14 @@ export default function Users() {
   };
 
   // ── Edit (username + role only) ───────────────────────────────────────────
-  const openEdit = (u) => { setEditTarget(u); setEditForm({ username: u.username, role: u.role }); setError(''); };
+  const openEdit = (u) => { setEditTarget(u); setEditForm({ username: u.username, role: u.role, branch_id: u.branch_id || '' }); setError(''); };
 
   const handleEdit = async (e) => {
     e.preventDefault();
     setError('');
     setSubmitting(true);
     try {
-      await updateUser(editTarget.id, { username: editForm.username, role: editForm.role });
+      await updateUser(editTarget.id, { username: editForm.username, role: editForm.role, branch_id: branchFor(editForm) });
       setEditTarget(null);
       load();
     } catch (err) {
@@ -135,7 +142,10 @@ export default function Users() {
                   {u.username}
                   {u.id === me.id && <span style={{ marginLeft: '0.4rem', fontSize: '0.75rem', color: '#4f8ef7' }}>(kamu)</span>}
                 </td>
-                <td><span className={`badge${u.role === 'superuser' ? ' badge-superuser' : ''}`}>{u.role}</span></td>
+                <td>
+                  <span className={`badge${u.role === 'superuser' ? ' badge-superuser' : ''}`}>{u.role}</span>
+                  {u.branch_name && <div style={{ fontSize: '0.75rem', color: '#888', marginTop: '0.2rem' }}>{u.branch_name}</div>}
+                </td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmt(u.created_at)}</td>
                 <td>
                   <div className="actions">
@@ -166,6 +176,9 @@ export default function Users() {
               </select>
               <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.35rem' }}>{ROLE_NOTES[createForm.role]}</div>
             </div>
+            {createForm.role === 'branch_operator' && (
+              <BranchField branches={branches} value={createForm.branch_id} onChange={v => setCreateForm(f => ({ ...f, branch_id: v }))} />
+            )}
             <div className="form-group">
               <label>Password</label>
               <input type="password" value={createForm.password} onChange={e => setCreateForm(f => ({ ...f, password: e.target.value }))} required placeholder="Masukkan password" />
@@ -200,6 +213,9 @@ export default function Users() {
               </select>
               <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.35rem' }}>{ROLE_NOTES[editForm.role]}</div>
             </div>
+            {editForm.role === 'branch_operator' && (
+              <BranchField branches={branches} value={editForm.branch_id} onChange={v => setEditForm(f => ({ ...f, branch_id: v }))} />
+            )}
             <ModalActions>
               <button type="submit" className="btn btn-primary" disabled={submitting} style={{ flex: 1, justifyContent: 'center' }}>
                 {submitting ? 'Menyimpan...' : 'Simpan Perubahan'}
@@ -237,6 +253,21 @@ export default function Users() {
         </Modal>
       )}
     </>
+  );
+}
+
+function BranchField({ branches, value, onChange }) {
+  return (
+    <div className="form-group">
+      <label>Cabang</label>
+      <select value={value} onChange={e => onChange(e.target.value)} required>
+        <option value="">— Pilih cabang —</option>
+        {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+      </select>
+      <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.35rem' }}>
+        Operator hanya melihat dan mengajukan untuk karyawan cabang ini.
+      </div>
+    </div>
   );
 }
 

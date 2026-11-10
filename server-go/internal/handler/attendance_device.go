@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -8,12 +9,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -130,10 +129,6 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Record date is the calendar date of the event (in its own offset).
-	dateOnly := time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, time.UTC)
-	pgDate := pgtype.Date{Time: dateOnly, Valid: true}
-
 	// The branch where the employee checks in governs the schedule: a visitor
 	// called to another branch is judged by that branch's hours/work-days. For a
 	// normal same-branch check-in the device branch equals the home branch, so
@@ -142,7 +137,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	if dev != nil && dev.BranchID.Valid {
 		scheduleBranch = dev.BranchID
 	}
-	sched := h.scheduleForBranch(r, scheduleBranch)
+	base := h.scheduleForBranch(r, scheduleBranch)
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -153,126 +148,82 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	existing, err := qtx.GetAttendanceRecordByEmployeeDate(ctx, &db.GetAttendanceRecordByEmployeeDateParams{
-		EmployeeID: emp.ID,
-		Date:       pgDate,
-	})
-	hasExisting := err == nil
-
-	var state *service.AttendanceState
-	if hasExisting {
-		state = service.StateFromRecord(existing)
-	} else {
-		state = service.EmptyState()
-	}
-
-	// Resolve auto direction: if no check_in yet => check_in, else check_out.
-	direction := eventType
-	if direction == "auto" {
-		if state.CheckIn == nil {
-			direction = "check_in"
-		} else {
-			direction = "check_out"
-		}
-	}
-
-	// Optional photo (only meaningful for a check-in / face evidence).
-	photoPath := ""
+	// Optional photo. It is NOT kept as attendance evidence: attendance records
+	// only hold the times and the method. The photo is held in memory and, after
+	// the record is saved, used to refresh the employee's face photo when this is
+	// their first face check-in of the day. Otherwise it is discarded.
+	var photo []byte
 	if file, header, ferr := r.FormFile("photo"); ferr == nil {
-		defer file.Close()
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
-			// emp.ID.Bytes is a raw [16]byte; format it as a proper UUID string so
-			// the filename is valid (a bare %s on the byte array yields control
-			// characters that fail os.Create, silently losing the photo).
-			empID := uuid.UUID(emp.ID.Bytes).String()
-			fname := fmt.Sprintf("attendance-%s-%d%s", empID, time.Now().UnixNano(), ext)
-			uploadsDir := h.resolveUploadsDir()
-			if mkErr := os.MkdirAll(uploadsDir, 0755); mkErr != nil {
-				log.Printf("attendance device event: mkdir uploads %q failed: %v", uploadsDir, mkErr)
-			} else if dst, cerr := os.Create(filepath.Join(uploadsDir, fname)); cerr != nil {
-				log.Printf("attendance device event: create photo %q failed: %v", fname, cerr)
-			} else {
-				if _, werr := io.Copy(dst, file); werr == nil {
-					photoPath = fname
-				} else {
-					log.Printf("attendance device event: write photo %q failed: %v", fname, werr)
-				}
-				dst.Close()
+			b, rerr := io.ReadAll(io.LimitReader(file, maxFacePhotoBytes+1))
+			if rerr != nil {
+				log.Printf("attendance device event: read photo failed: %v", rerr)
+			} else if len(b) > 0 && len(b) <= maxFacePhotoBytes {
+				photo = b
 			}
 		}
+		file.Close()
 	}
 
-	// Merge the event (face primary, fingerprint fills, 5-min dedup).
 	source := "face" // device events are face check-ins by default
 	if isManual {
 		source = "manual"
 	}
-	service.MergeAttendanceEvent(state, service.AttendanceEvent{
-		Timestamp: ts,
-		Source:    source,
-		Direction: direction,
-	})
+	hint := "" // "auto": the day's punches decide (see service.ResolveDay)
+	if eventType != "auto" {
+		hint = eventType
+	}
+	deviceID := pgtype.UUID{}
+	if dev != nil {
+		deviceID = dev.DeviceID
+	}
+
+	// Log the punch on the work day its shift window places it in (a check-out
+	// at 00:20 after a late shift belongs to the previous day), then rebuild that
+	// day: first punch = check-in, last = check-out, by the rostered shift.
+	workDate, sched, err := service.LogPunch(ctx, qtx, emp.ID, service.Punch{At: ts, Source: source, Hint: hint}, base, deviceID)
+	if err != nil {
+		log.Printf("attendance device event: LogPunch(emp=%s ts=%s) failed: %v", employeeCode, rawTimestamp, err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
+		return
+	}
 
 	// Audit note for manager-assisted manual entries.
 	manualNote := ""
 	if isManual {
 		manualNote = fmt.Sprintf("Absen manual (visitor) oleh %s", recordedBy)
 	}
-
-	dayOver := service.DayIsOver(dateOnly, sched, time.Now())
-	service.ComputeAnomalies(state, sched, dayOver)
-
-	deviceID := pgtype.UUID{}
-	if dev != nil {
-		deviceID = dev.DeviceID
+	state, _, err := service.RebuildDay(ctx, qtx, emp.ID, workDate, sched, service.RebuildOptions{DeviceID: deviceID, Note: manualNote})
+	if err != nil || state == nil {
+		log.Printf("attendance device event: RebuildDay(emp=%s date=%s) failed: %v", employeeCode, workDate.Format("2006-01-02"), err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
+		return
 	}
 
-	if hasExisting {
-		params := db.UpdateAttendanceRecordParams{
-			DeviceID: deviceID,
-			Note:     existing.Note,
-			ID:       existing.ID,
-		}
-		if isManual {
-			params.Note = pgtype.Text{String: manualNote, Valid: true}
-		}
-		// Preserve any prior photo unless we just captured one.
-		if photoPath != "" {
-			params.CheckInPhotoPath = pgtype.Text{String: photoPath, Valid: true}
-		} else {
-			params.CheckInPhotoPath = existing.CheckInPhotoPath
-		}
-		service.FillUpdateParams(&params, state)
-		if _, err := qtx.UpdateAttendanceRecord(ctx, &params); err != nil {
-			log.Printf("attendance device event: UpdateAttendanceRecord(emp=%s date=%s) failed: %v", employeeCode, rawTimestamp, err)
-			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
-			return
-		}
-	} else {
-		params := db.InsertAttendanceRecordParams{
-			EmployeeID: emp.ID,
-			Date:       pgDate,
-			DeviceID:   deviceID,
-		}
-		if isManual {
-			params.Note = pgtype.Text{String: manualNote, Valid: true}
-		}
-		if photoPath != "" {
-			params.CheckInPhotoPath = pgtype.Text{String: photoPath, Valid: true}
-		}
-		service.FillInsertParams(&params, state)
-		if _, err := qtx.InsertAttendanceRecord(ctx, &params); err != nil {
-			log.Printf("attendance device event: InsertAttendanceRecord(emp=%s date=%s) failed: %v", employeeCode, rawTimestamp, err)
-			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
-			return
-		}
+	// Which slot this punch ended up in, for the app's message.
+	direction := "check_in"
+	switch {
+	case state.CheckOut != nil && state.CheckOut.Equal(ts):
+		direction = "check_out"
+	case state.CheckIn != nil && state.CheckIn.Equal(ts):
+		direction = "check_in"
+	case state.CheckIn != nil:
+		direction = "check_out"
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		log.Printf("attendance device event: commit failed (emp=%s date=%s): %v", employeeCode, rawTimestamp, err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 		return
+	}
+
+	// The first face check-in of the day refreshes the employee's face photo,
+	// which HR sees on the profile. Best effort: the attendance is already saved.
+	if !isManual && len(photo) > 0 {
+		if _, perr := service.RecordDailyCheckinPhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID, photo, ts); perr != nil {
+			log.Printf("attendance device event: daily face photo (emp=%s) failed: %v", employeeCode, perr)
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -427,7 +378,14 @@ type FaceEnrollRequest struct {
 	EmployeeCode     string `json:"employee_code"`
 	Embedding        string `json:"embedding"`         // base64-encoded packed float32 vector
 	EmbeddingVersion string `json:"embedding_version"` // model + preprocessing space id
+	// Photo is the enrollment reference shot (base64 JPEG). Optional: older app
+	// builds don't send it, and the embedding is still stored without it.
+	Photo string `json:"photo,omitempty"`
 }
+
+// maxFacePhotoBytes caps the decoded enrollment photo. The app sends an aligned
+// face crop (a few KB), so this is generous.
+const maxFacePhotoBytes = 5 << 20
 
 // EnrollFace — POST /api/hr/attendance/device/face
 //
@@ -467,6 +425,18 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 		respondError(w, http.StatusBadRequest, "embedding tidak valid (harus base64 dan tidak kosong)")
 		return
 	}
+	var photo []byte
+	if req.Photo != "" {
+		photo, err = base64.StdEncoding.DecodeString(req.Photo)
+		if err != nil || len(photo) == 0 {
+			respondError(w, http.StatusBadRequest, "foto tidak valid (harus base64 JPEG)")
+			return
+		}
+		if len(photo) > maxFacePhotoBytes {
+			respondError(w, http.StatusRequestEntityTooLarge, "foto terlalu besar")
+			return
+		}
+	}
 
 	emp, err := h.queries.GetEmployeeByCode(ctx, req.EmployeeCode)
 	if err != nil {
@@ -495,6 +465,16 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 		log.Printf("attendance device enroll: UpsertEmployeeFaceEmbedding(emp=%s) failed: %v", req.EmployeeCode, err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan data wajah")
 		return
+	}
+
+	// The embedding is the part recognition depends on, so a photo that fails to
+	// save is logged rather than failing the request (the device would otherwise
+	// keep retrying an enrollment that is already stored).
+	if len(photo) > 0 {
+		if _, perr := service.SaveFacePhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID,
+			bytes.NewReader(photo), service.FacePhotoSourceEnroll, time.Now()); perr != nil {
+			log.Printf("attendance device enroll: save face photo (emp=%s) failed: %v", req.EmployeeCode, perr)
+		}
 	}
 
 	// Device-key authenticated, so there is no JWT user to attribute this to —
@@ -728,7 +708,7 @@ func tsString(t *time.Time) any {
 
 // greeting returns an Indonesian time-of-day greeting with the employee name.
 func greeting(ts time.Time, name string) string {
-	hour := ts.Hour()
+	hour := service.InWIB(ts).Hour()
 	var g string
 	switch {
 	case hour < 11:

@@ -154,6 +154,7 @@ type CalcLineInput struct {
 	KasbonDeduction         int64
 	UnpaidLeaveDeduction    int64
 	HalfDayDeduction        int64
+	AttendanceCutDeduction  int64
 }
 
 // CalcLineResult holds the derived amounts for a payroll line.
@@ -173,6 +174,7 @@ type CalcLineResult struct {
 //	gross_pay = base_salary + allowance_total + bonus_total + overtime_amount
 //	            + overtime_hourly_amount + public_holiday_amount
 //	net_pay   = gross_pay − component_deduction_total − kasbon_deduction − unpaid_leave_deduction
+//	            − half_day_deduction − attendance_cut_deduction
 //
 // Hourly overtime is tracked alongside the day-based overtime_days field (not a
 // replacement for it) so both can be logged when applicable, e.g. a handful of
@@ -183,7 +185,7 @@ func CalcLine(in CalcLineInput) CalcLineResult {
 	holiday := roundHalfUp(in.PublicHolidayDays * float64(in.DailyRate) * in.HolidayMultiplier)
 
 	gross := in.BaseSalary + in.AllowanceTotal + in.BonusTotal + overtime + overtimeHourly + holiday
-	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction - in.HalfDayDeduction
+	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction - in.HalfDayDeduction - in.AttendanceCutDeduction
 
 	return CalcLineResult{
 		OvertimeAmount:       overtime,
@@ -231,7 +233,9 @@ func GetOvertimeHours(ctx context.Context, qtx *db.Queries, employeeID pgtype.UU
 			continue
 		}
 		checkOut := r.CheckOut.Time
-		totalMinutes += ComputeOvertimeMinutes(&checkOut, sched)
+		// Measured from the record's work day: a check-out after midnight is the
+		// tail of that day's shift, not 00:xx of the next day.
+		totalMinutes += ComputeOvertimeMinutesOn(r.Date.Time, &checkOut, sched)
 	}
 	return float64(totalMinutes) / 60, nil
 }
@@ -448,6 +452,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 
+		// Late arrival / early departure: the pay for the minutes not worked.
+		cut, err := AttendanceCutsForPeriod(ctx, qtx, emp.ID, start, end, ws.DailyRate, sched)
+		if err != nil {
+			return nil, err
+		}
+
 		calc := CalcLine(CalcLineInput{
 			BaseSalary:              ws.BaseSalary,
 			DailyRate:               ws.DailyRate,
@@ -463,6 +473,7 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			KasbonDeduction:         kasbonDeduction,
 			UnpaidLeaveDeduction:    unpaidDeduction,
 			HalfDayDeduction:        halfDayDeduction,
+			AttendanceCutDeduction:  cut.Amount,
 		})
 
 		line, err := qtx.CreatePayrollLine(ctx, &db.CreatePayrollLineParams{
@@ -489,6 +500,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 			HalfDayHours:            NumericFromFloat(halfDayHours),
 			HalfDayDeduction:        halfDayDeduction,
+			AttendanceCutMinutes:    int32(cut.Minutes),
+			AttendanceCutDeduction:  cut.Amount,
 		})
 		if err != nil {
 			return nil, err
@@ -557,6 +570,7 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 		KasbonDeduction:         line.KasbonDeduction,
 		UnpaidLeaveDeduction:    line.UnpaidLeaveDeduction,
 		HalfDayDeduction:        line.HalfDayDeduction,
+		AttendanceCutDeduction:  line.AttendanceCutDeduction,
 	})
 
 	return qtx.UpdatePayrollLineReview(ctx, &db.UpdatePayrollLineReviewParams{

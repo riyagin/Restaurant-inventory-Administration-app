@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { getActivityLog, deleteActivityLog, exportActivityLog } from '../api';
 import { isAdminRole } from '../roles';
 
+import { fmtDateTime, todayWIB } from '../time';
 const ACTION_STYLE = {
   create:   { background: '#e6f9f0', color: '#27ae60' },
   update:   { background: '#e8f0fe', color: '#4f8ef7' },
@@ -147,7 +148,7 @@ export default function ActivityLog() {
       const url = URL.createObjectURL(new Blob([response.data], { type: 'text/csv;charset=utf-8;' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `activity-log-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `activity-log-${todayWIB()}.csv`;
       a.click();
       URL.revokeObjectURL(url);
     } catch {
@@ -177,7 +178,7 @@ export default function ActivityLog() {
   const pageStart   = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd     = Math.min(page * PAGE_SIZE, total);
 
-  const fmt = (d) => new Date(d).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
+  const fmt = (d) => fmtDateTime(d, { dateStyle: 'medium', timeStyle: 'short' });
 
   return (
     <>

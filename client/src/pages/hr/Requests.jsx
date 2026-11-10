@@ -2,9 +2,11 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   getLeaveRequests, cancelLeaveRequest, getLeaveTypes,
   getOvertimeRequests, createOvertimeRequest, cancelOvertimeRequest,
+  getAttendancePermissions, createAttendancePermission, cancelAttendancePermission,
   getEmployees, getBranches,
 } from '../../api';
 import { todayLocal, submitLeaveRequest } from './leaveRules';
+import { isBranchOperator } from '../../roles';
 import { QuotaPreview, BackdatedNotice, BackdatedBadge } from './LeaveRuleWidgets';
 
 // ── shared status styling ─────────────────────────────────────────────────────
@@ -18,7 +20,15 @@ const STATUS_COLORS = {
 const TYPE_META = {
   leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
   overtime: { label: 'Lembur', bg: '#fff3e0', color: '#b45309' },
+  permission: { label: 'Izin', bg: '#e0f2f1', color: '#00695c' },
 };
+
+// Attendance permits. Once approved they change how the day is judged.
+const PERMIT_TYPES = [
+  { value: 'late_arrival',    label: 'Izin Masuk Siang', hint: 'Datang terlambat dengan izin: hari itu dihitung setengah hari (poin setengah hari, gaji dipotong jam yang hilang), bukan terlambat.' },
+  { value: 'early_departure', label: 'Izin Pulang Awal', hint: 'Pulang lebih awal dengan izin: hari itu dihitung setengah hari, bukan pulang awal.' },
+  { value: 'off_site',        label: 'Dinas Luar',       hint: 'Bekerja di luar tempat kerja (antar barang, urusan kantor, cabang lain): tidak dinilai terlambat/pulang awal/lupa absen; tanpa absen pun tetap hadir.' },
+];
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const todayStr = todayLocal;
@@ -60,6 +70,20 @@ function normOvertime(o) {
   };
 }
 
+function normPermission(p) {
+  return {
+    key: `perm-${p.id}`, id: p.id, type: 'permission',
+    employee_name: p.employee_name, employee_code: p.employee_code,
+    branch_id: p.branch_id ?? null,
+    sortDate: p.date,
+    periodLabel: fmtDate(p.date),
+    detail: p.type_label,
+    subtitle: p.reason,
+    status: p.status,
+    is_backdated: p.is_backdated,
+  };
+}
+
 export default function Requests() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -79,13 +103,17 @@ export default function Requests() {
     if (filters.status) shared.status = filters.status;
     if (filters.branch_id) shared.branch_id = filters.branch_id;
     try {
-      const [lv, ot] = await Promise.all([
-        filters.type === 'overtime' ? Promise.resolve({ data: [] }) : getLeaveRequests(shared).catch(() => ({ data: [] })),
-        filters.type === 'leave' ? Promise.resolve({ data: [] }) : getOvertimeRequests(shared).catch(() => ({ data: [] })),
+      const want = (t) => !filters.type || filters.type === t;
+      const none = Promise.resolve({ data: [] });
+      const [lv, ot, pm] = await Promise.all([
+        want('leave') ? getLeaveRequests(shared).catch(() => ({ data: [] })) : none,
+        want('overtime') ? getOvertimeRequests(shared).catch(() => ({ data: [] })) : none,
+        want('permission') ? getAttendancePermissions(shared).catch(() => ({ data: [] })) : none,
       ]);
       let merged = [
         ...(Array.isArray(lv.data) ? lv.data : []).map(normLeave),
         ...(Array.isArray(ot.data) ? ot.data : []).map(normOvertime),
+        ...(Array.isArray(pm.data) ? pm.data : []).map(normPermission),
       ];
       if (filters.month) merged = merged.filter(r => monthOf(r.sortDate) === filters.month);
       merged.sort((a, b) => new Date(b.sortDate) - new Date(a.sortDate));
@@ -102,7 +130,7 @@ export default function Requests() {
 
   const doCancel = async (note) => {
     const t = cancelTarget;
-    const fn = t.type === 'leave' ? cancelLeaveRequest : cancelOvertimeRequest;
+    const fn = { leave: cancelLeaveRequest, overtime: cancelOvertimeRequest, permission: cancelAttendancePermission }[t.type];
     await fn(t.id, note);
     setCancelTarget(null);
     load();
@@ -118,6 +146,7 @@ export default function Requests() {
             <div style={{ position: 'absolute', right: 0, top: '110%', background: '#fff', border: '1px solid #e3e6ec', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 160 }}>
               <button style={menuItem} onClick={() => { setCreateType('leave'); setShowAjukan(false); }}>Cuti</button>
               <button style={menuItem} onClick={() => { setCreateType('overtime'); setShowAjukan(false); }}>Lembur</button>
+              <button style={menuItem} onClick={() => { setCreateType('permission'); setShowAjukan(false); }}>Izin</button>
             </div>
           )}
         </div>
@@ -131,15 +160,19 @@ export default function Requests() {
           <option value="">Semua jenis</option>
           <option value="leave">Cuti</option>
           <option value="overtime">Lembur</option>
+          <option value="permission">Izin</option>
         </select>
         <select value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
           <option value="">Semua status</option>
           {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        <select value={filters.branch_id} onChange={e => setFilters({ ...filters, branch_id: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
-          <option value="">Semua cabang</option>
-          {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-        </select>
+        {/* A branch operator only ever sees their own branch. */}
+        {!isBranchOperator() && (
+          <select value={filters.branch_id} onChange={e => setFilters({ ...filters, branch_id: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
+            <option value="">Semua cabang</option>
+            {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        )}
         <input type="month" value={filters.month} onChange={e => setFilters({ ...filters, month: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }} />
         {filters.month && <button className="btn btn-secondary btn-sm" onClick={() => setFilters({ ...filters, month: '' })}>Reset bulan</button>}
       </div>
@@ -177,6 +210,7 @@ export default function Requests() {
 
       {createType === 'leave' && <LeaveCreateModal onClose={() => setCreateType(null)} onSaved={() => { setCreateType(null); load(); }} />}
       {createType === 'overtime' && <OvertimeCreateModal onClose={() => setCreateType(null)} onSaved={() => { setCreateType(null); load(); }} />}
+      {createType === 'permission' && <PermissionCreateModal onClose={() => setCreateType(null)} onSaved={() => { setCreateType(null); load(); }} />}
       {cancelTarget && <CancelModal target={cancelTarget} onClose={() => setCancelTarget(null)} onDone={doCancel} />}
     </div>
   );
@@ -307,6 +341,70 @@ function OvertimeCreateModal({ onClose, onSaved }) {
 
         <label style={lbl}>Keterangan (opsional)</label>
         <textarea value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} rows={2} style={{ ...inp, resize: 'vertical' }} />
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Batal</button>
+          <button className="btn btn-primary" onClick={submit} disabled={saving}>{saving ? 'Menyimpan…' : 'Ajukan'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Attendance permit create modal ───────────────────────────────────────────
+function PermissionCreateModal({ onClose, onSaved }) {
+  const [employees, setEmployees] = useState([]);
+  const [form, setForm] = useState({ employee_id: '', date: todayStr(), type: 'late_arrival', reason: '' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
+  }, []);
+
+  const meta = PERMIT_TYPES.find(t => t.value === form.type);
+  const backdated = form.date && form.date < todayStr();
+
+  const submit = async () => {
+    setError('');
+    if (!form.employee_id) { setError('Pilih karyawan.'); return; }
+    if (!form.date) { setError('Masukkan tanggal.'); return; }
+    if (!form.reason.trim()) { setError('Alasan izin wajib diisi.'); return; }
+    setSaving(true);
+    try { await createAttendancePermission(form); onSaved(); }
+    catch (err) { setError(err?.response?.data?.error || 'Gagal menyimpan izin.'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div className="card" style={modal} onClick={e => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>Pengajuan Izin Baru</h3>
+        {error && <div style={errBox}>{error}</div>}
+
+        <label style={lbl}>Karyawan</label>
+        <select value={form.employee_id} onChange={e => setForm({ ...form, employee_id: e.target.value })} style={inp}>
+          <option value="">— Pilih karyawan —</option>
+          {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_code})</option>)}
+        </select>
+
+        <label style={lbl}>Jenis Izin</label>
+        <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })} style={inp}>
+          {PERMIT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+        {meta && <p style={{ fontSize: '0.78rem', color: '#667', margin: '0.3rem 0 0' }}>{meta.hint}</p>}
+
+        <label style={lbl}>Tanggal</label>
+        <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} style={inp} />
+        {backdated && (
+          <div style={{ ...errBox, background: '#fff4e5', color: '#9a3412', marginTop: '0.4rem' }}>
+            Tanggal sudah lewat: izin ini ditandai MUNDUR TANGGAL dan perlu persetujuan manajer.
+          </div>
+        )}
+
+        <label style={lbl}>Alasan</label>
+        <textarea value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} rows={2} style={{ ...inp, resize: 'vertical' }}
+          placeholder="mis. antar barang ke cabang Cimanggu, kontrol ke dokter pagi hari" />
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Batal</button>

@@ -12,15 +12,16 @@ import (
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (id, username, password_hash, role)
-VALUES (gen_random_uuid(), $1, $2, $3)
-RETURNING id, username, role, created_at
+INSERT INTO users (id, username, password_hash, role, branch_id)
+VALUES (gen_random_uuid(), $1, $2, $3, $4)
+RETURNING id, username, role, created_at, branch_id
 `
 
 type CreateUserParams struct {
-	Username     string `json:"username"`
-	PasswordHash string `json:"password_hash"`
-	Role         string `json:"role"`
+	Username     string      `json:"username"`
+	PasswordHash string      `json:"password_hash"`
+	Role         string      `json:"role"`
+	BranchID     pgtype.UUID `json:"branch_id"`
 }
 
 type CreateUserRow struct {
@@ -28,16 +29,23 @@ type CreateUserRow struct {
 	Username  string             `json:"username"`
 	Role      string             `json:"role"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	BranchID  pgtype.UUID        `json:"branch_id"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg *CreateUserParams) (*CreateUserRow, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Username, arg.PasswordHash, arg.Role)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Username,
+		arg.PasswordHash,
+		arg.Role,
+		arg.BranchID,
+	)
 	var i CreateUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
 		&i.Role,
 		&i.CreatedAt,
+		&i.BranchID,
 	)
 	return &i, err
 }
@@ -51,8 +59,20 @@ func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getUserBranchScope = `-- name: GetUserBranchScope :one
+SELECT branch_id FROM users WHERE id = $1 AND role = 'branch_operator'
+`
+
+// The branch a branch_operator is confined to; no row for any other role.
+func (q *Queries) GetUserBranchScope(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getUserBranchScope, id)
+	var branch_id pgtype.UUID
+	err := row.Scan(&branch_id)
+	return branch_id, err
+}
+
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, username, role, created_at FROM users WHERE id = $1
+SELECT id, username, role, created_at, branch_id FROM users WHERE id = $1
 `
 
 type GetUserByIDRow struct {
@@ -60,6 +80,7 @@ type GetUserByIDRow struct {
 	Username  string             `json:"username"`
 	Role      string             `json:"role"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	BranchID  pgtype.UUID        `json:"branch_id"`
 }
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (*GetUserByIDRow, error) {
@@ -70,19 +91,24 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (*GetUserByID
 		&i.Username,
 		&i.Role,
 		&i.CreatedAt,
+		&i.BranchID,
 	)
 	return &i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, role, created_at FROM users ORDER BY username
+SELECT u.id, u.username, u.role, u.created_at, u.branch_id, b.name AS branch_name
+FROM users u LEFT JOIN branches b ON b.id = u.branch_id
+ORDER BY u.username
 `
 
 type ListUsersRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Username  string             `json:"username"`
-	Role      string             `json:"role"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
+	Username   string             `json:"username"`
+	Role       string             `json:"role"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	BranchID   pgtype.UUID        `json:"branch_id"`
+	BranchName pgtype.Text        `json:"branch_name"`
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]*ListUsersRow, error) {
@@ -99,6 +125,8 @@ func (q *Queries) ListUsers(ctx context.Context) ([]*ListUsersRow, error) {
 			&i.Username,
 			&i.Role,
 			&i.CreatedAt,
+			&i.BranchID,
+			&i.BranchName,
 		); err != nil {
 			return nil, err
 		}
@@ -111,14 +139,15 @@ func (q *Queries) ListUsers(ctx context.Context) ([]*ListUsersRow, error) {
 }
 
 const updateUser = `-- name: UpdateUser :one
-UPDATE users SET username = $1, role = $2
-WHERE id = $3
-RETURNING id, username, role, created_at
+UPDATE users SET username = $1, role = $2, branch_id = $3
+WHERE id = $4
+RETURNING id, username, role, created_at, branch_id
 `
 
 type UpdateUserParams struct {
 	Username string      `json:"username"`
 	Role     string      `json:"role"`
+	BranchID pgtype.UUID `json:"branch_id"`
 	ID       pgtype.UUID `json:"id"`
 }
 
@@ -127,16 +156,23 @@ type UpdateUserRow struct {
 	Username  string             `json:"username"`
 	Role      string             `json:"role"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	BranchID  pgtype.UUID        `json:"branch_id"`
 }
 
 func (q *Queries) UpdateUser(ctx context.Context, arg *UpdateUserParams) (*UpdateUserRow, error) {
-	row := q.db.QueryRow(ctx, updateUser, arg.Username, arg.Role, arg.ID)
+	row := q.db.QueryRow(ctx, updateUser,
+		arg.Username,
+		arg.Role,
+		arg.BranchID,
+		arg.ID,
+	)
 	var i UpdateUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
 		&i.Role,
 		&i.CreatedAt,
+		&i.BranchID,
 	)
 	return &i, err
 }

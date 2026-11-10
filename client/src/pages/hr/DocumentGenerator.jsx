@@ -8,6 +8,7 @@ import {
 } from '../../api';
 import SearchSelect from '../../components/SearchSelect';
 
+import { todayWIB } from '../../time';
 // The four document types, with the label shown in the picker and a short note
 // about the legal basis (surfaced as helper text so HR knows what each produces).
 const DOC_TYPES = [
@@ -21,7 +22,7 @@ const DOC_TYPES = [
     note: 'Surat referensi kerja sesuai kewajiban pemberi kerja (Pasal 1602y KUHPerdata).' },
 ];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 const toDateInput = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
 // Term end = start + n months, minus a day: one day short of the full term is
 // its last day. Templates store a month count rather than an end date because a

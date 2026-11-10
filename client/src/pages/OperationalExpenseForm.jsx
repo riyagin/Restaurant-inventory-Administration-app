@@ -9,6 +9,7 @@ import Icon from '../components/Icon';
 import { OP_KINDS, kindOf, NAMED_OP_CATEGORIES } from './operationalKinds';
 import AnnualRentPanel from './AnnualRentPanel';
 
+import { shiftMonthsWIB, todayWIB } from '../time';
 // Recording one standing bill.
 //
 // A page per kind rather than one form with a category dropdown, because these
@@ -24,7 +25,7 @@ import AnnualRentPanel from './AnnualRentPanel';
 // happened to be paid, and a month nobody paid for is invisible.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 
 // Default the period to last month: a bill lands after the month it covers, so
 // that is the month someone sitting down to pay is nearly always paying for.
@@ -127,12 +128,10 @@ export default function OperationalExpenseForm() {
   // two meters, or a corrected re-entry, are both real.
   const loadHistory = useCallback(() => {
     if (!branchId || !categoryId) { setHistory([]); return; }
-    const from = new Date();
-    from.setMonth(from.getMonth() - 13);
     getOperationalExpenses({
       branch_id: branchId,
       category_id: categoryId,
-      from: from.toISOString().slice(0, 10),
+      from: shiftMonthsWIB(-13),
       status: 'posted',
     })
       .then(r => setHistory(r.data?.expenses || []))

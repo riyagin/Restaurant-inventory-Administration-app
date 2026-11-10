@@ -17,9 +17,12 @@ import (
 // salary and tenure (masa kerja) at the run's payment_date:
 //
 //	masa kerja >= 12 bulan  -> THR = 1 × base_salary
-//	masa kerja  < 12 bulan  -> THR = ceil(months) / 12 × base_salary
+//	masa kerja  < 12 bulan  -> THR = months / 12 × base_salary
 //
-// "months" is rounded up: any partial month counts as a whole month. MONEY: whole
+// "months" is the calendar-month difference between the tenure start and the payment
+// date; the day of month is ignored. A PKWT worker made permanent in January 2026 with
+// Lebaran in March 2026 gets 2/12 (contract service is paid separately as the
+// 13th-month bonus at contract end, so it never counts here). MONEY: whole
 // rupiah int64 (no ×100), consistent with wages/payroll; rounding half-up via
 // roundHalfUp (shared with payroll.go).
 
@@ -31,27 +34,16 @@ var ErrThrLinesNotReviewed = errors.New("semua baris THR harus direview sebelum 
 // The handler maps it to HTTP 409 Conflict.
 var ErrThrRunLocked = errors.New("run THR sudah ditutup dan tidak dapat diubah")
 
-// MonthsWorkedCeil returns the tenure in whole months between join and ref, rounding
-// any partial month up. Returns 0 when ref is not after join (e.g. an employee who
-// joins on/after the payment date is not yet entitled to THR). The minimum for an
-// employee who has worked any positive span is 1 month.
-func MonthsWorkedCeil(join, ref time.Time) int32 {
+// MonthsWorked returns the tenure as a calendar-month difference between join and ref
+// (ref month − join month), ignoring the day of month. Returns 0 when ref is not after
+// join, and 0 when both fall in the same calendar month.
+func MonthsWorked(join, ref time.Time) int32 {
 	j := dateOnly(join)
 	r := dateOnly(ref)
 	if !r.After(j) {
 		return 0
 	}
-	months := (r.Year()-j.Year())*12 + int(r.Month()) - int(j.Month())
-	if r.Day() < j.Day() {
-		months-- // last month not yet completed
-	}
-	if r.Day() != j.Day() {
-		months++ // round the partial month up
-	}
-	if months < 1 {
-		months = 1
-	}
-	return int32(months)
+	return int32((r.Year()-j.Year())*12 + int(r.Month()) - int(j.Month()))
 }
 
 // ThrTenureStart returns the THR tenure "day 0" for an employee: their permanent-status
@@ -88,7 +80,7 @@ type ThrEntitlement struct {
 // employee given their base salary, the tenure start date (day 0 — see ThrTenureStart)
 // and the reference (payment) date.
 func ComputeThrEntitlement(baseSalary int64, startDate, refDate time.Time) ThrEntitlement {
-	months := MonthsWorkedCeil(startDate, refDate)
+	months := MonthsWorked(startDate, refDate)
 	ratio := ThrRatio(months)
 	return ThrEntitlement{
 		MonthsWorked: months,

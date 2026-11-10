@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getVendorHistory } from '../api';
 
+import { todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(v) || 0);
 const num = (v) => Number(v ?? 0).toLocaleString('id-ID', { maximumFractionDigits: 3 });
 const fmt = (d) => (d ? new Date(d).toLocaleDateString('id-ID', { dateStyle: 'medium' }) : '—');
-const todayStr = new Date().toISOString().split('T')[0];
+const todayStr = todayWIB();
 
 const STATUS_LABEL = { unpaid: 'Belum Dibayar', paid: 'Lunas', partial: 'Sebagian' };
 const STATUS_CLASS = { unpaid: 'status-unpaid', paid: 'status-paid', partial: 'status-partial' };

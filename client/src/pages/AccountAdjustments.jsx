@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getAccounts, getAccountAdjustments, createAccountAdjustment, createAccountTransfer } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { fmtDateTime } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
@@ -10,7 +11,7 @@ const TYPE_LABEL = { asset: 'Aset', liability: 'Kewajiban', equity: 'Ekuitas', r
 const TYPE_COLOR = { asset: '#e8f5e9', liability: '#fce4ec', equity: '#e8eaf6', revenue: '#e6f9f0', expense: '#fff3e0' };
 const TYPE_TEXT  = { asset: '#2e7d32', liability: '#880e4f', equity: '#283593', revenue: '#1b5e45', expense: '#e65100' };
 
-const fmtDT = (d) => new Date(d).toLocaleString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const fmtDT = (d) => fmtDateTime(d, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 function AccountBadge({ type, number, name }) {
   return (

@@ -141,6 +141,8 @@ func componentTypeLabel(t string) string {
 		return "Potongan"
 	case "daily_allowance":
 		return "Harian"
+	case "benefit_fund":
+		return "Dana Kesejahteraan"
 	default:
 		return t
 	}

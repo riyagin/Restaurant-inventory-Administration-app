@@ -4,7 +4,7 @@ import {
   getKasbons, getKasbon, approveKasbon, rejectKasbon, cancelKasbon, processKasbon,
 } from '../../api';
 import KasbonFormModal from './KasbonFormModal';
-import { canApprove } from '../../roles';
+import { canApprove, isBranchOperator } from '../../roles';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -196,7 +196,8 @@ export default function KasbonDashboard() {
         <h3 style={sectionH}>Disetujui — Belum Diproses {approvedUnprocessed.length > 0 && <span style={badge}>{approvedUnprocessed.length}</span>}</h3>
         <KasbonTable
           rows={approvedUnprocessed} loading={loading} emptyText="Tidak ada kasbon menunggu proses."
-          renderActions={k => <button className="btn btn-sm btn-primary" onClick={() => setProcess(k)}>Proses</button>}
+          // Processing pays the kasbon out of a ledger account — not the branch operator's job.
+          renderActions={isBranchOperator() ? undefined : k => <button className="btn btn-sm btn-primary" onClick={() => setProcess(k)}>Proses</button>}
           extraActions={k => <CancelBtn k={k} onDone={load} />}
         />
       </section>

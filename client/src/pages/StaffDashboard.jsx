@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getDailyTasks } from '../api';
 import { getUser } from '../roles';
 
+import { shiftTodayWIB, todayWIB } from '../time';
 // Dashboard for the back-office desk: the three things they start work in, and
 // an honest account of what the desk still owes.
 //
@@ -22,7 +23,7 @@ const SHORTCUTS = [
 const DAYS_SHOWN = 7;
 
 const iso = (d) => d.toISOString().slice(0, 10);
-const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return iso(d); };
+const daysAgo = (n) => shiftTodayWIB(-n);
 
 const fmtDay = (s) => {
   const d = new Date(`${s}T00:00:00`);
@@ -30,7 +31,7 @@ const fmtDay = (s) => {
 };
 
 const relativeDay = (s) => {
-  const today = iso(new Date());
+  const today = todayWIB();
   if (s === today) return 'Hari ini';
   if (s === daysAgo(1)) return 'Kemarin';
   return fmtDay(s);
@@ -44,7 +45,7 @@ export default function StaffDashboard() {
 
   const load = useCallback(() => {
     setLoading(true);
-    getDailyTasks({ from: daysAgo(DAYS_SHOWN - 1), to: iso(new Date()) })
+    getDailyTasks({ from: daysAgo(DAYS_SHOWN - 1), to: todayWIB() })
       .then((r) => { setTasks(Array.isArray(r.data) ? r.data : []); setError(''); })
       .catch(() => setError('Gagal memuat tugas harian.'))
       .finally(() => setLoading(false));

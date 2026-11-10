@@ -6,6 +6,7 @@ import {
 import { isAdminRole } from '../roles';
 import CurrencyInput from '../components/CurrencyInput';
 
+import { todayWIB } from '../time';
 // Kas Kecil — the daily cash box count, one row per branch.
 //
 // The whole page is one equation made visible:
@@ -16,7 +17,7 @@ import CurrencyInput from '../components/CurrencyInput';
 // in red and cannot be saved without an explanation.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 
 export default function PettyCash() {
   const isAdmin = isAdminRole();

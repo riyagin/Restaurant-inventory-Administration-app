@@ -25,6 +25,12 @@ func StateFromRecord(rec *db.AttendanceRecord) *AttendanceState {
 		IsHalfDay:          rec.IsHalfDay,
 		HalfDayLostMinutes: int(rec.HalfDayLostMinutes),
 		HalfDayType:        textVal(rec.HalfDayType),
+		IsLeavePunch:       rec.IsLeavePunch,
+		ExcusedBy:          textVal(rec.ExcusedBy),
+		ReviewResolved:     rec.ReviewResolved,
+	}
+	if rec.Date.Valid {
+		s.Date = rec.Date.Time
 	}
 	if rec.CheckIn.Valid {
 		t := rec.CheckIn.Time
@@ -78,6 +84,11 @@ func FillInsertParams(p *db.InsertAttendanceRecordParams, s *AttendanceState) {
 	p.IsMissingCheckout = s.IsMissingCheckout
 	p.IsMissingCheckin = s.IsMissingCheckin
 	p.IsNoPunch = s.IsNoPunch
+	p.IsLeavePunch = s.IsLeavePunch
+	p.IsHalfDay = s.IsHalfDay
+	p.HalfDayLostMinutes = int32(s.HalfDayLostMinutes)
+	p.HalfDayType = srcOrNull(s.HalfDayType)
+	p.ExcusedBy = srcOrNull(s.ExcusedBy)
 }
 
 // FillUpdateParams populates the timestamp/source/anomaly/status fields of an
@@ -98,12 +109,15 @@ func FillUpdateParams(p *db.UpdateAttendanceRecordParams, s *AttendanceState) {
 	p.IsHalfDay = s.IsHalfDay
 	p.HalfDayLostMinutes = int32(s.HalfDayLostMinutes)
 	p.HalfDayType = srcOrNull(s.HalfDayType)
+	p.IsLeavePunch = s.IsLeavePunch
+	p.ExcusedBy = srcOrNull(s.ExcusedBy)
 }
 
-// DayIsOver reports whether the work day for `date` has ended relative to `now`.
+// DayIsOver reports whether the work day for `date` (a WIB calendar date) has
+// ended relative to `now`.
 // Used to decide is_missing_checkout. A day is "over" once we're past its end.
 func DayIsOver(date time.Time, sched Schedule, now time.Time) bool {
-	end := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, now.Location()).
-		Add(time.Duration(sched.WorkEndMinutes) * time.Minute)
-	return now.After(end)
+	// Not before the check-out window closes: a check-out up to PunchWindowAfter
+	// past the shift end (e.g. 00:20 after a 22:00 shift) still belongs to the day.
+	return now.After(WIBWallClock(date, sched.WorkEndMinutes+PunchWindowAfterMinutes))
 }

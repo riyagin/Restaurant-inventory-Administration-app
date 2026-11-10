@@ -39,7 +39,7 @@ ORDER BY p.period_month DESC;
 SELECT
     COALESCE(SUM(l.gross_pay), 0)::bigint AS total_gross,
     COALESCE(SUM(l.net_pay), 0)::bigint AS total_net,
-    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction + l.half_day_deduction), 0)::bigint AS total_deductions,
+    COALESCE(SUM(l.component_deduction_total + l.kasbon_deduction + l.unpaid_leave_deduction + l.half_day_deduction + l.attendance_cut_deduction), 0)::bigint AS total_deductions,
     COUNT(l.id)::int AS line_count,
     COUNT(l.id) FILTER (WHERE l.reviewed)::int AS reviewed_count
 FROM payroll_lines l
@@ -70,7 +70,8 @@ INSERT INTO payroll_lines (
     component_deduction_total, kasbon_deduction, unpaid_leave_days,
     unpaid_leave_deduction, gross_pay, net_pay, performance_score,
     overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-    half_day_hours, half_day_deduction
+    half_day_hours, half_day_deduction,
+    attendance_cut_minutes, attendance_cut_deduction
 )
 VALUES (
     gen_random_uuid(), $1, $2, $3,
@@ -79,7 +80,8 @@ VALUES (
     $12, $13, $14,
     $15, $16, $17, $18,
     $19, $20, $21,
-    $22, $23
+    $22, $23,
+    $24, $25
 )
 RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
           overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
@@ -87,7 +89,7 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
           overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction;
+          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction;
 
 -- name: GetPayrollLineByID :one
 SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
@@ -96,7 +98,7 @@ SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily
        unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
        performance_score, reviewed, reviewed_by, reviewed_at, review_note,
        overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-       half_day_hours, half_day_deduction
+       half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
 FROM payroll_lines
 WHERE id = $1;
 
@@ -119,6 +121,7 @@ SELECT
     l.performance_score, l.reviewed, l.reviewed_by, l.reviewed_at, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     l.half_day_hours, l.half_day_deduction,
+    l.attendance_cut_minutes, l.attendance_cut_deduction,
     e.full_name AS employee_name, e.employee_code,
     e.position_id, pos.name AS position_name,
     e.branch_id, b.name AS branch_name
@@ -163,7 +166,7 @@ RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, da
           unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
           performance_score, reviewed, reviewed_by, reviewed_at, review_note,
           overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction;
+          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction;
 
 -- name: UnreviewPayrollLine :one
 UPDATE payroll_lines
@@ -265,6 +268,7 @@ SELECT
     l.unpaid_leave_days, l.unpaid_leave_deduction, l.gross_pay, l.net_pay, l.review_note,
     l.overtime_hours, l.overtime_hourly_rate, l.overtime_hourly_amount,
     l.half_day_hours, l.half_day_deduction,
+    l.attendance_cut_minutes, l.attendance_cut_deduction,
     e.full_name AS employee_name, e.employee_code, e.join_date,
     pos.name AS position_name,
     b.name   AS branch_name,
@@ -360,3 +364,25 @@ SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, pos
 FROM payroll_postings
 WHERE status <> 'posted' AND attempts < $1
 ORDER BY queued_at;
+
+-- name: ListAttendanceCutDays :many
+-- Present days in [from, to] that carry a late / early-leave / half-day flag, with
+-- the paid length of the shift rostered that day (segments minus the unpaid break;
+-- NULL when no shift was rostered, so the caller falls back to branch hours). The
+-- late / early minutes are the ones frozen at punch time, so the cut agrees with
+-- what the attendance page shows.
+SELECT ar.date, ar.check_in, ar.check_out,
+       ar.is_late, ar.late_minutes, ar.is_early_leave, ar.early_leave_minutes, ar.is_half_day,
+       sd.code AS shift_code,
+       (CASE WHEN sd.id IS NULL THEN NULL ELSE
+          EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
+          + COALESCE(EXTRACT(EPOCH FROM (sd.end2 - sd.start2)) / 60, 0)
+          - sd.break_minutes
+        END)::int AS shift_paid_minutes
+FROM attendance_records ar
+LEFT JOIN shift_assignments sa ON sa.employee_id = ar.employee_id AND sa.date = ar.date
+LEFT JOIN shift_definitions sd ON sd.id = sa.shift_id
+WHERE ar.employee_id = $1 AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+  AND (ar.is_late OR ar.is_early_leave OR ar.is_half_day)
+ORDER BY ar.date;

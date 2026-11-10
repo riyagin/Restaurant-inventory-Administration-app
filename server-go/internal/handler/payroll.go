@@ -999,7 +999,7 @@ func (h *PayrollHandler) ApplyBonus(w http.ResponseWriter, r *http.Request) {
 		}
 		grossPay := line.BaseSalary + line.AllowanceTotal + bonusTotal +
 			line.OvertimeAmount + line.OvertimeHourlyAmount + line.PublicHolidayAmount
-		netPay := grossPay - line.ComponentDeductionTotal - line.KasbonDeduction - line.UnpaidLeaveDeduction - line.HalfDayDeduction
+		netPay := grossPay - line.ComponentDeductionTotal - line.KasbonDeduction - line.UnpaidLeaveDeduction - line.HalfDayDeduction - line.AttendanceCutDeduction
 		if err := qtx.UpdatePayrollLineTotals(ctx, &db.UpdatePayrollLineTotalsParams{
 			BonusTotal: bonusTotal,
 			GrossPay:   grossPay,
@@ -1169,6 +1169,11 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return err
 	}
 
+	cut, err := service.AttendanceCutsForPeriod(ctx, qtx, empID, start, end, ws.DailyRate, sched)
+	if err != nil {
+		return err
+	}
+
 	calc := service.CalcLine(service.CalcLineInput{
 		BaseSalary:              ws.BaseSalary,
 		DailyRate:               ws.DailyRate,
@@ -1184,6 +1189,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		KasbonDeduction:         kasbonDeduction,
 		UnpaidLeaveDeduction:    unpaidDeduction,
 		HalfDayDeduction:        halfDayDeduction,
+		AttendanceCutDeduction:  cut.Amount,
 	})
 
 	line, err := qtx.CreatePayrollLine(ctx, &db.CreatePayrollLineParams{
@@ -1210,6 +1216,8 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		OvertimeHourlyAmount:    calc.OvertimeHourlyAmount,
 		HalfDayHours:            service.NumericFromFloat(halfDayHours),
 		HalfDayDeduction:        halfDayDeduction,
+		AttendanceCutMinutes:    int32(cut.Minutes),
+		AttendanceCutDeduction:  cut.Amount,
 	})
 	if err != nil {
 		return err

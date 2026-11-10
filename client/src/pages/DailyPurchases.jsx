@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { getDailyPurchases, cancelDailyPurchase, getBranches } from '../api';
 import { getRole } from '../roles';
 
+import { todayWIB } from '../time';
 // The record of what each branch spent out of its cash box.
 //
 // List only — entry lives on its own page. Keeping the form here meant the list
@@ -10,7 +11,7 @@ import { getRole } from '../roles';
 // anyone touched a filter.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 
 export default function DailyPurchases() {
   const isAdmin = getRole() === 'admin';

@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { getItems, getWarehouses, getInventoryRecord, createInventoryRecord, updateInventoryRecord } from '../api';
 
+import { todayWIB } from '../time';
 const idrFormat = (v) => new Intl.NumberFormat('id-ID').format(v);
-const today = new Date().toISOString().split('T')[0];
+const today = todayWIB();
 
 const empty = { item_id: '', warehouse_id: '', quantity: '', unit_index: '0', value: '', date: today };
 

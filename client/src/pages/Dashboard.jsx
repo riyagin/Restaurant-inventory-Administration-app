@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { getStats, getDailySalesByBranch, getStockFlow, getBranches } from '../api';
 
+import { fmtDateTime, shiftTodayWIB, todayWIB } from '../time';
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
 
@@ -14,7 +15,7 @@ const fmtDateShort = (d) => {
   return dt.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
 };
 
-const todayStr = new Date().toISOString().split('T')[0];
+const todayStr = todayWIB();
 
 function offsetDate(dateStr, days) {
   const d = new Date(dateStr);
@@ -23,9 +24,7 @@ function offsetDate(dateStr, days) {
 }
 
 function nDaysAgo(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().split('T')[0];
+  return shiftTodayWIB(-n);
 }
 
 const PERIODS = [
@@ -650,7 +649,7 @@ export default function Dashboard() {
               {stats.recentActivity.map(a => (
                 <tr key={a.id}>
                   <td style={{ color: '#888', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
-                    {new Date(a.created_at).toLocaleString('id-ID')}
+                    {fmtDateTime(a.created_at, { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </td>
                   <td style={{ fontWeight: 500, fontSize: '0.88rem' }}>{a.username || '—'}</td>
                   <td>

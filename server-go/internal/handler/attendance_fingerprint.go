@@ -95,9 +95,11 @@ func (h *AttendanceHandler) FingerprintParse(w http.ResponseWriter, r *http.Requ
 // FingerprintConfirm — POST /api/hr/attendance/fingerprint-import/confirm
 // Re-uploads the same file and applies matched punches.
 //
-// Auto-detect logic per employee per day:
-//   - Earliest punch before 12:00 → check_in
-//   - Latest punch at/after 12:00  → check_out
+// Every punch is written to the punch log (idempotent, so re-importing the
+// device's cumulative attlog.dat is safe) and assigned to the work day whose
+// shift window holds it. Each touched day is then rebuilt from its punches: the
+// first is the check-in, the last the check-out, by the employee's shift — see
+// service/punches.go. Manual corrections and approved permits are kept.
 func (h *AttendanceHandler) FingerprintConfirm(w http.ResponseWriter, r *http.Request) {
 	punches, _, filename, ok := h.readPunches(w, r)
 	if !ok {
@@ -129,50 +131,6 @@ func (h *AttendanceHandler) FingerprintConfirm(w http.ResponseWriter, r *http.Re
 		empCache[p.EmployeeCode] = &empInfo{id: emp.ID, branchID: emp.BranchID}
 	}
 
-	// ── Phase 2: group punches by (employeeID, date), resolve check_in/out ───
-	type dayKey struct {
-		empID [16]byte
-		date  string // "2006-01-02"
-	}
-	type resolvedGroup struct {
-		info     *empInfo
-		checkIn  *time.Time // earliest punch before 12:00
-		checkOut *time.Time // latest punch at/after 12:00
-	}
-
-	groups := map[dayKey]*resolvedGroup{}
-	var groupOrder []dayKey // preserve iteration order
-
-	for _, p := range punches {
-		info := empCache[p.EmployeeCode]
-		if info == nil {
-			continue
-		}
-		dateStr := p.Timestamp.Format("2006-01-02")
-		key := dayKey{empID: info.id.Bytes, date: dateStr}
-
-		g, exists := groups[key]
-		if !exists {
-			g = &resolvedGroup{info: info}
-			groups[key] = g
-			groupOrder = append(groupOrder, key)
-		}
-
-		ts := p.Timestamp
-		if ts.Hour() < 12 {
-			if g.checkIn == nil || ts.Before(*g.checkIn) {
-				tsCopy := ts
-				g.checkIn = &tsCopy
-			}
-		} else {
-			if g.checkOut == nil || ts.After(*g.checkOut) {
-				tsCopy := ts
-				g.checkOut = &tsCopy
-			}
-		}
-	}
-
-	// ── Phase 3: apply to attendance records inside a transaction ────────────
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -181,81 +139,56 @@ func (h *AttendanceHandler) FingerprintConfirm(w http.ResponseWriter, r *http.Re
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	schedCache := map[string]service.Schedule{}
-	matched := 0
+	branchSched := map[[16]byte]service.Schedule{}
+	baseFor := func(branchID pgtype.UUID) service.Schedule {
+		if s, ok := branchSched[branchID.Bytes]; ok {
+			return s
+		}
+		s := service.DefaultSchedule()
+		if ws, serr := qtx.GetWorkScheduleByBranch(ctx, branchID); serr == nil && ws != nil {
+			s = service.ScheduleFromRow(ws)
+		}
+		branchSched[branchID.Bytes] = s
+		return s
+	}
 
-	for _, key := range groupOrder {
-		g := groups[key]
-		if g.checkIn == nil && g.checkOut == nil {
+	// ── Phase 2: log every punch on its work day ─────────────────────────────
+	type dayKey struct {
+		empID [16]byte
+		date  time.Time
+	}
+	type touchedDay struct {
+		empID pgtype.UUID
+		date  time.Time
+		sched service.Schedule
+	}
+	touched := map[dayKey]touchedDay{}
+	var order []dayKey
+	for _, p := range punches {
+		info := empCache[p.EmployeeCode]
+		if info == nil {
 			continue
 		}
-
-		dateOnly, _ := time.Parse("2006-01-02", key.date)
-		pgDate := pgtype.Date{Time: dateOnly, Valid: true}
-
-		bkey := string(g.info.branchID.Bytes[:])
-		sched, has := schedCache[bkey]
-		if !has {
-			ws, serr := qtx.GetWorkScheduleByBranch(ctx, g.info.branchID)
-			if serr != nil || ws == nil {
-				sched = service.DefaultSchedule()
-			} else {
-				sched = service.ScheduleFromRow(ws)
-			}
-			schedCache[bkey] = sched
+		day, sched, lerr := service.LogPunch(ctx, qtx, info.id,
+			service.Punch{At: p.Timestamp, Source: "fingerprint"}, baseFor(info.branchID), pgtype.UUID{})
+		if lerr != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan punch sidik jari")
+			return
 		}
-
-		existing, eerr := qtx.GetAttendanceRecordByEmployeeDate(ctx, &db.GetAttendanceRecordByEmployeeDateParams{
-			EmployeeID: g.info.id,
-			Date:       pgDate,
-		})
-		hasExisting := eerr == nil
-
-		var state *service.AttendanceState
-		if hasExisting {
-			state = service.StateFromRecord(existing)
-		} else {
-			state = service.EmptyState()
+		k := dayKey{info.id.Bytes, day}
+		if _, seen := touched[k]; !seen {
+			touched[k] = touchedDay{info.id, day, sched}
+			order = append(order, k)
 		}
+	}
 
-		if g.checkIn != nil {
-			service.MergeAttendanceEvent(state, service.AttendanceEvent{
-				Timestamp: *g.checkIn,
-				Source:    "fingerprint",
-				Direction: "check_in",
-			})
-		}
-		if g.checkOut != nil {
-			service.MergeAttendanceEvent(state, service.AttendanceEvent{
-				Timestamp: *g.checkOut,
-				Source:    "fingerprint",
-				Direction: "check_out",
-			})
-		}
-		service.ComputeAnomalies(state, sched, service.DayIsOver(dateOnly, sched, time.Now()))
-
-		if hasExisting {
-			params := db.UpdateAttendanceRecordParams{
-				CheckInPhotoPath: existing.CheckInPhotoPath,
-				DeviceID:         existing.DeviceID,
-				Note:             existing.Note,
-				ID:               existing.ID,
-			}
-			service.FillUpdateParams(&params, state)
-			if _, uerr := qtx.UpdateAttendanceRecord(ctx, &params); uerr != nil {
-				respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran sidik jari")
-				return
-			}
-		} else {
-			params := db.InsertAttendanceRecordParams{
-				EmployeeID: g.info.id,
-				Date:       pgDate,
-			}
-			service.FillInsertParams(&params, state)
-			if _, ierr := qtx.InsertAttendanceRecord(ctx, &params); ierr != nil {
-				respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran sidik jari")
-				return
-			}
+	// ── Phase 3: rebuild each touched day from its punches ───────────────────
+	matched := 0
+	for _, k := range order {
+		d := touched[k]
+		if _, _, rerr := service.RebuildDay(ctx, qtx, d.empID, d.date, d.sched, service.RebuildOptions{}); rerr != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran sidik jari")
+			return
 		}
 		matched++
 	}

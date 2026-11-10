@@ -401,6 +401,8 @@ export const uploadEmployeePhoto = (id, file) => {
   return api.post(`/hr/employees/${id}/photo`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 export const deleteEmployeePhoto = (id) => api.delete(`/hr/employees/${id}/photo`);
+// Removes the face embedding + all attendance face photos (non-active employees only).
+export const deleteEmployeeFaceData = (id) => api.delete(`/hr/employees/${id}/face`);
 
 export const getPositions   = () => api.get('/hr/positions');
 export const createPosition = (data) => api.post('/hr/positions', data);
@@ -519,6 +521,20 @@ export const createPerformanceViolation = (data) => api.post('/hr/performance/vi
 export const deletePerformanceViolation = (id, reason) => api.delete(`/hr/performance/violations/${id}`, { params: { reason } });
 export const evaluatePerformance        = (from, to) => api.post('/hr/performance/evaluate', null, { params: { from, to } });
 export const resetAutoViolations        = (from, to) => api.delete('/hr/performance/violations/auto', { params: { from, to } });
+// Penyesuaian Evaluasi: dry-run a month's re-evaluation, then apply it
+export const getEvaluationAdjustments   = (month) => api.get('/hr/performance/adjustments', { params: { month } });
+export const applyEvaluationAdjustments = (month) => api.post('/hr/performance/adjustments/apply', null, { params: { month } });
+
+// Attendance permits (Izin Masuk Siang / Izin Pulang Awal / Dinas Luar)
+export const getAttendancePermissions    = (params) => api.get('/hr/attendance-permissions', { params });
+export const createAttendancePermission  = (data) => api.post('/hr/attendance-permissions', data);
+export const approveAttendancePermission = (id, note) => api.post(`/hr/attendance-permissions/${id}/approve`, { note });
+export const rejectAttendancePermission  = (id, note) => api.post(`/hr/attendance-permissions/${id}/reject`, { note });
+export const cancelAttendancePermission  = (id, note) => api.post(`/hr/attendance-permissions/${id}/cancel`, { note });
+// Review of days far outside the shift (very late / very early without a permit)
+export const getAttendanceReviewSettings    = () => api.get('/hr/attendance/review-settings');
+export const updateAttendanceReviewSettings = (data) => api.put('/hr/attendance/review-settings', data);
+export const setAttendanceReviewed          = (id, resolved = true) => api.post(`/hr/attendance/${id}/review`, { resolved });
 
 // ── HR: Cuti (Leave Management) ─────────────────────────────────────────────
 // Leave types
@@ -529,6 +545,17 @@ export const deleteLeaveType  = (id) => api.delete(`/hr/leave-types/${id}`);
 
 // Manpower planning
 export const getManpowerPlanning  = (params) => api.get('/hr/manpower-planning', { params });
+// Shifts: per-branch definitions + the daily roster. Saving today's roster as a
+// non-manager queues a change request instead of applying (response `pending`).
+export const getShifts            = (params) => api.get('/hr/shifts', { params });
+export const createShift          = (data) => api.post('/hr/shifts', data);
+export const updateShift          = (id, data) => api.put(`/hr/shifts/${id}`, data);
+export const deleteShift          = (id) => api.delete(`/hr/shifts/${id}`);
+export const saveShiftAssignments = (data) => api.put('/hr/shift-assignments', data);
+export const getShiftChangeRequests = (params) => api.get('/hr/shift-change-requests', { params });
+export const approveShiftChange   = (id, note) => api.post(`/hr/shift-change-requests/${id}/approve`, { note });
+export const rejectShiftChange    = (id, note) => api.post(`/hr/shift-change-requests/${id}/reject`, { note });
+export const updateEmployeeShiftProfile = (id, data) => api.put(`/hr/employees/${id}/shift-profile`, data);
 
 // Leave requests
 export const getLeaveRequests     = (params) => api.get('/hr/leave-requests', { params });
@@ -548,6 +575,15 @@ export const setLeaveBalanceQuota   = (id, data) => api.put(`/hr/employees/${id}
 // Every active employee's allowance for one month — the unused-leave indicator.
 export const getLeaveBalances       = (month) => api.get('/hr/leave-balances', { params: { month } });
 export const getEmployeeLeaveRequests = (id) => api.get(`/hr/employees/${id}/leave-requests`);
+
+// ── HR: Dana Kesejahteraan (health benefit + pension fund) ─────────────────
+export const getBenefitFundSummary   = (month) => api.get('/hr/benefit-fund/summary', { params: { month } });
+export const getBenefitFundEmployee  = (id, month) => api.get(`/hr/benefit-fund/employees/${id}`, { params: { month } });
+export const getBenefitClaims        = (params) => api.get('/hr/benefit-fund/claims', { params });
+export const previewBenefitClaim     = (params) => api.get('/hr/benefit-fund/claims/preview', { params });
+export const createBenefitClaim      = (data) => api.post('/hr/benefit-fund/claims', data);
+export const cancelBenefitClaim      = (id, note) => api.post(`/hr/benefit-fund/claims/${id}/cancel`, { note });
+export const payoutBenefitPension    = (id, data) => api.post(`/hr/benefit-fund/employees/${id}/payout`, data);
 
 // ── HR: Kasbon (Cash Advance) ───────────────────────────────────────────────
 export const getKasbons      = (params) => api.get('/hr/kasbons', { params });
@@ -579,6 +615,8 @@ export const getPayrollLines     = (id, params) => api.get(`/hr/payroll/periods/
 export const getPayrollLineReview = (lineId) => api.get(`/hr/payroll/lines/${lineId}/review`);
 export const reviewPayrollLine   = (lineId, data) => api.post(`/hr/payroll/lines/${lineId}/review`, data);
 export const unreviewPayrollLine = (lineId) => api.post(`/hr/payroll/lines/${lineId}/unreview`);
+export const getPayrollLineAttendanceCuts = (lineId) => api.get(`/hr/payroll/lines/${lineId}/attendance-cuts`);
+export const simulateAttendanceCut = (data) => api.post('/hr/payroll/attendance-cut/simulate', data);
 export const regeneratePayrollLine = (id, employeeId) => api.post(`/hr/payroll/periods/${id}/regenerate-line/${employeeId}`);
 export const reviewAllPayrollLines = (id) => api.post(`/hr/payroll/periods/${id}/review-all`);
 export const closePayrollPeriod  = (id) => api.post(`/hr/payroll/periods/${id}/close`);

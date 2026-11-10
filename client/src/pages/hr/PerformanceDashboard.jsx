@@ -6,6 +6,7 @@ import {
   getPerformancePolicies,
 } from '../../api';
 
+import { todayWIB } from '../../time';
 const RULE_LABELS = {
   late: 'Terlambat',
   early_leave: 'Pulang Awal',
@@ -86,7 +87,7 @@ export function ManualViolationModal({ onClose, onSaved, presetEmployee = null, 
   const [form, setForm] = useState({
     employee_id: presetEmployee?.id || '',
     policy_id: '',
-    date: presetDate || new Date().toISOString().slice(0, 10),
+    date: presetDate || todayWIB(),
     points: 5,
     note: '',
   });
@@ -244,6 +245,7 @@ export default function PerformanceDashboard() {
             {evaluating ? 'Mengevaluasi…' : 'Evaluasi Bulan Ini'}
           </button>
           <button onClick={() => setShowModal(true)} className="btn btn-primary">Tambah Pelanggaran Manual</button>
+          <Link to="/hr/performance/adjustments" className="btn btn-secondary">Penyesuaian</Link>
           <Link to="/hr/performance/policies" className="btn btn-secondary">Kebijakan</Link>
         </div>
       </div>

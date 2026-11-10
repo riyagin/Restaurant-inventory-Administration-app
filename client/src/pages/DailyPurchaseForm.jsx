@@ -7,6 +7,7 @@ import {
 import CurrencyInput from '../components/CurrencyInput';
 import SearchSelect from '../components/SearchSelect';
 
+import { todayWIB } from '../time';
 // Recording one shopping run, on its own page.
 //
 // It used to be a panel that unfolded above the list, which meant the list
@@ -15,7 +16,7 @@ import SearchSelect from '../components/SearchSelect';
 // lines and a running total — that is a page, not a panel.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayWIB();
 const emptyLine = () => ({ item_id: '', description: '', quantity: '', unit_index: 0, price: '' });
 
 export default function DailyPurchaseForm() {
