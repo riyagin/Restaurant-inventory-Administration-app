@@ -139,6 +139,9 @@ type employeeListRow struct {
 	EmploymentType  string      `json:"employment_type"`
 	ContractEndDate pgtype.Date `json:"contract_end_date"`
 	HasFace         bool        `json:"has_face"`
+	// Latest face photo from an attendance device (see service/face_photos.go),
+	// shown as the list avatar ahead of the HR-uploaded photo.
+	FacePhotoPath pgtype.Text `json:"face_photo_path"`
 }
 
 // ── Employees ────────────────────────────────────────────────────────────────
@@ -239,7 +242,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		    e.position_id, p.name AS position_name,
 		    e.branch_id, b.name AS branch_name,
 		    e.employment_type, e.contract_end_date,
-		    (e.face_embedding IS NOT NULL) AS has_face
+		    (e.face_embedding IS NOT NULL) AS has_face,
+		    (SELECT fp.photo_path FROM employee_face_photos fp WHERE fp.employee_id = e.id ORDER BY fp.captured_at DESC, fp.created_at DESC LIMIT 1) AS face_photo_path
 		FROM employees e
 		JOIN positions p ON p.id = e.position_id
 		JOIN branches  b ON b.id = e.branch_id
@@ -262,7 +266,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 			&row.PositionID, &row.PositionName,
 			&row.BranchID, &row.BranchName,
 			&row.EmploymentType, &row.ContractEndDate,
-			&row.HasFace,
+			&row.HasFace, &row.FacePhotoPath,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data karyawan")
 			return

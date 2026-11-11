@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../api';
+import { isHROnly } from '../roles';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -21,7 +22,7 @@ export default function Login() {
       const res = await login(form);
       localStorage.setItem('token', res.data.token);
       localStorage.setItem('user', JSON.stringify(res.data.user));
-      navigate('/');
+      navigate(isHROnly(res.data.user?.role) ? '/hr' : '/');
     } catch (err) {
       setError(err.response?.data?.error || 'Login gagal');
     } finally {

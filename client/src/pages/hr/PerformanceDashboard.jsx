@@ -41,6 +41,42 @@ function ScoreBadge({ score }) {
 }
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }) : '-';
+const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
+
+// Uang makan (daily_allowance components, paid in cash every day outside
+// payroll) earned in the month, next to base salary, so a review shows what the
+// employee actually takes home, not only the score.
+function DailyAllowancePanel({ a }) {
+  if (!a?.has_wage) {
+    return <div style={{ padding: '0.75rem', color: '#888', fontSize: '0.85rem' }}>Belum ada struktur upah — uang makan tidak dapat dihitung.</div>;
+  }
+  if (!a.items?.length) {
+    return <div style={{ padding: '0.75rem', color: '#888', fontSize: '0.85rem' }}>Tidak menerima uang makan harian (tidak ada komponen bertipe uang harian).</div>;
+  }
+  return (
+    <div style={{ padding: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'flex-start', borderBottom: '1px solid #eee' }}>
+      <div>
+        <div style={{ fontSize: '0.75rem', color: '#888' }}>Gaji Pokok</div>
+        <div style={{ fontWeight: 600 }}>{fmtIDR(a.base_salary)}</div>
+      </div>
+      {a.items.map(it => (
+        <div key={it.name}>
+          <div style={{ fontSize: '0.75rem', color: '#888' }}>{it.name} (tunai harian)</div>
+          <div style={{ fontWeight: 600, color: it.withheld ? '#c5221f' : undefined }}>{fmtIDR(it.amount)}</div>
+          <div style={{ fontSize: '0.75rem', color: '#667' }}>
+            {it.calc_method === 'per_present_day' ? `${it.days} hari hadir × ${fmtIDR(it.rate)}` : 'tetap per bulan'}
+            {it.withheld && ` — tidak dibayar, skor di bawah ${it.min_score}`}
+          </div>
+        </div>
+      ))}
+      <div>
+        <div style={{ fontSize: '0.75rem', color: '#888' }}>Gaji Pokok + Uang Makan</div>
+        <div style={{ fontWeight: 700 }}>{fmtIDR(Number(a.base_salary) + Number(a.total))}</div>
+        <div style={{ fontSize: '0.75rem', color: '#667' }}>sebelum tunjangan, lembur & potongan</div>
+      </div>
+    </div>
+  );
+}
 
 function ViolationBreakdown({ employeeId, month }) {
   const [data, setData] = useState(null);
@@ -56,9 +92,12 @@ function ViolationBreakdown({ employeeId, month }) {
 
   if (loading) return <div style={{ padding: '0.75rem', color: '#888' }}>Memuat rincian…</div>;
   const viols = data?.violations || [];
-  if (viols.length === 0) return <div style={{ padding: '0.75rem', color: '#888' }}>Tidak ada pelanggaran bulan ini.</div>;
+  const allowance = <DailyAllowancePanel a={data?.daily_allowance} />;
+  if (viols.length === 0) return <>{allowance}<div style={{ padding: '0.75rem', color: '#888' }}>Tidak ada pelanggaran bulan ini.</div></>;
 
   return (
+    <>
+    {allowance}
     <table style={{ width: '100%', background: '#fafbfc' }}>
       <thead>
         <tr><th>Tanggal</th><th>Kebijakan</th><th>Poin</th><th>Catatan</th></tr>
@@ -74,6 +113,7 @@ function ViolationBreakdown({ employeeId, month }) {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
 
@@ -196,6 +236,7 @@ export default function PerformanceDashboard() {
   const [search, setSearch] = useState('');
   const [branches, setBranches] = useState([]);
   const [rows, setRows] = useState([]);
+  const [allowanceTotal, setAllowanceTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -212,8 +253,8 @@ export default function PerformanceDashboard() {
     if (branchId) params.branch_id = branchId;
     if (search.trim()) params.q = search.trim();
     getPerformanceScores(params)
-      .then(r => setRows(r.data?.data || []))
-      .catch(() => setRows([]))
+      .then(r => { setRows(r.data?.data || []); setAllowanceTotal(r.data?.daily_allowance_total || 0); })
+      .catch(() => { setRows([]); setAllowanceTotal(0); })
       .finally(() => setLoading(false));
   };
 
@@ -280,7 +321,7 @@ export default function PerformanceDashboard() {
         ) : (
           <table>
             <thead>
-              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th><th></th></tr>
+              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th><th title="Uang makan tunai harian yang diterima bulan ini">Uang Makan</th><th></th></tr>
             </thead>
             <tbody>
               {rows.map(r => (
@@ -294,6 +335,14 @@ export default function PerformanceDashboard() {
                     <td style={{ fontSize: '0.85rem' }}>{r.branch_name}</td>
                     <td><ScoreBadge score={r.score} /></td>
                     <td>{r.violation_count}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {r.daily_allowance == null ? <span style={{ color: '#bbb' }}>—</span> : (
+                        <>
+                          <div style={{ fontWeight: 500 }}>{fmtIDR(r.daily_allowance)}</div>
+                          <div style={{ fontSize: '0.75rem', color: '#999' }}>{r.daily_allowance_days} hari hadir</div>
+                        </>
+                      )}
+                    </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         className="btn btn-secondary btn-sm"
@@ -305,7 +354,7 @@ export default function PerformanceDashboard() {
                   </tr>
                   {expanded === r.id && (
                     <tr>
-                      <td colSpan={6} style={{ padding: 0 }}>
+                      <td colSpan={7} style={{ padding: 0 }}>
                         <ViolationBreakdown employeeId={r.id} month={month} />
                       </td>
                     </tr>
@@ -313,6 +362,15 @@ export default function PerformanceDashboard() {
                 </Fragment>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'right', fontSize: '0.85rem', color: '#667' }}>
+                  Total uang makan bulan ini (dibukukan sebagai beban saat payroll diposting)
+                </td>
+                <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtIDR(allowanceTotal)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </div>

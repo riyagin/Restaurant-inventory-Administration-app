@@ -137,6 +137,17 @@ function ConfineBranchOperator({ children }) {
   return children;
 }
 
+// The landing page, picked per role. This must be a component, not an inline
+// ternary in the <Route> element: App renders once (on /login, before anyone is
+// signed in), so an inline choice would be frozen at "not logged in" and the
+// navigate('/') after login would show the wrong dashboard until a reload.
+function Home() {
+  if (isHROnly()) return <Navigate to="/hr" replace />;
+  if (isBranchOperator()) return <BranchOperatorDashboard />;
+  if (isStaffDesk()) return <StaffDashboard />;
+  return <Dashboard />;
+}
+
 function NavDropdown({ label, paths, children }) {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
@@ -366,7 +377,9 @@ function Nav() {
     reports: canViewReports(user?.role),
   });
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const isActive = (to) => to === '/' ? pathname === '/' : pathname.startsWith(to);
+  const homePath = hrOnly ? '/hr' : '/';
+  // The home link matches exactly — '/hr' is also the prefix of every HR screen.
+  const isActive = (to) => to === homePath ? pathname === homePath : pathname.startsWith(to);
 
   // Close drawer on navigation
   useEffect(() => { setDrawerOpen(false); }, [pathname]);
@@ -423,14 +436,14 @@ function Nav() {
 
   return (
     <nav className={`navbar${superuser ? ' navbar-superuser' : ''}`} ref={drawerRef} aria-label="Navigasi utama">
-      <Link to="/" className="brand">
+      <Link to={homePath} className="brand">
         <span className="brand-mark" aria-hidden="true">IP</span>
         <span className="brand-word">Inventory<b>Pro</b></span>
       </Link>
 
       {/* Desktop nav */}
       <div className="nav-links nav-links-desktop">
-        {link('/', homeLabel)}
+        {link(homePath, homeLabel)}
         {groups.map((g) => (g.to ? (
           <Link key={g.label} to={g.to} className={isActive(g.to) ? 'active' : ''}
             aria-current={isActive(g.to) ? 'page' : undefined}>{g.label}</Link>
@@ -467,7 +480,7 @@ function Nav() {
       {/* Mobile drawer */}
       {drawerOpen && (
         <div className="mobile-drawer">
-          <Link to="/" className={`mobile-link${isActive('/') ? ' active' : ''}`}>{homeLabel}</Link>
+          <Link to={homePath} className={`mobile-link${isActive(homePath) ? ' active' : ''}`}>{homeLabel}</Link>
 
           {groups.map((g) => (g.to ? (
             <Link key={g.label} to={g.to} className={`mobile-link${isActive(g.to) ? ' active' : ''}`}>{g.label}</Link>
@@ -517,7 +530,8 @@ export default function App() {
           <RequireAuth>
             <Layout>
               <Routes>
-                <Route path="/" element={isHROnly() ? <HRDashboard /> : isBranchOperator() ? <BranchOperatorDashboard /> : isStaffDesk() ? <StaffDashboard /> : <Dashboard />} />
+                <Route path="/" element={<Home />} />
+                <Route path="/hr" element={<RequireHR><HRDashboard /></RequireHR>} />
                 <Route path="/items" element={<RequireCore><Items /></RequireCore>} />
                 <Route path="/items/new" element={<RequireCore><ItemForm /></RequireCore>} />
                 <Route path="/items/edit/:id" element={<RequireCore><ItemForm /></RequireCore>} />

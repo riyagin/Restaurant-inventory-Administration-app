@@ -335,6 +335,9 @@ func (h *PerformanceHandler) ListScores(w http.ResponseWriter, r *http.Request) 
 		BranchName     string      `json:"branch_name"`
 		Score          int32       `json:"score"`
 		ViolationCount int64       `json:"violation_count"`
+		// Uang makan (daily_allowance) earned this month; null without a wage structure.
+		DailyAllowance     *int64 `json:"daily_allowance"`
+		DailyAllowanceDays int32  `json:"daily_allowance_days"`
 	}
 
 	items := []scoreRow{}
@@ -350,8 +353,27 @@ func (h *PerformanceHandler) ListScores(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusInternalServerError, "gagal membaca skor kinerja")
 		return
 	}
+	rows.Close()
 
-	respondJSON(w, http.StatusOK, map[string]any{"month": month.Format("2006-01"), "data": items})
+	var monthTotal int64
+	for i := range items {
+		a, err := service.DailyAllowanceForMonth(ctx, h.queries, items[i].ID, month)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menghitung uang makan")
+			return
+		}
+		if a.HasWage && len(a.Items) > 0 {
+			v := a.Total
+			items[i].DailyAllowance = &v
+			items[i].DailyAllowanceDays = a.PresentDays
+			monthTotal += v
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"month": month.Format("2006-01"), "data": items,
+		"daily_allowance_total": monthTotal,
+	})
 }
 
 // EmployeePerformance — GET /api/hr/employees/:id/performance?month=
@@ -395,10 +417,18 @@ func (h *PerformanceHandler) EmployeePerformance(w http.ResponseWriter, r *http.
 		viols = []*db.ListViolationsForEmployeeMonthRow{}
 	}
 
+	// Uang makan earned this month, shown beside the score during review.
+	allowance, err := service.DailyAllowanceForMonth(ctx, h.queries, empID, month)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menghitung uang makan")
+		return
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
-		"month":      month.Format("2006-01"),
-		"score":      score,
-		"violations": viols,
+		"month":           month.Format("2006-01"),
+		"score":           score,
+		"violations":      viols,
+		"daily_allowance": allowance,
 	})
 }
 

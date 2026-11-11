@@ -29,6 +29,10 @@ type sim struct {
 	router http.Handler
 	empIDs map[string]pgtype.UUID // DBCode -> id
 	log    []string
+	// devMode: loading into the app database. Live policies and HR settings
+	// are kept, and absent days are reconciled for the SIM employees only.
+	devMode     bool
+	branchSched service.Schedule
 }
 
 func (s *sim) logf(f string, a ...any) {
@@ -42,7 +46,9 @@ func newSim(ctx context.Context, url string) (*sim, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &sim{ctx: ctx, pool: pool, q: db.New(pool), empIDs: map[string]pgtype.UUID{}}
+	s := &sim{ctx: ctx, pool: pool, q: db.New(pool), empIDs: map[string]pgtype.UUID{},
+		branchSched: service.Schedule{WorkStartMinutes: branchStart, WorkEndMinutes: branchEnd, GraceMinutes: graceMin,
+			EarlyLeaveMinutes: earlyTolMin, WorkDays: []int{1, 2, 3, 4, 5, 6, 7}}}
 
 	ah := handler.NewAttendanceHandler(pool, s.q)
 	r := chi.NewRouter()
@@ -129,10 +135,10 @@ func (s *sim) seed(emps []*simEmployee, truth []*dayTruth) error {
 		return nil
 	}
 	var branchID, posID pgtype.UUID
-	if err := s.pool.QueryRow(s.ctx, `INSERT INTO branches (name) VALUES ('Warung Jambu (SIM)') RETURNING id`).Scan(&branchID); err != nil {
+	if err := s.pool.QueryRow(s.ctx, `INSERT INTO branches (name) VALUES ($1) RETURNING id`, simBranchName).Scan(&branchID); err != nil {
 		return err
 	}
-	if err := s.pool.QueryRow(s.ctx, `INSERT INTO positions (name, is_active) VALUES ('Crew (SIM)', true) RETURNING id`).Scan(&posID); err != nil {
+	if err := s.pool.QueryRow(s.ctx, `INSERT INTO positions (name, is_active) VALUES ($1, true) RETURNING id`, simPositionName).Scan(&posID); err != nil {
 		return err
 	}
 	if err := ex(`INSERT INTO work_schedules (branch_id, work_start, work_end, grace_minutes, early_leave_minutes, work_days)
@@ -152,6 +158,9 @@ func (s *sim) seed(emps []*simEmployee, truth []*dayTruth) error {
 			return err
 		}
 		shiftIDs[code] = id
+	}
+	if s.devMode {
+		return s.seedPeople(emps, truth, ex, branchID, posID, shiftIDs)
 	}
 	// Live performance policies (copied from the dev database, 2026-11-10).
 	pol := []struct {
@@ -189,6 +198,12 @@ func (s *sim) seed(emps []*simEmployee, truth []*dayTruth) error {
 		ON CONFLICT (id) DO UPDATE SET absence_grace_days = EXCLUDED.absence_grace_days`, absenceGraceDays); err != nil {
 		return err
 	}
+	return s.seedPeople(emps, truth, ex, branchID, posID, shiftIDs)
+}
+
+// seedPeople inserts the employees, their roster and approved leave.
+func (s *sim) seedPeople(emps []*simEmployee, truth []*dayTruth, ex func(string, ...any) error,
+	branchID, posID pgtype.UUID, shiftIDs map[string]pgtype.UUID) error {
 	for _, e := range emps {
 		var id pgtype.UUID
 		if err := s.pool.QueryRow(s.ctx, `INSERT INTO employees (employee_code, full_name, join_date, position_id, branch_id)
@@ -196,6 +211,28 @@ func (s *sim) seed(emps []*simEmployee, truth []*dayTruth) error {
 			return err
 		}
 		s.empIDs[e.DBCode] = id
+	}
+	// Wage structure + uang makan (a daily_allowance paid in cash per present
+	// day), so the evaluation screen can show what each employee took home.
+	// Its own component, so the live "Uang Makan" configuration is never touched.
+	var makanID pgtype.UUID
+	if err := s.pool.QueryRow(s.ctx, `INSERT INTO wage_components (name, type, calc_method) VALUES ($1, 'daily_allowance', 'per_present_day') RETURNING id`,
+		simMealComponent).Scan(&makanID); err != nil {
+		return err
+	}
+	for i, e := range emps {
+		var wsID pgtype.UUID
+		if err := s.pool.QueryRow(s.ctx, `INSERT INTO wage_structures (employee_id, base_salary, working_days_per_month, daily_rate, effective_date)
+			VALUES ($1, $2, 26, $3, '2025-01-06') RETURNING id`, s.empIDs[e.DBCode], dailyRate*26, dailyRate).Scan(&wsID); err != nil {
+			return err
+		}
+		rate := int64(25_000) // crew; every fourth employee is a senior at 35.000
+		if i%4 == 3 {
+			rate = 35_000
+		}
+		if err := ex(`INSERT INTO employee_wage_components (wage_structure_id, wage_component_id, amount) VALUES ($1,$2,$3)`, wsID, makanID, rate); err != nil {
+			return err
+		}
 	}
 	// Roster + approved leave (UpsertLeaveAttendance is what leave approval runs).
 	for _, t := range truth {
@@ -262,6 +299,12 @@ func (s *sim) backfill(from, to time.Time) error {
 		return err
 	}
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
+		if s.devMode {
+			if err := s.reconcileSimOnly(s.ctx, qtx, d); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := service.ReconcileAbsent(s.ctx, qtx, d); err != nil {
 			return err
 		}

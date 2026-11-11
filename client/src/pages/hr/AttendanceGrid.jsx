@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getAttendance, getBranches } from '../../api';
 import { fmtTime, todayWIB } from '../../time';
+import PersonAvatar from '../../components/PersonAvatar';
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
@@ -207,6 +208,7 @@ export default function AttendanceGrid() {
           full_name:     rec.full_name,
           employee_code: rec.employee_code,
           branch_name:   rec.branch_name,
+          face_photo_path: rec.face_photo_path,
         });
       }
       if (!gridMap.has(eid)) gridMap.set(eid, {});
@@ -458,19 +460,24 @@ export default function AttendanceGrid() {
                       padding: '0.35rem 0.65rem 0.35rem 0.6rem',
                       boxShadow: '3px 0 6px rgba(0,0,0,0.04)',
                     }}>
-                      <Link
-                        to={`/hr/employees/${emp.id}`}
-                        style={{
-                          fontWeight: 600, color: '#1a1a2e', textDecoration: 'none',
-                          fontSize: '0.82rem', display: 'block',
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          maxWidth: '155px',
-                        }}
-                      >
-                        {emp.full_name}
-                      </Link>
-                      <div style={{ fontSize: '0.66rem', color: '#aaa', fontFamily: 'monospace' }}>
-                        {emp.employee_code}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <PersonAvatar name={emp.full_name} facePhotoPath={emp.face_photo_path} size={26} />
+                        <div style={{ minWidth: 0 }}>
+                          <Link
+                            to={`/hr/employees/${emp.id}`}
+                            style={{
+                              fontWeight: 600, color: '#1a1a2e', textDecoration: 'none',
+                              fontSize: '0.82rem', display: 'block',
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                              maxWidth: '125px',
+                            }}
+                          >
+                            {emp.full_name}
+                          </Link>
+                          <div style={{ fontSize: '0.66rem', color: '#aaa', fontFamily: 'monospace' }}>
+                            {emp.employee_code}
+                          </div>
+                        </div>
                       </div>
                     </td>
 

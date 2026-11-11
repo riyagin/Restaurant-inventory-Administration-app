@@ -4,6 +4,7 @@ import { getAttendance, getBranches, reconcileAttendance } from '../../api';
 import { fmtTime, todayWIB } from '../../time';
 import { isBranchOperator } from '../../roles';
 import AttendanceGrid from './AttendanceGrid';
+import PersonAvatar from '../../components/PersonAvatar';
 
 // ── branch colour palette ─────────────────────────────────────────────────────
 
@@ -138,14 +139,19 @@ function EmployeeCard({ r, branchColor }) {
       <div style={{ padding: '0.85rem 1rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', flex: 1 }}>
         {/* header row */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-          <div style={{ minWidth: 0 }}>
-            <Link
-              to={`/hr/employees/${r.employee_id}`}
-              style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            >
-              {r.full_name}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
+            <Link to={`/hr/employees/${r.employee_id}`} style={{ flexShrink: 0 }}>
+              <PersonAvatar name={r.full_name} facePhotoPath={r.face_photo_path} size={32} />
             </Link>
-            <div style={{ fontSize: '0.72rem', color: '#999', fontFamily: 'monospace' }}>{r.employee_code}</div>
+            <div style={{ minWidth: 0 }}>
+              <Link
+                to={`/hr/employees/${r.employee_id}`}
+                style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
+                {r.full_name}
+              </Link>
+              <div style={{ fontSize: '0.72rem', color: '#999', fontFamily: 'monospace' }}>{r.employee_code}</div>
+            </div>
           </div>
           <StatusChip status={r.status} />
         </div>

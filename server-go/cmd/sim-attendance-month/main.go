@@ -31,6 +31,8 @@ func main() {
 	out := flag.String("out", "../../attendance-simulation-2026-10", "output folder")
 	serverTZ := flag.String("server-tz", "", "pretend the API server runs in this zone (e.g. UTC, like a typical VPS); default = this machine")
 	label := flag.String("label", "", "note shown at the top of the report (e.g. which code version ran)")
+	dev := flag.Bool("dev", false, "load the simulation into the app database (DB_NAME) instead of throwaway databases")
+	devClean := flag.Bool("dev-clean", false, "remove the simulation from the app database and exit")
 	flag.Parse()
 	if *serverTZ != "" {
 		loc, err := time.LoadLocation(*serverTZ)
@@ -49,6 +51,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+	}
+	if *dev || *devClean {
+		runDev(ctx, cfg.DBUrl, *out, *devClean, *label)
+		return
 	}
 	must(os.MkdirAll(filepath.Join(*out, "device-files"), 0o755))
 

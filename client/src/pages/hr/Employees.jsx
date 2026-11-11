@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getEmployees, getBranches, getPositions, getContractAlerts, uploadUrl } from '../../api';
+import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
+import PersonAvatar from '../../components/PersonAvatar';
 import { canUseHR } from '../../roles';
 
 
@@ -246,17 +247,7 @@ export default function Employees() {
             ) : rows.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/hr/employees/${e.id}`)}>
                 <td>
-                  {e.photo_path ? (
-                    <img
-                      src={uploadUrl(e.photo_path)}
-                      alt={e.full_name}
-                      style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '1px solid #e8e8e8' }}
-                    />
-                  ) : (
-                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#eef1f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8a93a6', fontSize: '0.8rem' }}>
-                      {(e.full_name || '?').charAt(0).toUpperCase()}
-                    </div>
-                  )}
+                  <PersonAvatar name={e.full_name} facePhotoPath={e.face_photo_path} photoPath={e.photo_path} size={36} />
                 </td>
                 <td style={{ fontFamily: 'monospace' }}>{e.employee_code}</td>
                 <td style={{ fontWeight: 500 }}>{e.full_name}</td>

@@ -256,6 +256,11 @@ func (p *PayrollPoster) post(ctx context.Context, periodID pgtype.UUID, actor uu
 		return fmt.Errorf("dana kesejahteraan: %w", err)
 	}
 
+	// Uang makan: handed out in cash daily, booked as the month's expense here.
+	if _, err := PostDailyAllowancePeriod(ctx, qtx, period, actor); err != nil {
+		return fmt.Errorf("uang makan: %w", err)
+	}
+
 	if err := qtx.MarkPayrollPostingPosted(ctx, &db.MarkPayrollPostingPostedParams{
 		PeriodID:       periodID,
 		JournalEntryID: pgtype.UUID{Bytes: entryID, Valid: entryID != uuid.Nil},

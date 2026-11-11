@@ -135,7 +135,8 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		    ar.is_leave_punch, ar.excused_by,
 		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name,
 		    COALESCE(d.branch_id <> e.branch_id, false) AS is_remote,
-		    db.name AS clock_in_branch_name
+		    db.name AS clock_in_branch_name,
+		    (SELECT fp.photo_path FROM employee_face_photos fp WHERE fp.employee_id = e.id ORDER BY fp.captured_at DESC, fp.created_at DESC LIMIT 1) AS face_photo_path
 		FROM attendance_records ar
 		JOIN employees e ON e.id = ar.employee_id
 		JOIN branches  b ON b.id = e.branch_id
@@ -188,6 +189,8 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		// is where they actually clocked in (null for non-device records).
 		IsRemote          bool               `json:"is_remote"`
 		ClockInBranchName pgtype.Text        `json:"clock_in_branch_name"`
+		// Latest face photo of the employee, for a small avatar on the card.
+		FacePhotoPath     pgtype.Text        `json:"face_photo_path"`
 	}
 
 	items := []recordRow{}
@@ -201,7 +204,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			&x.IsHalfDay, &x.HalfDayLostMinutes, &x.HalfDayType, &x.IsMissingCheckin, &x.IsNoPunch,
 			&x.IsLeavePunch, &x.ExcusedBy,
 			&x.FullName, &x.EmployeeCode, &x.BranchID, &x.BranchName,
-			&x.IsRemote, &x.ClockInBranchName,
+			&x.IsRemote, &x.ClockInBranchName, &x.FacePhotoPath,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data kehadiran")
 			return
