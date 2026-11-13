@@ -459,6 +459,17 @@ export const getEmployeeWage        = (id) => api.get(`/hr/employees/${id}/wage`
 export const getEmployeeWageHistory = (id) => api.get(`/hr/employees/${id}/wage/history`);
 export const createEmployeeWage     = (id, data) => api.post(`/hr/employees/${id}/wage`, data);
 
+// Skala grade kinerja: skor bulanan → % dibayar dari komponen yang ikut grade.
+export const getPerformanceGrades  = ()       => api.get('/hr/performance-grades');
+export const savePerformanceGrades = (grades) => api.put('/hr/performance-grades', { grades });
+
+// Template gaji per jabatan: isi awal struktur gaji + terapkan massal.
+export const getPositionWageTemplates   = ()                 => api.get('/hr/position-wage-templates');
+export const getPositionWageTemplate    = (positionId)       => api.get(`/hr/position-wage-templates/${positionId}`);
+export const savePositionWageTemplate   = (positionId, data) => api.put(`/hr/position-wage-templates/${positionId}`, data);
+export const deletePositionWageTemplate = (positionId)       => api.delete(`/hr/position-wage-templates/${positionId}`);
+export const applyPositionWageTemplate  = (positionId, data) => api.post(`/hr/position-wage-templates/${positionId}/apply`, data);
+
 // ── HR: Impor Massal Karyawan ───────────────────────────────────────────────
 export const downloadHrImportTemplate = () => api.get('/hr/import/template', { responseType: 'blob' });
 export const exportHrEmployees         = () => api.get('/hr/import/export', { responseType: 'blob' });

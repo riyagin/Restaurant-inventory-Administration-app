@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, Fragment } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   getEmployee, deleteEmployee, transitionEmployeeToPermanent, resignEmployee, deleteEmployeeFaceData,
-  getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents,
+  getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents, getPositionWageTemplate,
   getAttendance, getEmployeePerformance,
   getLeaveBalance, getEmployeeLeaveRequests,
   getEmployeeKasbons,
@@ -502,7 +502,7 @@ function ComponentRows({ components }) {
           <tr key={c.id}>
             <td>
               {c.component_name}
-              {c.component_min_score != null && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · syarat skor ≥ {c.component_min_score}</span>}
+              {c.component_grade_linked && <span style={{ color: '#5b3cc4', fontSize: '0.8rem' }}> · ikut grade kinerja</span>}
             </td>
             <td>
               {TYPE_LABELS[c.component_type] || c.component_type}
@@ -633,7 +633,7 @@ function DokumenTab({ employeeId, editable }) {
   );
 }
 
-function WageTab({ employeeId, editable, isContract }) {
+function WageTab({ employeeId, editable, isContract, positionId, positionName }) {
   const [current, setCurrent] = useState(null);
   const [history, setHistory] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -646,6 +646,7 @@ function WageTab({ employeeId, editable, isContract }) {
   const today = todayWIB();
   const [form, setForm] = useState({ base_salary: '', working_days_per_month: '26', effective_date: today });
   const [picked, setPicked] = useState([]); // [{ component_id, amount }]
+  const [template, setTemplate] = useState(null); // the position's wage template, if any
 
   const load = () => {
     setLoading(true);
@@ -660,9 +661,30 @@ function WageTab({ employeeId, editable, isContract }) {
 
   useEffect(() => { load(); }, [employeeId]);
 
+  // Fill the form from the position's template: base salary, working days and
+  // every active component amount. Everything stays editable afterwards.
+  const applyTemplate = (t) => {
+    setForm(f => ({
+      ...f,
+      base_salary: String(t.base_salary),
+      working_days_per_month: String(t.working_days_per_month),
+    }));
+    setPicked((t.components || [])
+      .filter(c => c.component_is_active)
+      .map(c => ({ component_id: c.wage_component_id, amount: String(c.amount) })));
+  };
+
   const openForm = () => {
     setError('');
     getWageComponents({ active: 1 }).then(r => setCatalog(r.data || [])).catch(() => setCatalog([]));
+    setTemplate(null);
+    if (positionId) {
+      getPositionWageTemplate(positionId).then(r => {
+        setTemplate(r.data || null);
+        // An employee with no wage yet starts from the template.
+        if (!current && r.data) applyTemplate(r.data);
+      }).catch(() => setTemplate(null));
+    }
     // Prefill from current open version for convenience.
     if (current) {
       setForm({
@@ -831,6 +853,14 @@ function WageTab({ employeeId, editable, isContract }) {
               Menyimpan akan membuat <strong>versi baru</strong>. Versi sebelumnya tetap tersimpan sebagai riwayat (tidak diubah).
             </p>
             {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
+            {template && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', padding: '0.6rem 0.8rem', marginBottom: '1rem', background: '#f5f9ff', border: '1px solid #d9e6fb', borderRadius: 8, fontSize: '0.85rem' }}>
+                <span>
+                  Template jabatan <strong>{positionName}</strong>: gaji pokok {fmtIDR(template.base_salary)}, {(template.components || []).length} komponen
+                </span>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => applyTemplate(template)}>Isi dari Template</button>
+              </div>
+            )}
             <form onSubmit={handleSubmit}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 <div className="form-group">
@@ -874,7 +904,11 @@ function WageTab({ employeeId, editable, isContract }) {
                       const perDay = meta.calc_method === 'per_present_day';
                       return (
                         <tr key={p.component_id}>
-                          <td>{meta.name || '-'}{perDay && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · per hari hadir</span>}</td>
+                          <td>
+                            {meta.name || '-'}
+                            {perDay && <span style={{ color: '#8a93a6', fontSize: '0.8rem' }}> · per hari hadir</span>}
+                            {meta.grade_linked && <span style={{ color: '#5b3cc4', fontSize: '0.8rem' }}> · ikut grade</span>}
+                          </td>
                           <td>{TYPE_LABELS[meta.type] || '-'}</td>
                           <td>
                             <CurrencyInput value={p.amount} onChange={e => setComponentAmount(p.component_id, e.target.value)} />
@@ -1128,7 +1162,7 @@ export default function EmployeeDetail() {
         </div>
       )}
 
-      {tab === 'gaji' && <WageTab employeeId={id} editable={editable} isContract={emp.employment_type === 'contract'} />}
+      {tab === 'gaji' && <WageTab employeeId={id} editable={editable} isContract={emp.employment_type === 'contract'} positionId={emp.position_id} positionName={emp.position_name} />}
       {tab === 'absensi' && <AttendanceTab employeeId={id} employee={emp} />}
       {tab === 'kasbon' && <KasbonTab employeeId={id} />}
       {tab === 'cuti' && <CutiTab employeeId={id} />}

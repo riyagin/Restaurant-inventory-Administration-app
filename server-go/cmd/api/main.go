@@ -296,6 +296,7 @@ func main() {
 		r.Use(appmiddleware.DeviceAuth(queries))
 		r.Post("/api/hr/attendance/device/event", attendanceDeviceHandler.Event)
 		r.Get("/api/hr/attendance/device/employees", attendanceDeviceHandler.Employees)
+		r.Get("/api/hr/attendance/device/today", attendanceDeviceHandler.Today)
 		r.Post("/api/hr/attendance/device/face", attendanceDeviceHandler.EnrollFace)
 		r.Post("/api/hr/attendance/device/face/sync", attendanceDeviceHandler.FaceSync)
 	})
@@ -612,6 +613,15 @@ func main() {
 			r.Get("/api/hr/employees/{id}/wage", hrWagesHandler.GetCurrentWage)
 			r.Get("/api/hr/employees/{id}/wage/history", hrWagesHandler.GetWageHistory)
 			r.Post("/api/hr/employees/{id}/wage", hrWagesHandler.CreateWageVersion)
+			// Grade scale: monthly score → % paid of grade-linked components
+			r.Get("/api/hr/performance-grades", hrWagesHandler.ListGrades)
+			r.Put("/api/hr/performance-grades", hrWagesHandler.SaveGrades)
+			// Position (role) wage templates: prefill + bulk apply
+			r.Get("/api/hr/position-wage-templates", hrWagesHandler.ListPositionTemplates)
+			r.Get("/api/hr/position-wage-templates/{positionId}", hrWagesHandler.GetPositionTemplate)
+			r.Put("/api/hr/position-wage-templates/{positionId}", hrWagesHandler.SavePositionTemplate)
+			r.Delete("/api/hr/position-wage-templates/{positionId}", hrWagesHandler.DeletePositionTemplate)
+			r.Post("/api/hr/position-wage-templates/{positionId}/apply", hrWagesHandler.ApplyPositionTemplate)
 		})
 
 		// HR bulk import (employees + initial wage structures).

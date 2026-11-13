@@ -217,10 +217,32 @@ func (h *PayrollHandler) ListLines(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil baris penggajian")
 		return
 	}
-	if rows == nil {
-		rows = []*db.ListPayrollLinesForPeriodRow{}
+	grades, err := h.queries.ListPayrollLineGradesForPeriod(ctx, params.PayrollPeriodID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil grade penggajian")
+		return
 	}
-	respondJSON(w, http.StatusOK, rows)
+	byLine := make(map[[16]byte]*db.ListPayrollLineGradesForPeriodRow, len(grades))
+	for _, g := range grades {
+		byLine[g.ID.Bytes] = g
+	}
+	out := make([]payrollLineWithGrade, 0, len(rows))
+	for _, row := range rows {
+		v := payrollLineWithGrade{ListPayrollLinesForPeriodRow: row}
+		if g := byLine[row.ID.Bytes]; g != nil {
+			v.PerformanceGrade, v.GradePayPercent = g.PerformanceGrade, g.GradePayPercent
+		}
+		out = append(out, v)
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// payrollLineWithGrade adds the grade frozen at generation (migration 087) to a
+// list row; the generated row predates those columns.
+type payrollLineWithGrade struct {
+	*db.ListPayrollLinesForPeriodRow
+	PerformanceGrade pgtype.Text `json:"performance_grade"`
+	GradePayPercent  pgtype.Int4 `json:"grade_pay_percent"`
 }
 
 // ── Line review drawer data ──────────────────────────────────────────────────
@@ -299,8 +321,14 @@ func (h *PayrollHandler) GetLineReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var grade *db.GetPayrollLineGradeRow
+	if g, gerr := h.queries.GetPayrollLineGrade(ctx, pgID); gerr == nil {
+		grade = g
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"line":              line,
+		"grade":             grade,
 		"components":        components,
 		"attendance":        attendance,
 		"violations":        violations,
@@ -1100,8 +1128,8 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		}
 	}
 
-	// Performance score snapshot (nullable) — also gates score-conditional
-	// components, so it is resolved before component amounts.
+	// Performance score snapshot (nullable) — it also picks the grade that
+	// scales grade-linked components, so it is resolved before their amounts.
 	var perfScore pgtype.Int4
 	if score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
 		EmployeeID:  empID,
@@ -1110,13 +1138,17 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		perfScore = pgtype.Int4{Int32: score.Score, Valid: true}
 	}
 
+	grades, err := service.LoadGradeScale(ctx, qtx)
+	if err != nil {
+		return err
+	}
+	tier := grades.Resolve(perfScore)
+
 	compAmounts := make(map[pgtype.UUID]int64, len(components))
 	var allowanceTotal, bonusTotal, deductionTotal int64
 	for _, c := range components {
-		amt := service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
-		if !service.ScoreGatePasses(c.ComponentMinScore, perfScore) {
-			amt = 0
-		}
+		amt := service.GradedAmount(service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
+			c.ComponentGradeLinked, tier)
 		compAmounts[c.WageComponentID] = amt
 		switch c.ComponentType {
 		case service.ComponentTypeAllowance:
@@ -1220,6 +1252,9 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		AttendanceCutDeduction:  cut.Amount,
 	})
 	if err != nil {
+		return err
+	}
+	if err := service.FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
 		return err
 	}
 	for _, c := range components {

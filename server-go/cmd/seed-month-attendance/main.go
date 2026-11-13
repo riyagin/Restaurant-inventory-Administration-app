@@ -25,7 +25,7 @@
 //
 // Also (unless disabled by flags) seeds the wage-component catalog and attaches it
 // to every open wage structure so the allowance / bonus / deduction, the
-// per_present_day calc method and the min_score performance gate are all covered.
+// per_present_day calc method and the grade-linked performance scaling are all covered.
 //
 // Usage:
 //
@@ -358,21 +358,20 @@ func buildPatterns() []pattern {
 // ── wage component catalog (payroll coverage) ────────────────────────────────
 
 type wageComponent struct {
-	name       string
-	typ        string
-	calcMethod string
-	minScore   *int
-	amount     int64
+	name        string
+	typ         string
+	calcMethod  string
+	gradeLinked bool // pays only its grade's percentage of the scale
+	amount      int64
 }
 
 func wageCatalog() []wageComponent {
-	gate := 90
 	return []wageComponent{
 		{name: "Tunjangan Jabatan", typ: "allowance", calcMethod: "fixed", amount: 500_000},
 		// Handed out in cash every day, so it is informational on the payslip only
 		// (see wage_components.type 'daily_allowance') — never part of gross/net.
 		{name: "Uang Makan", typ: "daily_allowance", calcMethod: "per_present_day", amount: 15_000},
-		{name: "Tunjangan Kinerja", typ: "bonus", calcMethod: "fixed", minScore: &gate, amount: 300_000},
+		{name: "Tunjangan Kinerja", typ: "bonus", calcMethod: "fixed", gradeLinked: true, amount: 300_000},
 		{name: "Iuran BPJS", typ: "deduction", calcMethod: "fixed", amount: 120_000},
 	}
 }
@@ -533,12 +532,12 @@ func main() {
 		for _, c := range wageCatalog() {
 			var compID string
 			err := pool.QueryRow(ctx,
-				`INSERT INTO wage_components (name, type, is_fixed, is_active, calc_method, min_score)
+				`INSERT INTO wage_components (name, type, is_fixed, is_active, calc_method, grade_linked)
 				 VALUES ($1, $2, true, true, $3, $4)
 				 ON CONFLICT (name) DO UPDATE
 				   SET type = EXCLUDED.type, calc_method = EXCLUDED.calc_method,
-				       min_score = EXCLUDED.min_score, is_active = true
-				 RETURNING id`, c.name, c.typ, c.calcMethod, c.minScore).Scan(&compID)
+				       grade_linked = EXCLUDED.grade_linked, is_active = true
+				 RETURNING id`, c.name, c.typ, c.calcMethod, c.gradeLinked).Scan(&compID)
 			if err != nil {
 				log.Fatalf("upsert wage component %s: %v", c.name, err)
 			}

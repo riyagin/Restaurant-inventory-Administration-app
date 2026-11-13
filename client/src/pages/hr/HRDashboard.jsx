@@ -61,7 +61,8 @@ const groups = (approver) => [
     items: [
       { to: '/hr/settings', icon: '🏢', label: 'Pengaturan HR', desc: 'Data perusahaan & penomoran surat' },
       { to: '/hr/positions', icon: '🏷️', label: 'Jabatan', desc: 'Katalog jabatan' },
-      { to: '/hr/wage-components', icon: '🧮', label: 'Komponen Gaji', desc: 'Tunjangan & potongan' },
+      { to: '/hr/wage-components', icon: '🧮', label: 'Komponen Gaji & Grade', desc: 'Tunjangan, potongan & skala grade kinerja' },
+      { to: '/hr/wage-templates', icon: '📋', label: 'Template Gaji Jabatan', desc: 'Gaji pokok & komponen per jabatan' },
       { to: '/hr/attendance/settings', icon: '⚙️', label: 'Pengaturan Absensi', desc: 'Jadwal kerja & hari libur' },
       { to: '/hr/performance/policies', icon: '⚖️', label: 'Kebijakan Kinerja', desc: 'Aturan pelanggaran & poin' },
     ],

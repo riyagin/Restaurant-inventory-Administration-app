@@ -62,10 +62,10 @@ function DailyAllowancePanel({ a }) {
       {a.items.map(it => (
         <div key={it.name}>
           <div style={{ fontSize: '0.75rem', color: '#888' }}>{it.name} (tunai harian)</div>
-          <div style={{ fontWeight: 600, color: it.withheld ? '#c5221f' : undefined }}>{fmtIDR(it.amount)}</div>
+          <div style={{ fontWeight: 600, color: it.pay_percent != null && it.pay_percent < 100 ? '#c5221f' : undefined }}>{fmtIDR(it.amount)}</div>
           <div style={{ fontSize: '0.75rem', color: '#667' }}>
             {it.calc_method === 'per_present_day' ? `${it.days} hari hadir × ${fmtIDR(it.rate)}` : 'tetap per bulan'}
-            {it.withheld && ` — tidak dibayar, skor di bawah ${it.min_score}`}
+            {it.pay_percent != null && it.pay_percent < 100 && ` — grade ${it.grade}: ${it.pay_percent}% dari ${fmtIDR(it.full_amount)}`}
           </div>
         </div>
       ))}

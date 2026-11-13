@@ -3,8 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"inventory-app/server-go/internal/db"
 )
 
@@ -12,11 +10,11 @@ func TestDailyAllowanceItems(t *testing.T) {
 	comps := []*db.ListEmployeeWageComponentsRow{
 		{ComponentName: "Uang Makan", ComponentType: ComponentTypeDailyAllowance, ComponentCalcMethod: CalcMethodPerPresentDay, Amount: 25000},
 		{ComponentName: "Uang Transport", ComponentType: ComponentTypeDailyAllowance, ComponentCalcMethod: CalcMethodFixed, Amount: 100000,
-			ComponentMinScore: pgtype.Int4{Int32: 80, Valid: true}},
+			ComponentGradeLinked: true},
 		{ComponentName: "Insentif", ComponentType: ComponentTypeAllowance, ComponentCalcMethod: CalcMethodFixed, Amount: 500000},
 	}
 
-	items, total := dailyAllowanceItems(comps, 22, pgtype.Int4{Int32: 90, Valid: true})
+	items, total := dailyAllowanceItems(comps, 22, &GradeTier{Label: "A", MinScore: 90, PayPercent: 100})
 	if len(items) != 2 {
 		t.Fatalf("only daily_allowance components count, got %d items", len(items))
 	}
@@ -27,14 +25,17 @@ func TestDailyAllowanceItems(t *testing.T) {
 		t.Errorf("total = %d, want 650000", total)
 	}
 
-	// Score below the component's min_score withholds it, as payroll does.
-	items, total = dailyAllowanceItems(comps, 22, pgtype.Int4{Int32: 70, Valid: true})
-	if !items[1].Withheld || items[1].Amount != 0 || total != 550000 {
-		t.Errorf("gated: withheld=%v amount=%d total=%d", items[1].Withheld, items[1].Amount, total)
+	// A lower grade pays only its share of the grade-linked component.
+	items, total = dailyAllowanceItems(comps, 22, &GradeTier{Label: "C", MinScore: 70, PayPercent: 50})
+	if items[1].Amount != 50000 || items[1].FullAmount != 100000 || items[1].Grade != "C" || total != 600000 {
+		t.Errorf("graded: amount=%d full=%d grade=%q total=%d", items[1].Amount, items[1].FullAmount, items[1].Grade, total)
+	}
+	if items[0].Amount != 550000 || items[0].Grade != "" {
+		t.Errorf("unlinked component must ignore the grade: amount=%d grade=%q", items[0].Amount, items[0].Grade)
 	}
 
-	// No score yet: the gate passes (ScoreGatePasses).
-	if _, total = dailyAllowanceItems(comps, 0, pgtype.Int4{}); total != 100000 {
+	// No score yet (no tier): paid in full.
+	if _, total = dailyAllowanceItems(comps, 0, nil); total != 100000 {
 		t.Errorf("no present days, no score: total = %d, want 100000", total)
 	}
 }

@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestCalcLineMultipliersAndRounding(t *testing.T) {
@@ -159,27 +158,3 @@ func TestEffectiveComponentAmount(t *testing.T) {
 	}
 }
 
-func TestScoreGatePasses(t *testing.T) {
-	gated := func(v int32) pgtype.Int4 { return pgtype.Int4{Int32: v, Valid: true} }
-	none := pgtype.Int4{}
-
-	// No threshold → always passes regardless of score.
-	if !ScoreGatePasses(none, gated(0)) {
-		t.Error("no min_score should always pass")
-	}
-	// Score meets / exceeds threshold → pass.
-	if !ScoreGatePasses(gated(80), gated(80)) {
-		t.Error("score == min should pass")
-	}
-	if !ScoreGatePasses(gated(80), gated(95)) {
-		t.Error("score > min should pass")
-	}
-	// Score below threshold → fail.
-	if ScoreGatePasses(gated(80), gated(79)) {
-		t.Error("score < min should fail")
-	}
-	// Missing score with a threshold set → pass (don't withhold on missing eval).
-	if !ScoreGatePasses(gated(80), none) {
-		t.Error("missing score should pass so pay is not withheld")
-	}
-}

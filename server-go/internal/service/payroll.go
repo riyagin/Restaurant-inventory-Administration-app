@@ -55,21 +55,6 @@ func EffectiveComponentAmount(calcMethod string, amount int64, presentDays int32
 	return amount
 }
 
-// ScoreGatePasses reports whether a score-gated component should pay for the
-// period. A component with no min_score (minScore invalid) is never gated. When a
-// threshold is set the employee's performance score must meet it; a missing score
-// (evaluation not run yet) passes so pay is not silently withheld — the reviewer
-// can still zero the component at payroll review if the score later disqualifies it.
-func ScoreGatePasses(minScore, score pgtype.Int4) bool {
-	if !minScore.Valid {
-		return true
-	}
-	if !score.Valid {
-		return true
-	}
-	return score.Int32 >= minScore.Int32
-}
-
 // anyPerPresentDay reports whether any component uses the per_present_day method,
 // so callers can skip the attendance count for fixed-only wage structures.
 func anyPerPresentDay(components []*db.ListEmployeeWageComponentsRow) bool {
@@ -308,6 +293,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		return nil, err
 	}
 
+	// One grade scale for the whole run, so every line in it is graded alike.
+	grades, err := LoadGradeScale(ctx, qtx)
+	if err != nil {
+		return nil, err
+	}
+
 	employees, err := qtx.ListActiveEmployeesForPayroll(ctx)
 	if err != nil {
 		return nil, err
@@ -372,8 +363,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			}
 		}
 
-		// Performance score snapshot (nullable) — also gates score-conditional
-		// components below, so it is resolved before component amounts.
+		// Performance score snapshot (nullable) — it also picks the grade that
+		// scales grade-linked components below, so it is resolved first.
 		var perfScore pgtype.Int4
 		score, serr := qtx.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
 			EmployeeID:  emp.ID,
@@ -384,17 +375,16 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		}
 
 		// Effective amount per component: per_present_day → rate × present days;
-		// score-gated components pay 0 when the score misses their min_score.
+		// grade-linked components then pay only their grade's percentage.
 		// daily_allowance components are resolved and snapshotted like the rest, but
 		// deliberately land in no total: they were already handed out in cash during
 		// the month, so including them would pay them a second time.
+		tier := grades.Resolve(perfScore)
 		compAmounts := make(map[pgtype.UUID]int64, len(components))
 		var allowanceTotal, bonusTotal, deductionTotal int64
 		for _, c := range components {
-			amt := EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
-			if !ScoreGatePasses(c.ComponentMinScore, perfScore) {
-				amt = 0
-			}
+			amt := GradedAmount(EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
+				c.ComponentGradeLinked, tier)
 			compAmounts[c.WageComponentID] = amt
 			switch c.ComponentType {
 			case ComponentTypeAllowance:
@@ -504,6 +494,9 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			AttendanceCutDeduction:  cut.Amount,
 		})
 		if err != nil {
+			return nil, err
+		}
+		if err := FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
 			return nil, err
 		}
 

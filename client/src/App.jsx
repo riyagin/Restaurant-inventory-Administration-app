@@ -57,6 +57,7 @@ import Employees from './pages/hr/Employees';
 import EmployeeForm from './pages/hr/EmployeeForm';
 import EmployeeDetail from './pages/hr/EmployeeDetail';
 import Positions from './pages/hr/Positions';
+import PositionWageTemplates from './pages/hr/PositionWageTemplates';
 import WageComponents from './pages/hr/WageComponents';
 import HRImport from './pages/hr/HRImport';
 import AttendanceDashboard from './pages/hr/AttendanceDashboard';
@@ -249,7 +250,8 @@ const HR_GROUPS = [
   { label: 'Kebijakan', links: [
     ['/hr/settings', 'Pengaturan HR'],
     ['/hr/positions', 'Jabatan'],
-    ['/hr/wage-components', 'Komponen Gaji'],
+    ['/hr/wage-components', 'Komponen Gaji & Grade'],
+    ['/hr/wage-templates', 'Template Gaji Jabatan'],
     ['/hr/attendance/settings', 'Pengaturan Absensi'],
     ['/hr/performance/policies', 'Kebijakan Kinerja'],
   ] },
@@ -600,6 +602,7 @@ export default function App() {
                 <Route path="/hr/employees/:id/edit" element={<RequireHR><EmployeeForm /></RequireHR>} />
                 <Route path="/hr/import" element={<RequireHR><HRImport /></RequireHR>} />
                 <Route path="/hr/positions" element={<RequireHR><Positions /></RequireHR>} />
+                <Route path="/hr/wage-templates" element={<RequireHR><PositionWageTemplates /></RequireHR>} />
                 <Route path="/hr/wage-components" element={<RequireHR><WageComponents /></RequireHR>} />
                 <Route path="/hr/attendance" element={<AttendanceDashboard />} />
                 <Route path="/hr/attendance/corrections" element={<RequireBranchHR><AttendanceCorrections /></RequireBranchHR>} />

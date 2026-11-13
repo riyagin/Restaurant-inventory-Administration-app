@@ -819,14 +819,14 @@ type VendorBankAccount struct {
 }
 
 type WageComponent struct {
-	ID         pgtype.UUID        `json:"id"`
-	Name       string             `json:"name"`
-	Type       string             `json:"type"`
-	IsFixed    bool               `json:"is_fixed"`
-	IsActive   bool               `json:"is_active"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	CalcMethod string             `json:"calc_method"`
-	MinScore   pgtype.Int4        `json:"min_score"`
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Type        string             `json:"type"`
+	IsFixed     bool               `json:"is_fixed"`
+	IsActive    bool               `json:"is_active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	CalcMethod  string             `json:"calc_method"`
+	GradeLinked bool               `json:"grade_linked"`
 }
 
 type WageStructure struct {

@@ -21,7 +21,8 @@ import (
 //   - DailyAllowanceForMonth: what an employee earned from them in a month, for
 //     the evaluation screen, so a review shows the money next to the score. It
 //     uses exactly the rule payroll snapshots (EffectiveComponentAmount over
-//     CountPresentDays, gated by ScoreGatePasses), so the two cannot disagree.
+//     CountPresentDays, scaled by the grade for grade-linked components), so the
+//     two cannot disagree.
 //   - PostDailyAllowancePeriod: the month's expense. When a payroll period is
 //     posted, the daily_allowance amounts snapshotted on its lines are booked as
 //     one entry per period: Dr Beban Gaji - <cabang> (memo "uang makan") / Cr Kas.
@@ -37,9 +38,13 @@ type DailyAllowanceItem struct {
 	Rate       int64  `json:"rate"`        // per day for per_present_day, else the monthly amount
 	CalcMethod string `json:"calc_method"` // fixed | per_present_day
 	Days       int32  `json:"days"`        // present days counted (per_present_day only)
-	Amount     int64  `json:"amount"`
-	MinScore   *int32 `json:"min_score,omitempty"`
-	Withheld   bool   `json:"withheld"` // score below min_score: nothing paid
+	FullAmount int64  `json:"full_amount"` // before the grade
+	Amount     int64  `json:"amount"`      // after the grade
+	// GradeLinked components pay only their grade's percentage; Grade and
+	// PayPercent are set when a grade applied (a score exists).
+	GradeLinked bool   `json:"grade_linked"`
+	Grade       string `json:"grade,omitempty"`
+	PayPercent  *int32 `json:"pay_percent,omitempty"`
 }
 
 // DailyAllowanceSummary is what the evaluation screen shows for an employee-month.
@@ -52,7 +57,7 @@ type DailyAllowanceSummary struct {
 }
 
 // dailyAllowanceItems applies payroll's rule to the daily_allowance components.
-func dailyAllowanceItems(components []*db.ListEmployeeWageComponentsRow, presentDays int32, score pgtype.Int4) ([]DailyAllowanceItem, int64) {
+func dailyAllowanceItems(components []*db.ListEmployeeWageComponentsRow, presentDays int32, tier *GradeTier) ([]DailyAllowanceItem, int64) {
 	items := []DailyAllowanceItem{}
 	var total int64
 	for _, c := range components {
@@ -63,13 +68,12 @@ func dailyAllowanceItems(components []*db.ListEmployeeWageComponentsRow, present
 		if c.ComponentCalcMethod == CalcMethodPerPresentDay {
 			it.Days = presentDays
 		}
-		if c.ComponentMinScore.Valid {
-			v := c.ComponentMinScore.Int32
-			it.MinScore = &v
-		}
-		it.Amount = EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
-		if !ScoreGatePasses(c.ComponentMinScore, score) {
-			it.Amount, it.Withheld = 0, true
+		it.FullAmount = EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
+		it.GradeLinked = c.ComponentGradeLinked
+		it.Amount = GradedAmount(it.FullAmount, c.ComponentGradeLinked, tier)
+		if c.ComponentGradeLinked && tier != nil {
+			pct := tier.PayPercent
+			it.Grade, it.PayPercent = tier.Label, &pct
 		}
 		total += it.Amount
 		items = append(items, it)
@@ -115,7 +119,11 @@ func DailyAllowanceForMonth(ctx context.Context, q *db.Queries, employeeID pgtyp
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	out.Items, out.Total = dailyAllowanceItems(components, out.PresentDays, score)
+	grades, err := LoadGradeScale(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	out.Items, out.Total = dailyAllowanceItems(components, out.PresentDays, grades.Resolve(score))
 	return out, nil
 }
 

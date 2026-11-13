@@ -76,9 +76,9 @@ type wageComponentBody struct {
 	IsFixed    *bool  `json:"is_fixed"`
 	IsActive   *bool  `json:"is_active"`
 	CalcMethod string `json:"calc_method"`
-	// MinScore gates the component on the monthly performance score. nil / omitted =
-	// never gated; 0–100 = pay only when the period score meets the threshold.
-	MinScore *int32 `json:"min_score"`
+	// GradeLinked: the component pays only the percentage of the employee's
+	// monthly grade (see service.GradeScale). Not allowed on deductions.
+	GradeLinked bool `json:"grade_linked"`
 }
 
 // resolveCalcMethod defaults an empty calc_method to 'fixed' and validates it.
@@ -92,16 +92,11 @@ func resolveCalcMethod(m string) (string, bool) {
 	return m, validCalcMethod(m)
 }
 
-// resolveMinScore converts the optional min_score into a pgtype.Int4 (invalid when
-// omitted → no gate) and validates the 0–100 range.
-func resolveMinScore(v *int32) (pgtype.Int4, bool) {
-	if v == nil {
-		return pgtype.Int4{}, true
-	}
-	if *v < 0 || *v > 100 {
-		return pgtype.Int4{}, false
-	}
-	return pgtype.Int4{Int32: *v, Valid: true}, true
+// gradeLinkAllowed reports whether a component type may follow the grade. A
+// deduction scaled by performance would shrink as performance drops, which is
+// backwards, so it is refused.
+func gradeLinkAllowed(componentType string) bool {
+	return componentType != service.ComponentTypeDeduction
 }
 
 // CreateComponent — POST /api/hr/wage-components
@@ -126,9 +121,8 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusBadRequest, "metode perhitungan harus fixed atau per_present_day")
 		return
 	}
-	minScore, ok := resolveMinScore(body.MinScore)
-	if !ok {
-		respondError(w, http.StatusBadRequest, "skor minimum harus antara 0 dan 100")
+	if body.GradeLinked && !gradeLinkAllowed(body.Type) {
+		respondError(w, http.StatusBadRequest, "potongan tidak bisa mengikuti grade kinerja")
 		return
 	}
 	isFixed := true
@@ -142,12 +136,12 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	comp, err := h.queries.CreateWageComponent(ctx, &db.CreateWageComponentParams{
-		Name:       body.Name,
-		Type:       body.Type,
-		IsFixed:    isFixed,
-		IsActive:   isActive,
-		CalcMethod: calcMethod,
-		MinScore:   minScore,
+		Name:        body.Name,
+		Type:        body.Type,
+		IsFixed:     isFixed,
+		IsActive:    isActive,
+		CalcMethod:  calcMethod,
+		GradeLinked: body.GradeLinked,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -198,9 +192,8 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusBadRequest, "metode perhitungan harus fixed atau per_present_day")
 		return
 	}
-	minScore, ok := resolveMinScore(body.MinScore)
-	if !ok {
-		respondError(w, http.StatusBadRequest, "skor minimum harus antara 0 dan 100")
+	if body.GradeLinked && !gradeLinkAllowed(body.Type) {
+		respondError(w, http.StatusBadRequest, "potongan tidak bisa mengikuti grade kinerja")
 		return
 	}
 	isFixed := true
@@ -214,13 +207,13 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	comp, err := h.queries.UpdateWageComponent(ctx, &db.UpdateWageComponentParams{
-		Name:       body.Name,
-		Type:       body.Type,
-		IsFixed:    isFixed,
-		IsActive:   isActive,
-		CalcMethod: calcMethod,
-		MinScore:   minScore,
-		ID:         pgtype.UUID{Bytes: id, Valid: true},
+		Name:        body.Name,
+		Type:        body.Type,
+		IsFixed:     isFixed,
+		IsActive:    isActive,
+		CalcMethod:  calcMethod,
+		GradeLinked: body.GradeLinked,
+		ID:          pgtype.UUID{Bytes: id, Valid: true},
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

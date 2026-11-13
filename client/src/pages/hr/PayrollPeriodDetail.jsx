@@ -108,6 +108,20 @@ function ScoreBadge({ score }) {
   return <span style={{ background: bg, color, padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 700 }}>{s}</span>;
 }
 
+// The grade the line was paid at (frozen at generation): which share of every
+// grade-linked component it received.
+function GradeBadge({ grade, percent }) {
+  if (!grade) return null;
+  const pct = Number(percent);
+  const full = pct >= 100;
+  return (
+    <span title={`Grade ${grade}: komponen yang ikut grade dibayar ${pct}%`}
+      style={{ marginLeft: 4, background: full ? '#efe8fb' : '#fff1e6', color: full ? '#5b3cc4' : '#b3541e', padding: '2px 6px', borderRadius: 10, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {grade} · {pct}%
+    </span>
+  );
+}
+
 export default function PayrollPeriodDetail() {
   const { id } = useParams();
   const [period, setPeriod] = useState(null);
@@ -505,7 +519,7 @@ export default function PayrollPeriodDetail() {
                   ) : fmtIDR(0)}
                 </td>
                 <td style={{ padding: 10, textAlign: 'right', fontWeight: 700 }}>{fmtIDR(l.net_pay)}</td>
-                <td style={{ padding: 10, textAlign: 'center' }}><ScoreBadge score={l.performance_score} /></td>
+                <td style={{ padding: 10, textAlign: 'center', whiteSpace: 'nowrap' }}><ScoreBadge score={l.performance_score} /><GradeBadge grade={l.performance_grade} percent={l.grade_pay_percent} /></td>
                 <td style={{ padding: 10, textAlign: 'center' }}>{l.reviewed ? <span style={{ color: '#1e7e34', fontWeight: 700 }}>✓</span> : ''}</td>
                 {downloadablePayslips && (
                   <td style={{ padding: 10, textAlign: 'center' }}>
@@ -961,7 +975,15 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
               {/* Performance */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Evaluasi</h3>
-                <div style={{ marginBottom: 6 }}>Skor: <ScoreBadge score={line.performance_score} /></div>
+                <div style={{ marginBottom: 6 }}>
+                  Skor: <ScoreBadge score={line.performance_score} />
+                  <GradeBadge grade={data.grade?.performance_grade} percent={data.grade?.grade_pay_percent} />
+                </div>
+                {data.grade?.performance_grade && (
+                  <div style={{ fontSize: 12, color: '#889', marginBottom: 6 }}>
+                    Komponen yang ikut grade dibayar {data.grade.grade_pay_percent}% (grade {data.grade.performance_grade}).
+                  </div>
+                )}
                 {(data.violations || []).length === 0 ? (
                   <div style={{ fontSize: 13, color: '#889' }}>Tidak ada pelanggaran.</div>
                 ) : (

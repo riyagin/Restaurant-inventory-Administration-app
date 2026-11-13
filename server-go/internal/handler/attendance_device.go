@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,11 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,24 +62,38 @@ func (h *AttendanceDeviceHandler) scheduleForBranch(r *http.Request, branchID pg
 //
 // Request (multipart/form-data OR application/x-www-form-urlencoded):
 //
-//	employee_code  string  (required)
-//	event_type     string  check_in | check_out | auto   (required)
-//	timestamp      string  RFC3339, e.g. 2026-06-09T07:58:00+07:00 (required)
-//	photo          file    optional (face check-in evidence)
+//	employee_code    string  (required)
+//	event_type       string  check_in | check_out | auto   (required)
+//	age_ms           int     ms since the event was captured, on the device's
+//	                         monotonic clock. Present → the punch is timed by the
+//	                         server (received − age). See service/device_punch.go.
+//	timestamp        string  RFC3339 device wall clock. Only trusted (and flagged
+//	                         unverified) when age_ms is absent; otherwise kept
+//	                         for audit.
+//	client_event_id  uuid    optional; makes retries idempotent
+//	photo            file    optional (face check-in evidence)
 //
 // Response 200:
 //
 //	{
-//	  "greeting":   "Selamat pagi, Budi Santoso",
-//	  "status":     "present",
-//	  "event_type": "check_in",
-//	  "check_in":   "2026-06-09T07:58:00+07:00" | null,
-//	  "check_out":  "..." | null,
-//	  "is_late":    false,
+//	  "greeting":    "Selamat pagi, Budi Santoso",
+//	  "status":      "present",
+//	  "event_type":  "check_in",
+//	  "timestamp":   "2026-06-09T07:58:00+07:00",  // the punch as the server recorded it
+//	  "time_source": "server" | "queued" | "device",
+//	  "time_verified": true,
+//	  "server_time": "...",
+//	  "check_in":    "2026-06-09T07:58:00+07:00" | null,
+//	  "check_out":   "..." | null,
+//	  "is_late":     false,
 //	  "late_minutes": 0,
-//	  "full_name":  "Budi Santoso"
+//	  "full_name":   "Budi Santoso"
 //	}
 func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) {
+	// Taken before the body is read: age_ms was measured when the app sent the
+	// request, so the upload time must not be added to it.
+	received := time.Now()
+
 	if err := r.ParseMultipartForm(20 << 20); err != nil {
 		// Fall back to plain form parsing (no file part).
 		if err := r.ParseForm(); err != nil {
@@ -105,14 +122,35 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusBadRequest, "event_type harus check_in, check_out, atau auto")
 		return
 	}
-	if rawTimestamp == "" {
-		respondError(w, http.StatusBadRequest, "timestamp wajib diisi (format RFC3339)")
+	var deviceTs *time.Time
+	if rawTimestamp != "" {
+		t, err := time.Parse(time.RFC3339, rawTimestamp)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "format timestamp tidak valid (gunakan RFC3339)")
+			return
+		}
+		deviceTs = &t
+	}
+	var ageMs *int64
+	if raw := strings.TrimSpace(r.FormValue("age_ms")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "age_ms harus bilangan bulat")
+			return
+		}
+		ageMs = &v
+	}
+	punchTime, err := service.ResolveDevicePunchTime(received, ageMs, deviceTs)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ts, err := time.Parse(time.RFC3339, rawTimestamp)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "format timestamp tidak valid (gunakan RFC3339)")
-		return
+	// A malformed id is ignored rather than refused: it only costs idempotency.
+	var clientEventID pgtype.UUID
+	if raw := strings.TrimSpace(r.FormValue("client_event_id")); raw != "" {
+		if id, perr := uuid.Parse(raw); perr == nil {
+			clientEventID = pgtype.UUID{Bytes: id, Valid: true}
+		}
 	}
 
 	ctx := r.Context()
@@ -182,12 +220,18 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	// Log the punch on the work day its shift window places it in (a check-out
 	// at 00:20 after a late shift belongs to the previous day), then rebuild that
 	// day: first punch = check-in, last = check-out, by the rostered shift.
-	workDate, sched, err := service.LogPunch(ctx, qtx, emp.ID, service.Punch{At: ts, Source: source, Hint: hint}, base, deviceID)
+	logged, err := service.LogDevicePunch(ctx, qtx, tx, emp.ID,
+		service.Punch{At: punchTime.At, Source: source, Hint: hint}, punchTime, clientEventID, base, deviceID)
+	if errors.Is(err, service.ErrClientEventConflict) {
+		respondError(w, http.StatusConflict, err.Error())
+		return
+	}
 	if err != nil {
-		log.Printf("attendance device event: LogPunch(emp=%s ts=%s) failed: %v", employeeCode, rawTimestamp, err)
+		log.Printf("attendance device event: LogDevicePunch(emp=%s at=%s) failed: %v", employeeCode, punchTime.At, err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 		return
 	}
+	ts, workDate, sched := logged.At, logged.WorkDate, logged.Schedule
 
 	// Audit note for manager-assisted manual entries.
 	manualNote := ""
@@ -220,8 +264,9 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 
 	// The first face check-in of the day refreshes the employee's face photo,
 	// which HR sees on the profile. Best effort: the attendance is already saved.
-	if !isManual && len(photo) > 0 {
-		if _, perr := service.RecordDailyCheckinPhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID, photo, ts); perr != nil {
+	// The photo's day is taken from the time's location, so pass it on WIB.
+	if !isManual && !logged.Duplicate && len(photo) > 0 {
+		if _, perr := service.RecordDailyCheckinPhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID, photo, service.InWIB(ts)); perr != nil {
 			log.Printf("attendance device event: daily face photo (emp=%s) failed: %v", employeeCode, perr)
 		}
 	}
@@ -230,16 +275,22 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		// success/message mirror what the Android app parses (AttendanceEventResponse).
 		// direction ("check_in"/"check_out") is echoed as message so the app can show
 		// the resolved direction; the richer fields below are used by the web UI.
-		"success":      true,
-		"message":      direction,
-		"greeting":     greeting(ts, emp.FullName),
-		"full_name":    emp.FullName,
-		"status":       state.Status,
-		"event_type":   direction,
-		"check_in":     tsString(state.CheckIn),
-		"check_out":    tsString(state.CheckOut),
-		"is_late":      state.IsLate,
-		"late_minutes": state.LateMinutes,
+		"success":    true,
+		"message":    direction,
+		"greeting":   greeting(ts, emp.FullName),
+		"full_name":  emp.FullName,
+		"status":     state.Status,
+		"event_type": direction,
+		// The punch as the server recorded it; the app shows this, not its own clock.
+		"timestamp":     service.InWIB(ts).Format(time.RFC3339),
+		"time_source":   logged.Source,
+		"time_verified": logged.Source != service.PunchTimeDevice,
+		"server_time":   service.InWIB(received).Format(time.RFC3339),
+		"duplicate":     logged.Duplicate,
+		"check_in":      tsString(state.CheckIn),
+		"check_out":     tsString(state.CheckOut),
+		"is_late":       state.IsLate,
+		"late_minutes":  state.LateMinutes,
 	})
 }
 
@@ -254,6 +305,49 @@ type deviceEmployeeDTO struct {
 	FaceEmbedding        *string `json:"face_embedding,omitempty"`
 	FaceEmbeddingVersion *string `json:"face_embedding_version,omitempty"`
 	FaceEnrolledAt       *int64  `json:"face_enrolled_at,omitempty"`
+	// FacePhotoURL is the face the kiosk shows for this employee: the latest
+	// photo from an attendance device, else the HR profile photo. A path under
+	// /uploads/ (same host as the API). Deliberately not "photo_url": the app's
+	// roster sync derives an embedding from photo_url when no enrollment exists,
+	// and a check-in snapshot must not silently become someone's enrollment.
+	FacePhotoURL *string `json:"face_photo_url,omitempty"`
+}
+
+// uploadsURL turns a stored upload file name into its served path.
+func uploadsURL(name string) *string {
+	if name == "" {
+		return nil
+	}
+	u := "/uploads/" + name
+	return &u
+}
+
+// latestFacePhotosByCode maps employee_code → newest face photo file name for a
+// branch's active roster.
+func (h *AttendanceDeviceHandler) latestFacePhotosByCode(ctx context.Context, branchID pgtype.UUID) (map[string]string, error) {
+	rows, err := h.pool.Query(ctx, `
+		SELECT e.employee_code,
+		       (SELECT fp.photo_path FROM employee_face_photos fp
+		        WHERE fp.employee_id = e.id
+		        ORDER BY fp.captured_at DESC, fp.created_at DESC LIMIT 1)
+		FROM employees e
+		WHERE e.branch_id = $1 AND e.status = 'active'`, branchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var code string
+		var path pgtype.Text
+		if err := rows.Scan(&code, &path); err != nil {
+			return nil, err
+		}
+		if path.Valid {
+			out[code] = path.String
+		}
+	}
+	return out, rows.Err()
 }
 
 // Employees — GET /api/hr/attendance/device/employees
@@ -279,6 +373,13 @@ func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	facePhotos, err := h.latestFacePhotosByCode(ctx, dev.BranchID)
+	if err != nil {
+		// Photos are cosmetic; the roster (and its embeddings) must still sync.
+		log.Printf("attendance device employees: face photos failed: %v", err)
+		facePhotos = map[string]string{}
+	}
+
 	out := make([]deviceEmployeeDTO, 0, len(roster))
 	for _, row := range roster {
 		dto := deviceEmployeeDTO{
@@ -288,6 +389,11 @@ func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Reque
 		if row.PhotoPath.Valid {
 			p := row.PhotoPath.String
 			dto.PhotoPath = &p
+		}
+		if fp, ok := facePhotos[row.EmployeeCode]; ok {
+			dto.FacePhotoURL = uploadsURL(fp)
+		} else if row.PhotoPath.Valid {
+			dto.FacePhotoURL = uploadsURL(row.PhotoPath.String)
 		}
 		if len(row.FaceEmbedding) > 0 {
 			enc := base64.StdEncoding.EncodeToString(row.FaceEmbedding)
@@ -668,17 +774,17 @@ func (h *AttendanceDeviceHandler) FaceSync(w http.ResponseWriter, r *http.Reques
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"branch_device":  dev.Name,
-		"model_version":  req.ModelVersion,
-		"server_total":   len(roster),
+		"branch_device":   dev.Name,
+		"model_version":   req.ModelVersion,
+		"server_total":    len(roster),
 		"server_enrolled": serverEnrolled,
-		"device_total":   len(req.Entries),
-		"to_download":    toDownload,
-		"to_upload":      toUpload,
-		"to_delete":      toDelete,
-		"to_reenroll":    toReenroll,
-		"in_sync":        inSync,
-		"synced_at":      time.Now().UnixMilli(),
+		"device_total":    len(req.Entries),
+		"to_download":     toDownload,
+		"to_upload":       toUpload,
+		"to_delete":       toDelete,
+		"to_reenroll":     toReenroll,
+		"in_sync":         inSync,
+		"synced_at":       time.Now().UnixMilli(),
 	})
 }
 
@@ -703,7 +809,8 @@ func tsString(t *time.Time) any {
 	if t == nil {
 		return nil
 	}
-	return t.Format(time.RFC3339)
+	// WIB so a device displaying the hour shows local time, not UTC.
+	return service.InWIB(*t).Format(time.RFC3339)
 }
 
 // greeting returns an Indonesian time-of-day greeting with the employee name.

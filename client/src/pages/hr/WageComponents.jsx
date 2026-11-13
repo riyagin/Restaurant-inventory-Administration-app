@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getWageComponents, createWageComponent, updateWageComponent, deleteWageComponent } from '../../api';
+import GradeScaleEditor from './GradeScaleEditor';
 
 const TYPE_LABELS = {
   allowance: 'Tunjangan',
@@ -14,10 +15,11 @@ const CALC_LABELS = {
   per_present_day: 'Per hari hadir',
 };
 
-const emptyForm = { name: '', type: 'allowance', is_fixed: true, is_active: true, calc_method: 'fixed', min_score: '' };
+const emptyForm = { name: '', type: 'allowance', is_fixed: true, is_active: true, calc_method: 'fixed', grade_linked: false };
 
-// Empty min_score → null (no gate); otherwise a number the backend validates (0–100).
-const toMinScore = (v) => (v === '' || v == null ? null : Number(v));
+// A deduction cannot follow the grade (the server refuses it too): it would
+// shrink as performance drops.
+const canGrade = (type) => type !== 'deduction';
 
 export default function WageComponents() {
   const [rows, setRows]   = useState([]);
@@ -42,7 +44,7 @@ export default function WageComponents() {
         is_fixed: form.is_fixed,
         is_active: form.is_active,
         calc_method: form.calc_method,
-        min_score: toMinScore(form.min_score),
+        grade_linked: canGrade(form.type) && form.grade_linked,
       });
       setForm(emptyForm);
       load();
@@ -55,7 +57,7 @@ export default function WageComponents() {
 
   const openEdit = (c) => {
     setEditId(c.id);
-    setEditForm({ name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: c.is_active, calc_method: c.calc_method || 'fixed', min_score: c.min_score ?? '' });
+    setEditForm({ name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: c.is_active, calc_method: c.calc_method || 'fixed', grade_linked: !!c.grade_linked });
     setError('');
   };
 
@@ -70,7 +72,7 @@ export default function WageComponents() {
         is_fixed: editForm.is_fixed,
         is_active: editForm.is_active,
         calc_method: editForm.calc_method,
-        min_score: toMinScore(editForm.min_score),
+        grade_linked: canGrade(editForm.type) && editForm.grade_linked,
       });
       setEditId(null);
       load();
@@ -96,7 +98,7 @@ export default function WageComponents() {
 
   const toggleActive = async (c) => {
     try {
-      await updateWageComponent(c.id, { name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: !c.is_active, calc_method: c.calc_method || 'fixed', min_score: c.min_score ?? null });
+      await updateWageComponent(c.id, { name: c.name, type: c.type, is_fixed: c.is_fixed, is_active: !c.is_active, calc_method: c.calc_method || 'fixed', grade_linked: !!c.grade_linked });
       load();
     } catch (err) {
       alert(err.response?.data?.error || 'Gagal mengubah status komponen');
@@ -113,9 +115,11 @@ export default function WageComponents() {
         Katalog komponen yang dapat dipakai pada struktur gaji karyawan: Tunjangan, Bonus, Potongan, dan Harian (Tunai).
         Komponen <strong>tetap</strong> (fixed) dihitung pada proyeksi gaji bulanan; komponen <strong>variabel</strong> diisi per periode.
         Metode <strong>Per hari hadir</strong> memperlakukan nominal pada struktur gaji sebagai tarif harian dan mengalikannya dengan jumlah hari hadir karyawan pada periode penggajian.
-        <strong> Skor Min.</strong> membuat komponen hanya dibayar bila skor kinerja bulanan karyawan mencapai ambang tersebut (kosong = tanpa syarat).
+        Komponen yang <strong>ikut grade</strong> hanya dibayar sebesar persentase grade kinerja bulanan karyawan (lihat Skala Grade di bawah); komponen lain tidak dipengaruhi skor.
         Tipe <strong>Harian (Tunai)</strong> dibagikan manual setiap hari di luar transfer gaji bulanan: nominalnya tetap dihitung dan tampil sebagai informasi di slip gaji, tetapi <strong>tidak</strong> menambah gaji kotor maupun gaji bersih.
       </p>
+
+      <GradeScaleEditor />
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
 
@@ -149,10 +153,13 @@ export default function WageComponents() {
               <option value="per_present_day">Per hari hadir</option>
             </select>
           </div>
-          <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 120 }}>
-            <label>Skor Min.</label>
-            <input type="number" min="0" max="100" value={form.min_score} placeholder="—"
-              onChange={e => setForm(f => ({ ...f, min_score: e.target.value }))} title="Kosongkan bila tidak bersyarat skor" />
+          <div className="form-group" style={{ margin: 0, minWidth: 110 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', height: 38 }}
+              title={canGrade(form.type) ? 'Dibayar sesuai persentase grade kinerja bulanan' : 'Potongan tidak bisa ikut grade'}>
+              <input type="checkbox" checked={canGrade(form.type) && form.grade_linked} disabled={!canGrade(form.type)}
+                onChange={e => setForm(f => ({ ...f, grade_linked: e.target.checked }))} />
+              Ikut grade
+            </label>
           </div>
           <button type="submit" className="btn btn-primary" disabled={submitting}>+ Tambah</button>
         </form>
@@ -161,7 +168,7 @@ export default function WageComponents() {
       <div className="card" style={{ maxWidth: 760 }}>
         <table>
           <thead>
-            <tr><th>Nama</th><th>Tipe</th><th>Sifat</th><th>Metode</th><th>Skor Min.</th><th>Status</th><th></th></tr>
+            <tr><th>Nama</th><th>Tipe</th><th>Sifat</th><th>Metode</th><th>Grade</th><th>Status</th><th></th></tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
@@ -172,7 +179,7 @@ export default function WageComponents() {
                 <td>{TYPE_LABELS[c.type] || c.type}</td>
                 <td>{c.is_fixed ? 'Tetap' : 'Variabel'}</td>
                 <td>{CALC_LABELS[c.calc_method] || CALC_LABELS.fixed}</td>
-                <td>{c.min_score == null ? '—' : `≥ ${c.min_score}`}</td>
+                <td>{c.grade_linked ? <span className="badge" style={{ background: '#efe8fb', color: '#5b3cc4' }}>Ikut grade</span> : '—'}</td>
                 <td>
                   <button
                     onClick={() => toggleActive(c)}
@@ -232,9 +239,12 @@ export default function WageComponents() {
                 </select>
               </div>
               <div className="form-group">
-                <label>Skor Kinerja Minimum (kosong = tanpa syarat)</label>
-                <input type="number" min="0" max="100" value={editForm.min_score} placeholder="—"
-                  onChange={e => setEditForm(f => ({ ...f, min_score: e.target.value }))} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input type="checkbox" checked={canGrade(editForm.type) && editForm.grade_linked} disabled={!canGrade(editForm.type)}
+                    onChange={e => setEditForm(f => ({ ...f, grade_linked: e.target.checked }))} />
+                  Ikut grade kinerja (dibayar sesuai persentase grade)
+                </label>
+                {!canGrade(editForm.type) && <small style={{ color: '#8a93a6' }}>Potongan tidak bisa ikut grade.</small>}
               </div>
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
