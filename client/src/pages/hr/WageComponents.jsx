@@ -119,7 +119,7 @@ export default function WageComponents() {
         Tipe <strong>Harian (Tunai)</strong> dibagikan manual setiap hari di luar transfer gaji bulanan: nominalnya tetap dihitung dan tampil sebagai informasi di slip gaji, tetapi <strong>tidak</strong> menambah gaji kotor maupun gaji bersih.
       </p>
 
-      <GradeScaleEditor />
+      <GradeScaleEditor components={rows} />
 
       {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
 

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
@@ -24,11 +25,27 @@ import (
 // (evaluation not run yet) pays in full, as the gate did: pay is never withheld
 // silently on account of a missing evaluation.
 
-// GradeTier is one row of the scale.
+// GradeTier is one row of the scale. PayPercent is the tier's default share;
+// ComponentPercents overrides it for individual grade-linked components, keyed
+// by wage component id (migration 088). Kebijakan HRD pays Service Charge at
+// 50% in Tier B while Uang Kerajinan and Insentif Jabatan pay 0% there, which a
+// single percentage per tier cannot express.
 type GradeTier struct {
-	Label      string `json:"label"`
-	MinScore   int32  `json:"min_score"`
-	PayPercent int32  `json:"pay_percent"`
+	Label             string           `json:"label"`
+	MinScore          int32            `json:"min_score"`
+	PayPercent        int32            `json:"pay_percent"`
+	ComponentPercents map[string]int32 `json:"component_percents,omitempty"`
+}
+
+// PercentFor is the share of one component this tier pays: its override when
+// one is set, otherwise the tier's default.
+func (t *GradeTier) PercentFor(componentID pgtype.UUID) int32 {
+	if t.ComponentPercents != nil && componentID.Valid {
+		if p, ok := t.ComponentPercents[uuid.UUID(componentID.Bytes).String()]; ok {
+			return p
+		}
+	}
+	return t.PayPercent
 }
 
 // GradeScale is the scale ordered by MinScore, highest first.
@@ -40,9 +57,23 @@ func LoadGradeScale(ctx context.Context, q *db.Queries) (GradeScale, error) {
 	if err != nil {
 		return nil, err
 	}
+	overrides, err := q.ListGradeComponentPercents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byGrade := map[[16]byte]map[string]int32{}
+	for _, o := range overrides {
+		m := byGrade[o.GradeID.Bytes]
+		if m == nil {
+			m = map[string]int32{}
+			byGrade[o.GradeID.Bytes] = m
+		}
+		m[uuid.UUID(o.WageComponentID.Bytes).String()] = o.PayPercent
+	}
 	s := make(GradeScale, 0, len(rows))
 	for _, r := range rows {
-		s = append(s, GradeTier{Label: r.Label, MinScore: r.MinScore, PayPercent: r.PayPercent})
+		s = append(s, GradeTier{Label: r.Label, MinScore: r.MinScore, PayPercent: r.PayPercent,
+			ComponentPercents: byGrade[r.ID.Bytes]})
 	}
 	sort.SliceStable(s, func(i, j int) bool { return s[i].MinScore > s[j].MinScore })
 	return s, nil
@@ -83,6 +114,16 @@ func GradedAmount(amount int64, gradeLinked bool, tier *GradeTier) int64 {
 		return amount
 	}
 	return ApplyGradePercent(amount, tier.PayPercent)
+}
+
+// GradedComponentAmount is GradedAmount for one specific component: the tier's
+// override for that component when it has one, else the tier's default. Every
+// payroll path uses this one.
+func GradedComponentAmount(amount int64, gradeLinked bool, tier *GradeTier, componentID pgtype.UUID) int64 {
+	if !gradeLinked || tier == nil {
+		return amount
+	}
+	return ApplyGradePercent(amount, tier.PercentFor(componentID))
 }
 
 // gradeSnapshot is what a payroll line freezes about its grade.
@@ -135,6 +176,14 @@ func ValidateGradeScale(in []GradeTier) (GradeScale, error) {
 		if t.PayPercent < 0 || t.PayPercent > 100 {
 			return nil, fmt.Errorf("%w: persentase grade %s harus 0–100", ErrInvalidGradeScale, t.Label)
 		}
+		for id, p := range t.ComponentPercents {
+			if _, err := uuid.Parse(id); err != nil {
+				return nil, fmt.Errorf("%w: komponen pada grade %s tidak valid", ErrInvalidGradeScale, t.Label)
+			}
+			if p < 0 || p > 100 {
+				return nil, fmt.Errorf("%w: persentase komponen pada grade %s harus 0–100", ErrInvalidGradeScale, t.Label)
+			}
+		}
 		s[i] = t
 	}
 	if !scores[0] {
@@ -147,6 +196,23 @@ func ValidateGradeScale(in []GradeTier) (GradeScale, error) {
 				ErrInvalidGradeScale, s[i].Label, s[i-1].Label)
 		}
 	}
+	// The same must hold per component once its overrides are applied.
+	ids := map[string]bool{}
+	for _, t := range s {
+		for id := range t.ComponentPercents {
+			ids[id] = true
+		}
+	}
+	for id := range ids {
+		cid, _ := uuid.Parse(id)
+		pid := pgtype.UUID{Bytes: cid, Valid: true}
+		for i := 1; i < len(s); i++ {
+			if s[i].PercentFor(pid) > s[i-1].PercentFor(pid) {
+				return nil, fmt.Errorf("%w: untuk setiap komponen, grade %s (skor lebih rendah) tidak boleh dibayar lebih tinggi dari grade %s",
+					ErrInvalidGradeScale, s[i].Label, s[i-1].Label)
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -156,10 +222,22 @@ func SaveGradeScale(ctx context.Context, qtx *db.Queries, s GradeScale) error {
 		return err
 	}
 	for _, t := range s {
-		if _, err := qtx.CreatePerformanceGrade(ctx, &db.CreatePerformanceGradeParams{
+		g, err := qtx.CreatePerformanceGrade(ctx, &db.CreatePerformanceGradeParams{
 			Label: t.Label, MinScore: t.MinScore, PayPercent: t.PayPercent,
-		}); err != nil {
+		})
+		if err != nil {
 			return err
+		}
+		for id, p := range t.ComponentPercents {
+			cid, err := uuid.Parse(id)
+			if err != nil {
+				return err
+			}
+			if err := qtx.CreateGradeComponentPercent(ctx, &db.CreateGradeComponentPercentParams{
+				GradeID: g.ID, WageComponentID: pgtype.UUID{Bytes: cid, Valid: true}, PayPercent: p,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

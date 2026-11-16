@@ -38,6 +38,8 @@ var ruleTypeLabels = map[string]string{
 	"half_day_early":   "Setengah Hari (Pulang Awal)",
 	"absent_no_leave":    "Absen Tanpa Cuti",
 	"consecutive_absent": "Absen Berturut-turut",
+	"unpaid_leave":       "Izin Satu Hari",
+	"sick_no_note":       "Sakit Tanpa Surat Dokter",
 	"manual":             "Manual",
 }
 
@@ -120,7 +122,8 @@ func (h *PerformanceHandler) ExportPolicies(w http.ResponseWriter, r *http.Reque
 	}
 	for _, code := range []string{
 		"late", "early_leave", "missing_checkout", "missing_checkin", "no_punch",
-		"absent_no_leave", "consecutive_absent", "half_day_late", "half_day_early", "manual",
+		"absent_no_leave", "consecutive_absent", "half_day_late", "half_day_early",
+		"unpaid_leave", "sick_no_note", "manual",
 	} {
 		lines = append(lines, "  - "+code+"  =  "+ruleTypeLabels[code])
 	}

@@ -7,7 +7,7 @@ import {
 } from '../../api';
 import { todayLocal, submitLeaveRequest } from './leaveRules';
 import { isBranchOperator } from '../../roles';
-import { QuotaPreview, BackdatedNotice, BackdatedBadge } from './LeaveRuleWidgets';
+import { QuotaPreview, BackdatedNotice, BackdatedBadge, DoctorNoteField } from './LeaveRuleWidgets';
 
 // ── shared status styling ─────────────────────────────────────────────────────
 const STATUS_LABELS = { pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak', cancelled: 'Dibatalkan' };
@@ -265,6 +265,8 @@ function LeaveCreateModal({ onClose, onSaved }) {
           <option value="">— Pilih jenis —</option>
           {types.map(t => <option key={t.id} value={t.id}>{t.name}{t.uses_quota ? ' (kuota)' : ''}{!t.is_paid ? ' — tanpa gaji' : ''}</option>)}
         </select>
+        <DoctorNoteField type={types.find(t => t.id === form.leave_type_id)} checked={form.has_doctor_note}
+          onChange={v => setForm({ ...form, has_doctor_note: v })} />
 
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <div style={{ flex: 1 }}>

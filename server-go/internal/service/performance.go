@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
@@ -72,6 +74,19 @@ func MonthlyCapReached(maxOccurrences *int, existing int) bool {
 		return false // unlimited
 	}
 	return existing >= *maxOccurrences
+}
+
+// LeaveViolationRule names the performance rule a day of approved leave falls
+// under, or "" when it carries no points: sick leave without a doctor's note →
+// 'sick_no_note'; unpaid leave outside the days-off allowance → 'unpaid_leave'.
+func LeaveViolationRule(isPaid, usesQuota, requiresDoctorNote, hasDoctorNote bool) string {
+	if requiresDoctorNote && !hasDoctorNote {
+		return "sick_no_note"
+	}
+	if !isPaid && !usesQuota {
+		return "unpaid_leave"
+	}
+	return ""
 }
 
 // ── DB-touching engine ───────────────────────────────────────────────────────
@@ -253,6 +268,36 @@ func evaluateRecord(ctx context.Context, qtx *db.Queries, rec *db.AttendanceReco
 			p := rows[0]
 			if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
 				return err
+			}
+		}
+	}
+
+	// Leave days. Days off drawn from the monthly allowance and paid/normative
+	// leave carry no points (Ketentuan Tambahan 7). Kebijakan HRD penalises two
+	// kinds of leave day: 'unpaid_leave' — Izin Satu Hari, a day off outside the
+	// employee's days-off plan — and 'sick_no_note' — sick leave without a
+	// doctor's note. First active policy of each rule applies, per day.
+	if rec.Status == "leave" {
+		lv, err := qtx.GetApprovedLeaveOnDate(ctx, &db.GetApprovedLeaveOnDateParams{
+			EmployeeID: rec.EmployeeID,
+			Day:        rec.Date,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil && lv != nil {
+			rule := LeaveViolationRule(lv.IsPaid, lv.UsesQuota, lv.RequiresDoctorNote, lv.HasDoctorNote)
+			if rule != "" {
+				rows, err := qtx.ListActivePerformancePoliciesByRule(ctx, rule)
+				if err != nil {
+					return err
+				}
+				if len(rows) > 0 {
+					p := rows[0]
+					if err := applyAutoViolation(ctx, qtx, rec, p.ID, int(p.Points), p.MaxOccurrencesPerMonth); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}

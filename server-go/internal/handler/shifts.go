@@ -516,10 +516,25 @@ func applyShiftEntry(ctx context.Context, q db.DBTX, e *resolvedEntry, userID pg
 	if err != nil {
 		return err
 	}
+	if err := recomputeTodayAttendance(ctx, q, e.employeeID, e.date); err != nil {
+		return err
+	}
 	_, err = q.Exec(ctx, `
 		UPDATE shift_change_requests SET status = 'superseded', decided_by = $3, decided_at = now()
 		WHERE employee_id = $1 AND date = $2 AND status = 'pending'`, e.employeeID, day, userID)
 	return err
+}
+
+// recomputeTodayAttendance re-judges today's attendance after today's roster
+// changed. Lateness is measured against the shift, so a shift assigned, swapped
+// or removed after the employee checked in must move the flags now, not leave
+// the day judged against the shift (or the lack of one) in force at the punch.
+// Past days are read-only and future days hold no attendance yet.
+func recomputeTodayAttendance(ctx context.Context, q db.DBTX, employeeID pgtype.UUID, date time.Time) error {
+	if date.Format("2006-01-02") != service.TodayWIB().Format("2006-01-02") {
+		return nil
+	}
+	return service.RecomputeDay(ctx, db.New(q), employeeID, date)
 }
 
 // currentAssignment returns the cell's effective shift and division override.
@@ -811,6 +826,9 @@ func (h *ShiftHandler) ApproveShiftChange(w http.ResponseWriter, r *http.Request
 			_, err = tx.Exec(ctx, `DELETE FROM shift_assignments WHERE employee_id = $1 AND date = $2`, e.employeeID, day)
 		}
 		if err != nil {
+			return "", "", err
+		}
+		if err := recomputeTodayAttendance(ctx, tx, e.employeeID, e.date); err != nil {
 			return "", "", err
 		}
 		label := e.shiftLabel

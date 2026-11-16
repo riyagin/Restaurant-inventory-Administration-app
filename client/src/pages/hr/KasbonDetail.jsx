@@ -22,6 +22,23 @@ const fmtDate = (d) => fmtDateTime(d, { day: '2-digit', month: 'short', year: 'n
 const fmtDateOnly = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 
+// Kebijakan Kasbon track frozen at request time: ≥ 90 priority, 70–89 evaluation.
+const pgVal = (v) => (v && typeof v === 'object' ? (v.Valid ? (v.String ?? v.Int32) : null) : v);
+function TrackChip({ kasbon }) {
+  const track = pgVal(kasbon.approval_track);
+  if (!track) return null;
+  const score = pgVal(kasbon.score_at_request);
+  const priority = track === 'priority';
+  return (
+    <span title={`Nilai poin saat pengajuan: ${score ?? '—'}`} style={{
+      marginLeft: 6, padding: '0.1rem 0.45rem', borderRadius: 4, fontSize: '0.72rem', fontWeight: 600,
+      background: priority ? '#e6f4ea' : '#fff4e5', color: priority ? '#1e7e34' : '#8a5300',
+    }}>
+      {priority ? 'Prioritas' : 'Evaluasi'}{score != null ? ` · ${score}` : ''}
+    </span>
+  );
+}
+
 function StatusChip({ status }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.cancelled;
   return <span style={{ background: c.bg, color: c.color, padding: '0.15rem 0.55rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem' }}>{STATUS_LABELS[status] || status}</span>;
@@ -74,7 +91,7 @@ export default function KasbonDetail() {
         <div>
           <div className="card" style={{ marginBottom: '1rem' }}>
             <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <h2>Rincian</h2><StatusChip status={k.status} />
+              <h2>Rincian</h2><span><StatusChip status={k.status} /><TrackChip kasbon={k} /></span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem 1.5rem' }}>
               <Field label="Jumlah" value={fmtIDR(k.amount)} />

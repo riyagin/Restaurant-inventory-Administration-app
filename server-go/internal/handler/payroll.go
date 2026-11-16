@@ -85,7 +85,13 @@ func (h *PayrollHandler) CreatePeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	start, end := service.PeriodBounds(month)
+	// Cut-off period (Kebijakan HRD: 26 → 25), never overlapping the previous
+	// period's dates.
+	start, end, err := service.ResolvePayrollPeriodBounds(ctx, h.queries, month)
+	if err != nil {
+		respondError(w, http.StatusConflict, err.Error())
+		return
+	}
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -1147,8 +1153,8 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 	compAmounts := make(map[pgtype.UUID]int64, len(components))
 	var allowanceTotal, bonusTotal, deductionTotal int64
 	for _, c := range components {
-		amt := service.GradedAmount(service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
-			c.ComponentGradeLinked, tier)
+		amt := service.GradedComponentAmount(service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
+			c.ComponentGradeLinked, tier, c.WageComponentID)
 		compAmounts[c.WageComponentID] = amt
 		switch c.ComponentType {
 		case service.ComponentTypeAllowance:
@@ -1162,11 +1168,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		}
 	}
 
-	holidayCount, err := qtx.CountPresentOnHolidays(ctx, &db.CountPresentOnHolidaysParams{
-		EmployeeID: empID,
-		Date:       pgtype.Date{Time: start, Valid: true},
-		Date_2:     pgtype.Date{Time: end, Valid: true},
-	})
+	holidayCount, holidayRate, err := service.HolidayIncentive(ctx, qtx, empID, start, end, components)
 	if err != nil {
 		return err
 	}
@@ -1190,11 +1192,10 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		kasbonDeduction += ins.Amount
 	}
 
-	unpaidDays, err := service.GetUnpaidLeaveDays(ctx, qtx, empID, start, end)
+	unpaidDays, unpaidDeduction, err := service.LeavePayCut(ctx, qtx, empID, start, end, ws.DailyRate)
 	if err != nil {
 		return err
 	}
-	unpaidDeduction := int64(unpaidDays) * ws.DailyRate
 
 	halfDayHours, halfDayDeduction, err := service.HalfDayDeductionForPeriod(ctx, qtx, empID, start, end, hourlyRate)
 	if err != nil {
@@ -1213,6 +1214,7 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		OvertimeHours:           overtimeHours,
 		OvertimeHourlyRate:      hourlyRate,
 		PublicHolidayDays:       float64(holidayCount),
+		PublicHolidayRate:       holidayRate,
 		OvertimeMultiplier:      mult.Overtime,
 		HolidayMultiplier:       mult.Holiday,
 		AllowanceTotal:          allowanceTotal,
@@ -1255,6 +1257,11 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return err
 	}
 	if err := service.FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
+		return err
+	}
+	if err := qtx.SetPayrollLineHolidayRate(ctx, &db.SetPayrollLineHolidayRateParams{
+		ID: line.ID, PublicHolidayRate: holidayRate,
+	}); err != nil {
 		return err
 	}
 	for _, c := range components {

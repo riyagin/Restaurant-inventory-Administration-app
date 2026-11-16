@@ -113,6 +113,7 @@ function anomalyText(r) {
   if (r.is_late) parts.push(`Terlambat ${r.late_minutes} mnt`);
   if (r.is_early_leave) parts.push('Pulang Awal');
   if (r.is_missing_checkout) parts.push('Tidak Absen Pulang');
+  if (r.no_shift) parts.push('Tanpa Shift');
   return parts.join(', ');
 }
 

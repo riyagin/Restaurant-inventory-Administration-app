@@ -350,6 +350,11 @@ export default function AttendanceCorrections() {
                       style={{ background: '#e3f2fd', color: '#1565c0', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.76rem' }}>
                       Absen saat Cuti
                     </span>
+                  ) : r.no_shift ? (
+                    <span title="Tidak ada shift di jadwal hari ini, jadi tidak dinilai terlambat atau pulang awal. Atur shiftnya di Rencana Tenaga Kerja."
+                      style={{ background: '#f1f3f5', color: '#495057', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.76rem' }}>
+                      Tanpa Shift
+                    </span>
                   ) : r.is_late ? (
                     <span style={{ background: '#fdecea', color: '#c62828', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.76rem' }}>
                       Terlambat {r.late_minutes} mnt

@@ -51,10 +51,50 @@ func (h *LeaveHandler) ListLeaveTypes(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
 		return
 	}
-	if types == nil {
-		types = []*db.LeaveType{}
+	flags, err := h.doctorNoteFlags(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		return
 	}
-	respondJSON(w, http.StatusOK, types)
+	out := make([]leaveTypeView, 0, len(types))
+	for _, t := range types {
+		out = append(out, leaveTypeView{LeaveType: t, RequiresDoctorNote: flags[t.ID.Bytes]})
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// leaveTypeView adds requires_doctor_note (migration 088) to a leave type.
+type leaveTypeView struct {
+	*db.LeaveType
+	RequiresDoctorNote bool `json:"requires_doctor_note"`
+}
+
+func (h *LeaveHandler) doctorNoteFlags(ctx context.Context) (map[[16]byte]bool, error) {
+	rows, err := h.queries.ListLeaveTypeDoctorNoteFlags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[[16]byte]bool, len(rows))
+	for _, r := range rows {
+		m[r.ID.Bytes] = r.RequiresDoctorNote
+	}
+	return m, nil
+}
+
+// requestDoctorNotes reads has_doctor_note for a set of leave requests.
+func (h *LeaveHandler) requestDoctorNotes(ctx context.Context, ids []pgtype.UUID) (map[[16]byte]bool, error) {
+	m := map[[16]byte]bool{}
+	if len(ids) == 0 {
+		return m, nil
+	}
+	rows, err := h.queries.ListLeaveRequestDoctorNotes(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		m[r.ID.Bytes] = r.HasDoctorNote
+	}
+	return m, nil
 }
 
 type leaveTypeBody struct {
@@ -62,6 +102,26 @@ type leaveTypeBody struct {
 	IsPaid    *bool  `json:"is_paid"`
 	UsesQuota *bool  `json:"uses_quota"`
 	IsActive  *bool  `json:"is_active"`
+	// RequiresDoctorNote: a day of this leave without a doctor's note costs
+	// points and a day's pay (Kebijakan HRD V.3.6).
+	RequiresDoctorNote *bool `json:"requires_doctor_note"`
+}
+
+// saveDoctorNoteFlag persists requires_doctor_note when the body carries it
+// and returns the type's resulting view.
+func (h *LeaveHandler) saveDoctorNoteFlag(ctx context.Context, lt *db.LeaveType, flag *bool) (leaveTypeView, error) {
+	if flag != nil {
+		if err := h.queries.SetLeaveTypeRequiresDoctorNote(ctx, &db.SetLeaveTypeRequiresDoctorNoteParams{
+			ID: lt.ID, RequiresDoctorNote: *flag,
+		}); err != nil {
+			return leaveTypeView{}, err
+		}
+	}
+	flags, err := h.doctorNoteFlags(ctx)
+	if err != nil {
+		return leaveTypeView{}, err
+	}
+	return leaveTypeView{LeaveType: lt, RequiresDoctorNote: flags[lt.ID.Bytes]}, nil
 }
 
 // CreateLeaveType — POST /api/hr/leave-types
@@ -115,7 +175,12 @@ func (h *LeaveHandler) CreateLeaveType(w http.ResponseWriter, r *http.Request) {
 		Description: fmt.Sprintf("Membuat jenis cuti %s", lt.Name),
 	})
 
-	respondJSON(w, http.StatusCreated, lt)
+	view, err := h.saveDoctorNoteFlag(ctx, lt, body.RequiresDoctorNote)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis cuti")
+		return
+	}
+	respondJSON(w, http.StatusCreated, view)
 }
 
 // UpdateLeaveType — PUT /api/hr/leave-types/:id
@@ -179,7 +244,12 @@ func (h *LeaveHandler) UpdateLeaveType(w http.ResponseWriter, r *http.Request) {
 		Description: fmt.Sprintf("Memperbarui jenis cuti %s", lt.Name),
 	})
 
-	respondJSON(w, http.StatusOK, lt)
+	view, err := h.saveDoctorNoteFlag(ctx, lt, body.RequiresDoctorNote)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis cuti")
+		return
+	}
+	respondJSON(w, http.StatusOK, view)
 }
 
 // DeleteLeaveType — DELETE /api/hr/leave-types/:id
@@ -297,18 +367,43 @@ func (h *LeaveHandler) ListLeaveRequests(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
 		return
 	}
-	if rows == nil {
-		rows = []*db.ListLeaveRequestsRow{}
+	ids := make([]pgtype.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
 	}
-	respondJSON(w, http.StatusOK, rows)
+	notes, err := h.requestDoctorNotes(ctx, ids)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		return
+	}
+	needsNote, err := h.doctorNoteFlags(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		return
+	}
+	out := make([]leaveRequestView, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, leaveRequestView{ListLeaveRequestsRow: row, HasDoctorNote: notes[row.ID.Bytes],
+			RequiresDoctorNote: needsNote[row.LeaveTypeID.Bytes]})
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// leaveRequestView adds has_doctor_note (migration 088) to a listed request.
+type leaveRequestView struct {
+	*db.ListLeaveRequestsRow
+	HasDoctorNote      bool `json:"has_doctor_note"`
+	RequiresDoctorNote bool `json:"requires_doctor_note"`
 }
 
 type createLeaveRequestBody struct {
-	EmployeeID  string `json:"employee_id"`
-	LeaveTypeID string `json:"leave_type_id"`
-	StartDate   string `json:"start_date"`
-	EndDate     string `json:"end_date"`
-	Reason      string `json:"reason"`
+	// HasDoctorNote: a doctor's note was submitted with a sick-leave request.
+	HasDoctorNote bool   `json:"has_doctor_note"`
+	EmployeeID    string `json:"employee_id"`
+	LeaveTypeID   string `json:"leave_type_id"`
+	StartDate     string `json:"start_date"`
+	EndDate       string `json:"end_date"`
+	Reason        string `json:"reason"`
 	// ConfirmBackdated acknowledges that a start date before today makes the
 	// request a backdated one, which only a manager/owner can approve.
 	ConfirmBackdated bool `json:"confirm_backdated"`
@@ -441,6 +536,14 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan cuti")
 		return
+	}
+	if body.HasDoctorNote {
+		if err := h.queries.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
+			ID: req.ID, HasDoctorNote: true,
+		}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan cuti")
+			return
+		}
 	}
 
 	desc := fmt.Sprintf("Mengajukan cuti %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount)
@@ -929,10 +1032,93 @@ func (h *LeaveHandler) ListEmployeeLeaveRequests(w http.ResponseWriter, r *http.
 		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat cuti")
 		return
 	}
-	if rows == nil {
-		rows = []*db.ListLeaveRequestsByEmployeeRow{}
+	ids := make([]pgtype.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
 	}
-	respondJSON(w, http.StatusOK, rows)
+	notes, err := h.requestDoctorNotes(ctx, ids)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat cuti")
+		return
+	}
+	type view struct {
+		*db.ListLeaveRequestsByEmployeeRow
+		HasDoctorNote bool `json:"has_doctor_note"`
+	}
+	out := make([]view, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, view{ListLeaveRequestsByEmployeeRow: row, HasDoctorNote: notes[row.ID.Bytes]})
+	}
+	respondJSON(w, http.StatusOK, out)
+}
+
+// SetDoctorNote — PUT /api/hr/leave-requests/:id/doctor-note {has_doctor_note}
+// HR records (or withdraws) the doctor's note after verifying it. On an approved
+// request the days already past are re-judged at once, so the sick_no_note
+// penalty appears or disappears; payroll lines generated before the change must
+// be regenerated to pick up the day's pay cut.
+func (h *LeaveHandler) SetDoctorNote(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	var body struct {
+		HasDoctorNote bool `json:"has_doctor_note"`
+	}
+	if err := parseBody(r, &body); err != nil {
+		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.queries.WithTx(tx)
+
+	req, err := qtx.GetLeaveRequestByID(ctx, pgID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		return
+	}
+	if err := qtx.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
+		ID: pgID, HasDoctorNote: body.HasDoctorNote,
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan surat dokter")
+		return
+	}
+	if req.Status == "approved" {
+		if err := service.ReevaluateLeaveRequest(ctx, qtx, req); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengevaluasi ulang poin")
+			return
+		}
+	}
+	state := "tidak ada"
+	if body.HasDoctorNote {
+		state = "ada"
+	}
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "leave_request",
+		EntityID:    id,
+		Description: fmt.Sprintf("Menandai surat keterangan dokter: %s", state),
+	})
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan data")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"id": req.ID, "has_doctor_note": body.HasDoctorNote})
 }
 
 // ── Manpower Planning ────────────────────────────────────────────────────────
@@ -1050,7 +1236,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 
 	type empInfo struct {
 		id, name, branchID, branchName, position, divisionID, divisionName string
-		deliveryStaff                                                     bool
+		deliveryStaff                                                      bool
 	}
 	var employees []empInfo
 	for empRows.Next() {

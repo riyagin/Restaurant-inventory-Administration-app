@@ -131,6 +131,7 @@ type CalcLineInput struct {
 	OvertimeHours           float64
 	OvertimeHourlyRate      int64
 	PublicHolidayDays       float64
+	PublicHolidayRate       int64 // per-day base of the holiday incentive (daily uang makan)
 	OvertimeMultiplier      float64
 	HolidayMultiplier       float64
 	AllowanceTotal          int64
@@ -155,7 +156,12 @@ type CalcLineResult struct {
 //
 //	overtime_amount        = round(overtime_days × daily_rate × overtime_multiplier)
 //	overtime_hourly_amount = round(overtime_hours × overtime_hourly_rate × overtime_multiplier)
-//	public_holiday_amount  = round(public_holiday_days × daily_rate × holiday_multiplier)
+//	public_holiday_amount  = round(public_holiday_days × public_holiday_rate × holiday_multiplier)
+//
+// public_holiday_rate is the daily uang makan (Insentif Libur Nasional = 2× uang
+// makan, Kebijakan HRD II.8); lines generated before migration 088 carry their
+// daily rate there.
+//
 //	gross_pay = base_salary + allowance_total + bonus_total + overtime_amount
 //	            + overtime_hourly_amount + public_holiday_amount
 //	net_pay   = gross_pay − component_deduction_total − kasbon_deduction − unpaid_leave_deduction
@@ -167,7 +173,7 @@ type CalcLineResult struct {
 func CalcLine(in CalcLineInput) CalcLineResult {
 	overtime := roundHalfUp(in.OvertimeDays * float64(in.DailyRate) * in.OvertimeMultiplier)
 	overtimeHourly := roundHalfUp(in.OvertimeHours * float64(in.OvertimeHourlyRate) * in.OvertimeMultiplier)
-	holiday := roundHalfUp(in.PublicHolidayDays * float64(in.DailyRate) * in.HolidayMultiplier)
+	holiday := roundHalfUp(in.PublicHolidayDays * float64(in.PublicHolidayRate) * in.HolidayMultiplier)
 
 	gross := in.BaseSalary + in.AllowanceTotal + in.BonusTotal + overtime + overtimeHourly + holiday
 	net := gross - in.ComponentDeductionTotal - in.KasbonDeduction - in.UnpaidLeaveDeduction - in.HalfDayDeduction - in.AttendanceCutDeduction
@@ -383,8 +389,8 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		compAmounts := make(map[pgtype.UUID]int64, len(components))
 		var allowanceTotal, bonusTotal, deductionTotal int64
 		for _, c := range components {
-			amt := GradedAmount(EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
-				c.ComponentGradeLinked, tier)
+			amt := GradedComponentAmount(EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
+				c.ComponentGradeLinked, tier, c.WageComponentID)
 			compAmounts[c.WageComponentID] = amt
 			switch c.ComponentType {
 			case ComponentTypeAllowance:
@@ -398,12 +404,9 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			}
 		}
 
-		// Prefill public_holiday_days from attendance present-on-holiday count.
-		holidayCount, err := qtx.CountPresentOnHolidays(ctx, &db.CountPresentOnHolidaysParams{
-			EmployeeID: emp.ID,
-			Date:       pgtype.Date{Time: dateOnly(start), Valid: true},
-			Date_2:     pgtype.Date{Time: dateOnly(end), Valid: true},
-		})
+		// Insentif Libur Nasional: Monday–Friday holidays worked, priced at the
+		// daily uang makan (× the holiday multiplier, 2).
+		holidayCount, holidayRate, err := HolidayIncentive(ctx, qtx, emp.ID, start, end, components)
 		if err != nil {
 			return nil, err
 		}
@@ -428,12 +431,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			kasbonDeduction += ins.Amount
 		}
 
-		// Unpaid leave: working days × daily_rate.
-		unpaidDays, err := GetUnpaidLeaveDays(ctx, qtx, emp.ID, start, end)
+		// Leave that costs pay: unpaid leave (Saturday/Sunday 2× daily rate) and
+		// sick leave without a doctor's note (1× daily rate).
+		unpaidDays, unpaidDeduction, err := LeavePayCut(ctx, qtx, emp.ID, start, end, ws.DailyRate)
 		if err != nil {
 			return nil, err
 		}
-		unpaidDeduction := int64(unpaidDays) * ws.DailyRate
 
 		// Half-day corrections: deduct pay for the lost working hours (arrival past
 		// the max late threshold), reclassified manually on the corrections page.
@@ -455,6 +458,7 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			OvertimeHours:           overtimeHours,
 			OvertimeHourlyRate:      hourlyRate,
 			PublicHolidayDays:       float64(holidayCount),
+			PublicHolidayRate:       holidayRate,
 			OvertimeMultiplier:      mult.Overtime,
 			HolidayMultiplier:       mult.Holiday,
 			AllowanceTotal:          allowanceTotal,
@@ -497,6 +501,11 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 		if err := FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
+			return nil, err
+		}
+		if err := qtx.SetPayrollLineHolidayRate(ctx, &db.SetPayrollLineHolidayRateParams{
+			ID: line.ID, PublicHolidayRate: holidayRate,
+		}); err != nil {
 			return nil, err
 		}
 
@@ -547,6 +556,10 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 	if err != nil {
 		return nil, err
 	}
+	holidayRate, err := qtx.GetPayrollLineHolidayRate(ctx, line.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	calc := CalcLine(CalcLineInput{
 		BaseSalary:              line.BaseSalary,
@@ -555,6 +568,7 @@ func ReviewLine(ctx context.Context, qtx *db.Queries, line *db.PayrollLine, in R
 		OvertimeHours:           in.OvertimeHours,
 		OvertimeHourlyRate:      line.OvertimeHourlyRate,
 		PublicHolidayDays:       in.PublicHolidayDays,
+		PublicHolidayRate:       holidayRate,
 		OvertimeMultiplier:      mult.Overtime,
 		HolidayMultiplier:       mult.Holiday,
 		AllowanceTotal:          in.AdjustedAllowanceTotal,

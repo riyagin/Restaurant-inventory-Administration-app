@@ -79,6 +79,8 @@ export function AnomalyChips({ record }) {
   if (record.is_missing_checkin)  chips.push('Tidak Absen Masuk');
   if (record.is_no_punch)         chips.push('Tidak Absen Masuk & Pulang');
   if (record.is_leave_punch)      chips.push('Absen saat Cuti');
+  // No rostered shift: not judged late/early (lateness follows the shift).
+  if (record.no_shift)            chips.push('Tanpa Shift');
   if (record.excused_by)          chips.push(EXCUSE_LABEL[record.excused_by] || 'Izin');
   if (chips.length === 0) return null;
   return (

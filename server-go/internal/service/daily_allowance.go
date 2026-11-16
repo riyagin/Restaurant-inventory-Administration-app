@@ -70,9 +70,9 @@ func dailyAllowanceItems(components []*db.ListEmployeeWageComponentsRow, present
 		}
 		it.FullAmount = EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays)
 		it.GradeLinked = c.ComponentGradeLinked
-		it.Amount = GradedAmount(it.FullAmount, c.ComponentGradeLinked, tier)
+		it.Amount = GradedComponentAmount(it.FullAmount, c.ComponentGradeLinked, tier, c.WageComponentID)
 		if c.ComponentGradeLinked && tier != nil {
-			pct := tier.PayPercent
+			pct := tier.PercentFor(c.WageComponentID)
 			it.Grade, it.PayPercent = tier.Label, &pct
 		}
 		total += it.Amount
@@ -82,11 +82,16 @@ func dailyAllowanceItems(components []*db.ListEmployeeWageComponentsRow, present
 }
 
 // DailyAllowanceForMonth computes an employee's daily_allowance earnings for the
-// calendar month containing `month`, from the wage structure in force on the
-// month's last day (as payroll does).
+// payroll period of `month` (cut-off window), from the wage structure in force
+// on the period's last day (as payroll does).
 func DailyAllowanceForMonth(ctx context.Context, q *db.Queries, employeeID pgtype.UUID, month time.Time) (*DailyAllowanceSummary, error) {
-	start := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 1, -1)
+	monthStart := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
+	// Present days are counted over the payroll window (cut-off 26 → 25), as
+	// payroll does; the score that picks the grade is still the calendar month's.
+	start, end, err := ResolvePayrollPeriodBounds(ctx, q, monthStart)
+	if err != nil {
+		start, end = PeriodBounds(monthStart)
+	}
 	out := &DailyAllowanceSummary{Items: []DailyAllowanceItem{}}
 
 	ws, err := GetCurrentWage(ctx, q, employeeID, end)
@@ -112,7 +117,7 @@ func DailyAllowanceForMonth(ctx context.Context, q *db.Queries, employeeID pgtyp
 	}
 	var score pgtype.Int4
 	s, err := q.GetPerformanceScore(ctx, &db.GetPerformanceScoreParams{
-		EmployeeID: employeeID, PeriodMonth: pgtype.Date{Time: start, Valid: true},
+		EmployeeID: employeeID, PeriodMonth: pgtype.Date{Time: monthStart, Valid: true},
 	})
 	if err == nil && s != nil {
 		score = pgtype.Int4{Int32: s.Score, Valid: true}

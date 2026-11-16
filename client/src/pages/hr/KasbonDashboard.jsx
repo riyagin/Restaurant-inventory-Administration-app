@@ -25,6 +25,23 @@ const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'lo
 
 const isManager = () => canApprove();
 
+// Kebijakan Kasbon track frozen at request time: ≥ 90 priority, 70–89 evaluation.
+const pgVal = (v) => (v && typeof v === 'object' ? (v.Valid ? (v.String ?? v.Int32) : null) : v);
+function TrackChip({ kasbon }) {
+  const track = pgVal(kasbon.approval_track);
+  if (!track) return null;
+  const score = pgVal(kasbon.score_at_request);
+  const priority = track === 'priority';
+  return (
+    <span title={`Nilai poin saat pengajuan: ${score ?? '—'}`} style={{
+      marginLeft: 6, padding: '0.1rem 0.45rem', borderRadius: 4, fontSize: '0.72rem', fontWeight: 600,
+      background: priority ? '#e6f4ea' : '#fff4e5', color: priority ? '#1e7e34' : '#8a5300',
+    }}>
+      {priority ? 'Prioritas' : 'Evaluasi'}{score != null ? ` · ${score}` : ''}
+    </span>
+  );
+}
+
 function StatusChip({ status }) {
   const c = STATUS_COLORS[status] || STATUS_COLORS.cancelled;
   return <span style={{ background: c.bg, color: c.color, padding: '0.15rem 0.55rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem' }}>{STATUS_LABELS[status] || status}</span>;
@@ -244,7 +261,7 @@ function KasbonTable({ rows, loading, emptyText, renderActions, extraActions, sh
               <td>{k.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{k.employee_code}</div></td>
               <td style={{ textAlign: 'right' }}>{fmtIDR(k.amount)}</td>
               <td>{fmtMonth(k.resolution_month)}</td>
-              <td><StatusChip status={k.status} /></td>
+              <td><StatusChip status={k.status} />{k.status === 'pending' && <TrackChip kasbon={k} />}</td>
               {(renderActions || extraActions) && (
                 <td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>

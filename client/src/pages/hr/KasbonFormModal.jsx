@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getEmployees, getAccounts, createKasbon } from '../../api';
+import { getEmployees, getAccounts, createKasbon, getKasbonEligibility } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
 
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -62,11 +62,33 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
   ]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Kebijakan Kasbon preview for the chosen employee (window, PKWTT, running
+  // kasbon, score). Amount and installments are checked again on submit.
+  // Keyed by employee so a result for the previous pick is never shown.
+  const [eligFor, setEligFor] = useState(null); // { employeeId, data }
+  const elig = eligFor && eligFor.employeeId === form.employee_id ? eligFor.data : null;
 
   useEffect(() => {
     getEmployees().then(r => setEmployees(r.data?.data || [])).catch(() => setEmployees([]));
     getAccounts().then(r => setAccounts((r.data || []).filter(isFundSource))).catch(() => setAccounts([]));
   }, []);
+
+  useEffect(() => {
+    if (!form.employee_id) return;
+    let live = true;
+    const employeeId = form.employee_id;
+    getKasbonEligibility(employeeId)
+      .then(r => { if (live) setEligFor({ employeeId, data: r.data }); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [form.employee_id]);
+
+  const policy = elig?.settings;
+  const maxInstallments = policy?.kasbon_max_installments ?? MAX_REPAYMENT_MONTHS;
+  // Deductions start in the request month and end within maxInstallments months.
+  const monthChoices = MONTH_OPTIONS.slice(0, Math.max(1, maxInstallments));
+  const maxAmount = Number(policy?.kasbon_max_amount || 0);
+  const overCap = maxAmount > 0 && Number(form.amount || 0) > maxAmount;
 
   const total = Number(form.amount || 0);
   const splitSum = rows.reduce((s, r) => s + Number(r.amount || 0), 0);
@@ -98,6 +120,8 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
     if (!form.details.trim()) { setError('Keterangan wajib diisi.'); return; }
     if (!form.sending_method.trim()) { setError('Metode pengiriman wajib diisi.'); return; }
     if (!form.fund_source_account_id) { setError('Pilih sumber dana.'); return; }
+    if (elig && !elig.eligible) { setError(elig.reason); return; }
+    if (overCap) { setError(`Nominal kasbon maksimal ${fmtIDR(maxAmount)} per pengajuan.`); return; }
 
     // When split, the final (latest) installment month is the resolution month.
     const resolutionMonth = split
@@ -118,6 +142,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
       if (Math.round(splitSum) !== roundedTotal) { setError('Total cicilan harus sama dengan jumlah kasbon.'); return; }
       const months = rows.map(r => r.due_month);
       if (new Set(months).size !== months.length) { setError('Bulan cicilan tidak boleh sama.'); return; }
+      if (!months.includes(MONTH_OPTIONS[0])) { setError('Cicilan pertama harus dipotong pada bulan pengajuan.'); return; }
       payload.installments = rows.map(r => ({ due_month: r.due_month, amount: Math.round(Number(r.amount || 0)) }));
     }
 
@@ -150,9 +175,32 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
           </select>
         </div>
 
+        {elig && (
+          <div style={{
+            marginBottom: '1rem', padding: '0.6rem 0.8rem', borderRadius: 8, fontSize: '0.85rem',
+            background: !elig.eligible ? '#fce8e6' : elig.track === 'priority' ? '#e6f4ea' : '#fff4e5',
+            color: !elig.eligible ? '#c5221f' : elig.track === 'priority' ? '#1e7e34' : '#8a5300',
+          }}>
+            <div style={{ fontWeight: 600 }}>
+              {!elig.eligible ? 'Tidak memenuhi Kebijakan Kasbon'
+                : elig.track === 'priority' ? 'Prioritas — proses persetujuan dipermudah'
+                : 'Persetujuan menunggu evaluasi'}
+            </div>
+            <div>Nilai poin bulan ini: <strong>{elig.score}</strong>{!elig.eligible && <> · {elig.reason.replace(/^pengajuan kasbon tidak memenuhi kebijakan: /, '')}</>}</div>
+            {policy && (
+              <div style={{ color: '#667', marginTop: 2 }}>
+                Pengajuan tgl {policy.kasbon_window_start_day}–{policy.kasbon_window_end_day}
+                {maxAmount > 0 && <> · maks {fmtIDR(maxAmount)}</>}
+                {' '}· maks {policy.kasbon_max_installments}× potong gaji, mulai bulan pengajuan
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="form-group">
           <label>Jumlah Kasbon (Rp)</label>
           <CurrencyInput value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} />
+          {overCap && <div style={{ fontSize: '0.78rem', color: '#c5221f', marginTop: '0.3rem' }}>Melebihi batas {fmtIDR(maxAmount)} per pengajuan.</div>}
         </div>
 
         <div className="form-group">
@@ -184,7 +232,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
             onChange={e => setForm({ ...form, resolution_month: e.target.value })}
             disabled={split}
           >
-            {MONTH_OPTIONS.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            {monthChoices.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
           </select>
           {split && <div style={{ fontSize: '0.78rem', color: '#889', marginTop: '0.3rem' }}>Ditentukan otomatis dari cicilan terakhir.</div>}
         </div>
@@ -200,7 +248,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
           <div className="card" style={{ background: '#fafbfc', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginTop: 0 }}>
               <p style={{ fontSize: '0.82rem', color: '#667', margin: 0 }}>
-                Setiap cicilan maksimal {MAX_REPAYMENT_MONTHS} bulan setelah pengajuan; jumlahnya harus sama dengan total kasbon.
+                Maksimal {maxInstallments}× potong gaji, cicilan pertama pada bulan pengajuan; jumlahnya harus sama dengan total kasbon.
               </p>
               <button type="button" className="btn btn-secondary" onClick={splitEvenly} style={{ whiteSpace: 'nowrap', padding: '0.35rem 0.7rem', fontSize: '0.8rem' }}>
                 Bagi rata
@@ -212,7 +260,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
                 <div style={{ flex: 1.2 }}>
                   <label style={{ fontSize: '0.78rem', color: '#667', display: 'block', marginBottom: '0.2rem' }}>Cicilan {idx + 1} — Bulan</label>
                   <select className="select-clean" value={row.due_month} onChange={e => setRow(idx, { due_month: e.target.value })}>
-                    {MONTH_OPTIONS.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+                    {monthChoices.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
                   </select>
                 </div>
                 <div style={{ flex: 1 }}>
@@ -238,7 +286,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
               type="button"
               className="btn btn-secondary"
               onClick={addRow}
-              disabled={rows.length >= MONTH_OPTIONS.length}
+              disabled={rows.length >= monthChoices.length}
               style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}
             >
               + Tambah cicilan
@@ -251,7 +299,7 @@ export default function KasbonFormModal({ onClose, onSaved, presetEmployeeId }) 
         )}
 
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-          <button className="btn btn-primary" onClick={submit} disabled={saving} style={{ flex: 1, justifyContent: 'center' }}>
+          <button className="btn btn-primary" onClick={submit} disabled={saving || (elig && !elig.eligible)} style={{ flex: 1, justifyContent: 'center' }}>
             {saving ? 'Menyimpan…' : 'Ajukan Kasbon'}
           </button>
           <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Batal</button>

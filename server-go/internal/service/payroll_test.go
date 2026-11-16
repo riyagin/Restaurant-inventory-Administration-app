@@ -8,27 +8,29 @@ import (
 func TestCalcLineMultipliersAndRounding(t *testing.T) {
 	// daily_rate 100_000, 1.5 overtime multiplier, 2 overtime days:
 	//   2 × 100000 × 1.5 = 300000 (exact)
-	// holiday 1 day × 100000 × 2.0 = 200000.
+	// holiday 1 day × uang makan 25000 × 2.0 = 50000 (Insentif Libur Nasional
+	// is 2× the daily uang makan, not the daily wage).
 	r := CalcLine(CalcLineInput{
 		BaseSalary:         5_000_000,
 		DailyRate:          100_000,
 		OvertimeDays:       2,
 		PublicHolidayDays:  1,
+		PublicHolidayRate:  25_000,
 		OvertimeMultiplier: 1.5,
 		HolidayMultiplier:  2.0,
 	})
 	if r.OvertimeAmount != 300_000 {
 		t.Errorf("overtime_amount = %d, want 300000", r.OvertimeAmount)
 	}
-	if r.PublicHolidayAmount != 200_000 {
-		t.Errorf("public_holiday_amount = %d, want 200000", r.PublicHolidayAmount)
+	if r.PublicHolidayAmount != 50_000 {
+		t.Errorf("public_holiday_amount = %d, want 50000", r.PublicHolidayAmount)
 	}
-	// gross = 5_000_000 + 0 + 0 + 300_000 + 200_000 = 5_500_000
-	if r.GrossPay != 5_500_000 {
-		t.Errorf("gross_pay = %d, want 5500000", r.GrossPay)
+	// gross = 5_000_000 + 0 + 0 + 300_000 + 50_000 = 5_350_000
+	if r.GrossPay != 5_350_000 {
+		t.Errorf("gross_pay = %d, want 5350000", r.GrossPay)
 	}
-	if r.NetPay != 5_500_000 {
-		t.Errorf("net_pay = %d, want 5500000", r.NetPay)
+	if r.NetPay != 5_350_000 {
+		t.Errorf("net_pay = %d, want 5350000", r.NetPay)
 	}
 }
 
@@ -50,6 +52,7 @@ func TestCalcLineHalfUpRounding(t *testing.T) {
 	r2 := CalcLine(CalcLineInput{
 		DailyRate:          1,
 		PublicHolidayDays:  1.5,
+		PublicHolidayRate:  1,
 		HolidayMultiplier:  1.0,
 		OvertimeMultiplier: 1.0,
 	})
@@ -64,6 +67,7 @@ func TestCalcLineNetWithAllDeductions(t *testing.T) {
 		DailyRate:               160_000,
 		OvertimeDays:            1,
 		PublicHolidayDays:       1,
+		PublicHolidayRate:       160_000, // a line generated before 088 prices at its daily rate
 		OvertimeMultiplier:      1.5,
 		HolidayMultiplier:       2.0,
 		AllowanceTotal:          500_000,

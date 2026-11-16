@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { getManpowerPlanning, getLeaveTypes, getBranches } from '../../api';
 import { canApprove } from '../../roles';
 import { todayLocal, fmtMonth, submitLeaveRequest, WEEKEND_COST } from './leaveRules';
-import { QuotaPreview, BackdatedNotice } from './LeaveRuleWidgets';
+import { QuotaPreview, BackdatedNotice, DoctorNoteField } from './LeaveRuleWidgets';
 import { ShiftCellModal, ShiftProfileModal, ShiftSettingsModal, ShiftCoverageView } from './ShiftPlanning';
 import { groupByHomeDivision, shiftTimeLabel, shiftHoursLabel } from './shiftRules';
 
@@ -242,6 +242,8 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
             ))}
           </select>
         )}
+        <DoctorNoteField type={types.find(t => t.id === form.leave_type_id)} checked={form.has_doctor_note}
+          onChange={v => setForm(f => ({ ...f, has_doctor_note: v }))} />
 
 
         {field('Tanggal Mulai',

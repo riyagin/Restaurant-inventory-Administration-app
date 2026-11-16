@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getHRSettings, updateHRSettings, uploadHRLogo,
+  getPolicySettings, savePolicySettings,
   getAttendanceReviewSettings, updateAttendanceReviewSettings,
   uploadUrl,
 } from '../../api';
@@ -68,6 +69,9 @@ export default function HRSettings() {
   const set = (k) => (e) => setS((v) => ({ ...v, [k]: e.target.value }));
   // Review of days far outside the shift (separate endpoint, same save button).
   const [review, setReview] = useState({ review_late_minutes: 120, review_early_minutes: 120, allow_backdated_permission: true });
+  // Kebijakan HRD: payroll cut-off + Kebijakan Kasbon (separate endpoint, same save button).
+  const [policy, setPolicy] = useState(null);
+  const setP = (k, cast = Number) => (e) => setPolicy((v) => ({ ...v, [k]: cast === Boolean ? e.target.checked : e.target.value }));
 
   const load = async () => {
     setLoading(true);
@@ -80,6 +84,8 @@ export default function HRSettings() {
       setLogoPath(data.logo_path?.String ?? data.logo_path ?? '');
       const rv = await getAttendanceReviewSettings().catch(() => null);
       if (rv?.data) setReview(rv.data);
+      const pol = await getPolicySettings().catch(() => null);
+      if (pol?.data) setPolicy(pol.data);
     } catch {
       setError('Gagal memuat pengaturan');
     } finally {
@@ -108,6 +114,19 @@ export default function HRSettings() {
         review_early_minutes: Math.max(0, Number(review.review_early_minutes) || 0),
         allow_backdated_permission: !!review.allow_backdated_permission,
       });
+      if (policy) {
+        const { data } = await savePolicySettings({
+          payroll_cutoff_day: Number(policy.payroll_cutoff_day) || 0,
+          kasbon_window_start_day: Number(policy.kasbon_window_start_day) || 1,
+          kasbon_window_end_day: Number(policy.kasbon_window_end_day) || 31,
+          kasbon_max_amount: Math.max(0, Number(policy.kasbon_max_amount) || 0),
+          kasbon_max_installments: Number(policy.kasbon_max_installments) || 1,
+          kasbon_permanent_only: !!policy.kasbon_permanent_only,
+          kasbon_min_score: Number(policy.kasbon_min_score) || 0,
+          kasbon_priority_score: Number(policy.kasbon_priority_score) || 0,
+        });
+        setPolicy(data);
+      }
       setMsg('Pengaturan tersimpan.');
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengaturan');
@@ -291,6 +310,45 @@ export default function HRSettings() {
           Izinkan izin susulan (untuk tanggal yang sudah lewat, ditandai MUNDUR TANGGAL)
         </label>
       </div>
+
+      {policy && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 16 }}>Kebijakan Penggajian &amp; Kasbon</h2>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#667' }}>
+            Sesuai Kebijakan HRD AA (HRD-AA-001). Berlaku untuk periode gaji yang dibuat dan pengajuan kasbon yang diajukan setelah disimpan.
+          </p>
+          <Field label="Tanggal Cut-off Gaji"
+            hint={Number(policy.payroll_cutoff_day) > 0
+              ? `Periode bulan M: tanggal ${Number(policy.payroll_cutoff_day) + 1} bulan sebelumnya s/d tanggal ${policy.payroll_cutoff_day} bulan M. Isi 0 untuk bulan kalender.`
+              : 'Bulan kalender (tanggal 1 s/d akhir bulan).'}>
+            <input type="number" min={0} max={28} value={policy.payroll_cutoff_day} onChange={setP('payroll_cutoff_day')} style={{ maxWidth: 140 }} />
+          </Field>
+          <div style={grid}>
+            <Field label="Pengajuan kasbon dari tanggal">
+              <input type="number" min={1} max={31} value={policy.kasbon_window_start_day} onChange={setP('kasbon_window_start_day')} />
+            </Field>
+            <Field label="sampai tanggal">
+              <input type="number" min={1} max={31} value={policy.kasbon_window_end_day} onChange={setP('kasbon_window_end_day')} />
+            </Field>
+            <Field label="Nominal maksimal (Rp)" hint="0 = tanpa batas.">
+              <input type="number" min={0} step={50000} value={policy.kasbon_max_amount} onChange={setP('kasbon_max_amount')} />
+            </Field>
+            <Field label="Maksimal cicilan (kali potong gaji)" hint="Cicilan pertama selalu pada bulan pengajuan.">
+              <input type="number" min={1} max={12} value={policy.kasbon_max_installments} onChange={setP('kasbon_max_installments')} />
+            </Field>
+            <Field label="Poin minimum" hint="Di bawah ini pengajuan ditolak.">
+              <input type="number" min={0} max={100} value={policy.kasbon_min_score} onChange={setP('kasbon_min_score')} />
+            </Field>
+            <Field label="Poin prioritas" hint="Mulai poin ini: prioritas. Di antaranya: menunggu evaluasi.">
+              <input type="number" min={0} max={100} value={policy.kasbon_priority_score} onChange={setP('kasbon_priority_score')} />
+            </Field>
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, marginTop: 4 }}>
+            <input type="checkbox" checked={!!policy.kasbon_permanent_only} onChange={setP('kasbon_permanent_only', Boolean)} />
+            Kasbon hanya untuk karyawan tetap (PKWTT)
+          </label>
+        </div>
+      )}
 
       {/* One save for every section above — the page is long enough that a
           per-card button would be easy to miss. */}

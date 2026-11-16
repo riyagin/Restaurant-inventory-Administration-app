@@ -23,6 +23,12 @@ type Schedule struct {
 	// Rostered: the hours come from the employee's shift assignment, not the
 	// branch default.
 	Rostered bool
+	// NoShift: the employee's roster was looked up for the day and holds no
+	// shift. Lateness and early leave are measured against the shift only, never
+	// the branch's opening hours, so such a day is not judged late or early (the
+	// list flags it "Tanpa shift" instead). The branch hours still decide which
+	// work day a punch belongs to and when the day is over.
+	NoShift bool
 }
 
 // AttendanceState is the mutable per-record state the anomaly/merge functions
@@ -108,6 +114,7 @@ func minutesSinceMidnight(t time.Time) int {
 //
 //   - is_late          = check_in > work_start + grace (late_minutes counted from work_start)
 //   - is_early_leave   = check_out < work_end - early_leave
+//     (neither is judged on a day with no rostered shift — see Schedule.NoShift)
 //   - is_missing_checkout = has check_in, no check_out, and the day is over
 //
 // Only meaningful for a 'present' record. Absent/holiday records carry no
@@ -131,7 +138,7 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 		return s
 	}
 
-	if s.CheckIn != nil {
+	if s.CheckIn != nil && !sched.NoShift {
 		inMin := s.dayMinutes(*s.CheckIn)
 		if inMin > sched.WorkStartMinutes+sched.GraceMinutes {
 			s.IsLate = true
@@ -139,7 +146,7 @@ func ComputeAnomalies(s *AttendanceState, sched Schedule, dayIsOver bool) *Atten
 		}
 	}
 
-	if s.CheckOut != nil {
+	if s.CheckOut != nil && !sched.NoShift {
 		outMin := s.dayMinutes(*s.CheckOut)
 		threshold := sched.WorkEndMinutes - sched.EarlyLeaveMinutes
 		if outMin < threshold {

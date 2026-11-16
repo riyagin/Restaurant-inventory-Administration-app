@@ -357,7 +357,51 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 		res.CoveredDays++
 	}
 
+	// Days already judged (a backdated or late approval) were scored as absent;
+	// re-judge them as leave now so the Alpha penalty is lifted and the leave
+	// rules (Izin Satu Hari, sakit tanpa surat dokter) apply.
+	if err := ReevaluatePastDays(ctx, qtx, req.EmployeeID, covered); err != nil {
+		return nil, err
+	}
+
 	return res, nil
+}
+
+// ReevaluatePastDays rebuilds the automatic violations of an employee's days
+// that are already over (before today, WIB). Days still ahead are judged by the
+// nightly evaluation when they come.
+func ReevaluatePastDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, days []time.Time) error {
+	today := TodayWIB()
+	for _, d := range days {
+		if !dateOnlyUTC(d).Before(today) {
+			continue
+		}
+		rec, err := qtx.GetAttendanceRecordByEmployeeDate(ctx, &db.GetAttendanceRecordByEmployeeDateParams{
+			EmployeeID: employeeID,
+			Date:       pgtype.Date{Time: dateOnlyUTC(d), Valid: true},
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return err
+		}
+		if err := DeleteAutoViolationsForRecord(ctx, qtx, rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReevaluateLeaveRequest re-judges the past days of an approved leave request,
+// e.g. after its doctor's note was recorded.
+func ReevaluateLeaveRequest(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest) error {
+	workDays := LeaveScheduleForBranch(ctx, qtx, branchForEmployee(ctx, qtx, req.EmployeeID))
+	holidays, err := HolidaySetInRange(ctx, qtx, req.StartDate.Time, req.EndDate.Time)
+	if err != nil {
+		return err
+	}
+	return ReevaluatePastDays(ctx, qtx, req.EmployeeID, WorkingDaysInRange(req.StartDate.Time, req.EndDate.Time, workDays, holidays))
 }
 
 // CancelApprovedLeave reverses an approved leave for the days still ahead: it

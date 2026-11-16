@@ -75,8 +75,108 @@ type kasbonBody struct {
 // resolved kasbon info.
 type kasbonView struct {
 	*db.Kasbon
-	Installments []*db.KasbonInstallment       `json:"installments"`
-	LastResolved *db.GetLastResolvedKasbonRow  `json:"last_resolved,omitempty"`
+	Installments []*db.KasbonInstallment      `json:"installments"`
+	LastResolved *db.GetLastResolvedKasbonRow `json:"last_resolved,omitempty"`
+	// Kebijakan Kasbon (migration 088): the score the request was judged on
+	// and its track — priority (≥ 90) or evaluation (70–89).
+	ScoreAtRequest pgtype.Int4 `json:"score_at_request"`
+	ApprovalTrack  pgtype.Text `json:"approval_track"`
+}
+
+// kasbonListRow adds the policy check to a listed kasbon.
+type kasbonListRow struct {
+	*db.ListKasbonsRow
+	ScoreAtRequest pgtype.Int4 `json:"score_at_request"`
+	ApprovalTrack  pgtype.Text `json:"approval_track"`
+}
+
+// policyRefusal maps a Kebijakan Kasbon refusal to 422; ok=false when err is
+// some other error.
+func policyRefusal(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, service.ErrKasbonPolicy) {
+		respondError(w, http.StatusUnprocessableEntity, err.Error())
+		return true
+	}
+	return false
+}
+
+// checkKasbonPolicy runs Kebijakan Kasbon for a request. excludeID is the
+// kasbon being edited (zero UUID on create).
+func (h *KasbonHandler) checkKasbonPolicy(r *http.Request, emp *db.GetEmployeeByIDRow, excludeID pgtype.UUID,
+	requestDate time.Time, amount int64, installments []service.InstallmentInput) (string, int, error) {
+	ctx := r.Context()
+	settings, err := service.LoadPolicySettings(ctx, h.queries)
+	if err != nil {
+		return "", 0, err
+	}
+	if !excludeID.Valid {
+		excludeID = pgtype.UUID{Valid: true}
+	}
+	open, err := h.queries.CountOpenKasbonsForEmployee(ctx, &db.CountOpenKasbonsForEmployeeParams{
+		EmployeeID: emp.ID, ExcludeID: excludeID,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	score, err := service.CurrentMonthScore(ctx, h.queries, emp.ID, requestDate)
+	if err != nil {
+		return "", 0, err
+	}
+	track, err := service.CheckKasbonEligibility(settings, service.KasbonEligibilityInput{
+		RequestDate:    requestDate,
+		Amount:         amount,
+		EmploymentType: emp.EmploymentType,
+		OpenKasbons:    int(open),
+		Score:          score,
+		Installments:   installments,
+	})
+	return track, score, err
+}
+
+// Eligibility — GET /api/hr/kasbons/eligibility?employee_id=
+// Previews Kebijakan Kasbon for the form before the request is filed: the
+// settings, the employee's score this month, and the first rule that would
+// refuse a request today (amount and installments are judged on submit).
+func (h *KasbonHandler) Eligibility(w http.ResponseWriter, r *http.Request) {
+	empID, err := parseUUID(strings.TrimSpace(r.URL.Query().Get("employee_id")))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "karyawan tidak valid")
+		return
+	}
+	pgEmpID := pgtype.UUID{Bytes: empID, Valid: true}
+	if !requireEmployeeInScope(w, r, h.queries, pgEmpID) {
+		return
+	}
+	ctx := r.Context()
+	emp, err := h.queries.GetEmployeeByID(ctx, pgEmpID)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+		return
+	}
+	settings, err := service.LoadPolicySettings(ctx, h.queries)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memuat kebijakan kasbon")
+		return
+	}
+	today := service.TodayWIB()
+	track, score, err := h.checkKasbonPolicy(r, emp, pgtype.UUID{}, today, 0, nil)
+	reason := ""
+	if err != nil {
+		if !errors.Is(err, service.ErrKasbonPolicy) {
+			respondError(w, http.StatusInternalServerError, "gagal memeriksa kebijakan kasbon")
+			return
+		}
+		reason = err.Error()
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"eligible":        reason == "",
+		"reason":          reason,
+		"score":           score,
+		"track":           track,
+		"employment_type": emp.EmploymentType,
+		"request_date":    today.Format("2006-01-02"),
+		"settings":        settings,
+	})
 }
 
 // buildInstallments validates the split (or builds a single default installment in
@@ -125,10 +225,24 @@ func (h *KasbonHandler) List(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data kasbon")
 		return
 	}
-	if rows == nil {
-		rows = []*db.ListKasbonsRow{}
+	checks, err := h.queries.ListKasbonPolicyChecks(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data kasbon")
+		return
 	}
-	respondJSON(w, http.StatusOK, rows)
+	byID := make(map[[16]byte]*db.ListKasbonPolicyChecksRow, len(checks))
+	for _, c := range checks {
+		byID[c.ID.Bytes] = c
+	}
+	out := make([]kasbonListRow, 0, len(rows))
+	for _, row := range rows {
+		v := kasbonListRow{ListKasbonsRow: row}
+		if c := byID[row.ID.Bytes]; c != nil {
+			v.ScoreAtRequest, v.ApprovalTrack = c.ScoreAtRequest, c.ApprovalTrack
+		}
+		out = append(out, v)
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 // Get — GET /api/hr/kasbons/:id (incl. installments + last resolved info)
@@ -165,7 +279,11 @@ func (h *KasbonHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	lastResolved, _ := service.LastResolvedKasbon(ctx, h.queries, k.EmployeeID)
 
-	respondJSON(w, http.StatusOK, kasbonView{Kasbon: k, Installments: installments, LastResolved: lastResolved})
+	view := kasbonView{Kasbon: k, Installments: installments, LastResolved: lastResolved}
+	if c, err := h.queries.GetKasbonPolicyCheck(ctx, pgID); err == nil && c != nil {
+		view.ScoreAtRequest, view.ApprovalTrack = c.ScoreAtRequest, c.ApprovalTrack
+	}
+	respondJSON(w, http.StatusOK, view)
 }
 
 // Create — POST /api/hr/kasbons
@@ -238,6 +356,16 @@ func (h *KasbonHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Kebijakan Kasbon: window, PKWTT, no running kasbon, cap, installments and
+	// the score gate. The track is frozen on the kasbon for the approver.
+	track, score, err := h.checkKasbonPolicy(r, emp, pgtype.UUID{}, requestDateRaw, body.Amount, installments)
+	if err != nil {
+		if !policyRefusal(w, err) {
+			respondError(w, http.StatusInternalServerError, "gagal memeriksa kebijakan kasbon")
+		}
+		return
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -280,6 +408,15 @@ func (h *KasbonHandler) Create(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan cicilan kasbon")
 			return
 		}
+	}
+
+	if err := qtx.SetKasbonPolicyCheck(ctx, &db.SetKasbonPolicyCheckParams{
+		ID:             k.ID,
+		ScoreAtRequest: pgtype.Int4{Int32: int32(score), Valid: true},
+		ApprovalTrack:  pgtype.Text{String: track, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kasbon")
+		return
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
@@ -371,6 +508,21 @@ func (h *KasbonHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-judge an edited request against Kebijakan Kasbon, as of its original
+	// request date (so the window still holds).
+	emp, err := h.queries.GetEmployeeByID(ctx, existing.EmployeeID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	track, score, err := h.checkKasbonPolicy(r, emp, existing.ID, requestDate, body.Amount, installments)
+	if err != nil {
+		if !policyRefusal(w, err) {
+			respondError(w, http.StatusInternalServerError, "gagal memeriksa kebijakan kasbon")
+		}
+		return
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -378,6 +530,15 @@ func (h *KasbonHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
+
+	if err := qtx.SetKasbonPolicyCheck(ctx, &db.SetKasbonPolicyCheckParams{
+		ID:             existing.ID,
+		ScoreAtRequest: pgtype.Int4{Int32: int32(score), Valid: true},
+		ApprovalTrack:  pgtype.Text{String: track, Valid: true},
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal memperbarui kasbon")
+		return
+	}
 
 	updated, err := qtx.UpdateKasbon(ctx, &db.UpdateKasbonParams{
 		Amount:              body.Amount,
@@ -462,6 +623,15 @@ func (h *KasbonHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		newInstallments, err = buildInstallments(k.Amount, k.RequestDate.Time, k.ResolutionMonth.Time, body.Installments)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		settings, err := service.LoadPolicySettings(ctx, h.queries)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal memuat kebijakan kasbon")
+			return
+		}
+		if err := service.CheckKasbonInstallmentPolicy(settings, k.RequestDate.Time, newInstallments); err != nil {
+			respondError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 	}

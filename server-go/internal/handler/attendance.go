@@ -38,6 +38,12 @@ func NewAttendanceHandler(pool *pgxpool.Pool, queries *db.Queries) *AttendanceHa
 //
 // Query params: date_from, date_to, branch_id, employee_id, status, source,
 // anomaly_only (true/false). Returns records joined with employee name/code.
+// noShiftSQL is true for a present record whose employee has no rostered shift
+// that day. Read live from the roster: today's roster changes re-judge the day,
+// and past days' roster is read-only, so it always matches how the day was judged.
+const noShiftSQL = `(ar.status = 'present' AND NOT EXISTS (
+		SELECT 1 FROM shift_assignments sa WHERE sa.employee_id = ar.employee_id AND sa.date = ar.date))`
+
 func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	q := r.URL.Query()
@@ -82,7 +88,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		conds[len(conds)-1] = fmt.Sprintf("(lower(e.full_name) LIKE $%d OR lower(e.employee_code) LIKE $%d)", len(args), len(args))
 	}
 	if strings.EqualFold(q.Get("anomaly_only"), "true") {
-		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout OR ar.is_missing_checkin OR ar.is_leave_punch)")
+		conds = append(conds, "(ar.is_late OR ar.is_early_leave OR ar.is_missing_checkout OR ar.is_missing_checkin OR ar.is_leave_punch OR "+noShiftSQL+")")
 	}
 	if strings.EqualFold(q.Get("half_day_only"), "true") {
 		conds = append(conds, "ar.is_half_day")
@@ -136,6 +142,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		    e.full_name, e.employee_code, e.branch_id, b.name AS branch_name,
 		    COALESCE(d.branch_id <> e.branch_id, false) AS is_remote,
 		    db.name AS clock_in_branch_name,
+		    `+noShiftSQL+` AS no_shift,
 		    (SELECT fp.photo_path FROM employee_face_photos fp WHERE fp.employee_id = e.id ORDER BY fp.captured_at DESC, fp.created_at DESC LIMIT 1) AS face_photo_path
 		FROM attendance_records ar
 		JOIN employees e ON e.id = ar.employee_id
@@ -189,6 +196,10 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		// is where they actually clocked in (null for non-device records).
 		IsRemote          bool               `json:"is_remote"`
 		ClockInBranchName pgtype.Text        `json:"clock_in_branch_name"`
+		// no_shift: a present day with no rostered shift ("Tanpa shift"). Such a
+		// day is never judged late or early — lateness is measured against the
+		// shift — so this is the roster gap HR should see instead.
+		NoShift           bool               `json:"no_shift"`
 		// Latest face photo of the employee, for a small avatar on the card.
 		FacePhotoPath     pgtype.Text        `json:"face_photo_path"`
 	}
@@ -204,7 +215,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 			&x.IsHalfDay, &x.HalfDayLostMinutes, &x.HalfDayType, &x.IsMissingCheckin, &x.IsNoPunch,
 			&x.IsLeavePunch, &x.ExcusedBy,
 			&x.FullName, &x.EmployeeCode, &x.BranchID, &x.BranchName,
-			&x.IsRemote, &x.ClockInBranchName, &x.FacePhotoPath,
+			&x.IsRemote, &x.ClockInBranchName, &x.NoShift, &x.FacePhotoPath,
 		); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal membaca data kehadiran")
 			return

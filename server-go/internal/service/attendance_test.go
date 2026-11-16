@@ -325,3 +325,34 @@ func TestIsoWeekday(t *testing.T) {
 		t.Errorf("Monday ISO = %d, want 1", got)
 	}
 }
+
+// A day with no rostered shift is not judged late or early: lateness is measured
+// against the shift, never the branch's opening hours. A missing check-out is
+// still flagged — that is about the punches, not the hours.
+func TestComputeAnomalies_NoShiftNotJudged(t *testing.T) {
+	sched := stdSchedule()
+	sched.NoShift = true
+	s := &AttendanceState{
+		Status:   "present",
+		CheckIn:  ptr(mustTime(t, "2026-06-09 10:30")),
+		CheckOut: ptr(mustTime(t, "2026-06-09 13:00")),
+	}
+	ComputeAnomalies(s, sched, true)
+	if s.IsLate || s.LateMinutes != 0 || s.IsEarlyLeave || s.EarlyLeaveMinutes != 0 {
+		t.Errorf("no-shift day judged: late=%v/%d early=%v/%d", s.IsLate, s.LateMinutes, s.IsEarlyLeave, s.EarlyLeaveMinutes)
+	}
+
+	s2 := &AttendanceState{Status: "present", CheckIn: ptr(mustTime(t, "2026-06-09 10:30"))}
+	ComputeAnomalies(s2, sched, true)
+	if !s2.IsMissingCheckout {
+		t.Error("missing check-out should still be flagged on a no-shift day")
+	}
+
+	// The same punches on a rostered day are judged as before.
+	sched.NoShift = false
+	s3 := &AttendanceState{Status: "present", CheckIn: ptr(mustTime(t, "2026-06-09 10:30"))}
+	ComputeAnomalies(s3, sched, false)
+	if !s3.IsLate {
+		t.Error("rostered day should still be judged late")
+	}
+}

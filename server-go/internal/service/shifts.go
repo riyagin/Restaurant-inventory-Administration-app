@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
@@ -35,9 +37,10 @@ func ShiftWorkMinutes(start1, end1 int, start2, end2 *int, breakMinutes int) int
 // leave are measured against the shift they were actually on. A split shift is
 // judged from the start of its first segment to the end of its last: attendance
 // holds one check-in and one check-out per day, so the mid-day gap is not a
-// departure. With no assignment (or on any read error) the branch schedule is
-// returned unchanged — rostering is additive, never a reason to lose the
-// default.
+// departure. With no assignment the branch hours are kept for placing punches
+// on a work day, but NoShift is set so the day is not judged late or early:
+// lateness is measured against a shift, never the branch's opening time. On a
+// read error the branch schedule is returned as it was (NoShift unset).
 func ScheduleWithShift(ctx context.Context, q db.DBTX, sched Schedule, employeeID pgtype.UUID, date time.Time) Schedule {
 	return ScheduleWithShiftQ(ctx, db.New(q), sched, employeeID, date)
 }
@@ -49,6 +52,7 @@ func ScheduleWithShift(ctx context.Context, q db.DBTX, sched Schedule, employeeI
 // Rostered, so a day with no roster can be flagged.
 func ScheduleWithShiftQ(ctx context.Context, q *db.Queries, sched Schedule, employeeID pgtype.UUID, date time.Time) Schedule {
 	sched.Rostered = false
+	sched.NoShift = false
 	sched.ResumeMinutes = 0
 	if !employeeID.Valid {
 		return sched
@@ -58,7 +62,11 @@ func ScheduleWithShiftQ(ctx context.Context, q *db.Queries, sched Schedule, empl
 		EmployeeID: employeeID,
 		Date:       pgtype.Date{Time: day, Valid: true},
 	})
-	if err != nil || !row.Start1.Valid || !row.End1.Valid {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (!row.Start1.Valid || !row.End1.Valid)) {
+		sched.NoShift = true
+		return sched
+	}
+	if err != nil {
 		return sched
 	}
 	sched.WorkStartMinutes = pgTimeToMinutes(row.Start1)

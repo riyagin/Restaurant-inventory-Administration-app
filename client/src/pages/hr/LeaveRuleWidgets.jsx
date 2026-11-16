@@ -65,3 +65,23 @@ export function BackdatedBadge({ request }) {
     </span>
   );
 }
+
+// Sick leave without a doctor's note costs 8 points and a day's pay per day
+// (Kebijakan HRD V.3.6). Shown for leave types flagged requires_doctor_note;
+// HR can still record the note later from the Cuti list.
+export function DoctorNoteField({ type, checked, onChange }) {
+  if (!type?.requires_doctor_note) return null;
+  return (
+    <div style={{ margin: '0.25rem 0 0.75rem' }}>
+      <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.9rem' }}>
+        <input type="checkbox" style={{ width: 'auto' }} checked={!!checked} onChange={(e) => onChange(e.target.checked)} />
+        Ada surat keterangan dokter
+      </label>
+      {!checked && (
+        <div style={{ fontSize: '0.78rem', color: '#8a5300', marginTop: '0.25rem' }}>
+          Tanpa surat dokter: −8 poin dan potongan gaji 1 hari untuk setiap hari sakit.
+        </div>
+      )}
+    </div>
+  );
+}

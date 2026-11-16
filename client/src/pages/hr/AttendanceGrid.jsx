@@ -85,8 +85,10 @@ function getCellInfo(rec) {
   if (is_late) parts.push('L');
   if (is_early_leave) parts.push('P');
   if (is_missing_checkout) parts.push('T');
-  const label = parts.join('');
   const multi = parts.length > 1;
+  // "S": present without a rostered shift — not judged late/early, since
+  // lateness is measured against the shift. Shown, but doesn't drive the colour.
+  const label = parts.join('') + (rec.no_shift ? 'S' : '');
 
   if (status === 'absent')  return { bg: '#ffebee', border: '#ef5350', color: '#c62828', label: '' };
   // A punch on an approved leave day stays leave but is marked for review.
@@ -94,7 +96,7 @@ function getCellInfo(rec) {
   if (status === 'holiday') return { bg: '#f3e5f5', border: '#ab47bc', color: '#6a1b9a', label: '' };
 
   // present
-  if (!label)                          return { bg: '#e8f5e9', border: '#66bb6a', color: '#2e7d32', label: '' };
+  if (parts.length === 0)              return { bg: '#e8f5e9', border: rec.no_shift ? '#9e9e9e' : '#66bb6a', color: rec.no_shift ? '#616161' : '#2e7d32', label };
   if (multi)                           return { bg: '#fff0e0', border: '#ff7043', color: '#bf360c', label };
   if (is_late)                         return { bg: '#fff3e0', border: '#ffa726', color: '#e65100', label };
   if (is_early_leave)                  return { bg: '#fffde7', border: '#ffca28', color: '#f57f17', label };
@@ -109,6 +111,7 @@ const LEGEND = [
   { bg: '#fffde7', border: '#ffca28', label: 'Pulang Awal (P)' },
   { bg: '#fce4ec', border: '#f06292', label: 'Tdk Absen Pulang (T)' },
   { bg: '#fff0e0', border: '#ff7043', label: 'Anomali Ganda' },
+  { bg: '#e8f5e9', border: '#9e9e9e', label: 'Tanpa Shift (S)' },
   { bg: '#ffebee', border: '#ef5350', label: 'Absen' },
   { bg: '#e3f2fd', border: '#42a5f5', label: 'Cuti' },
   { bg: '#e3f2fd', border: '#42a5f5', label: 'Absen saat Cuti (!)' },
@@ -139,6 +142,7 @@ function cellTooltip(iso, rec) {
   if (rec.is_early_leave)      lines.push(`Pulang awal ${rec.early_leave_minutes} mnt`);
   if (rec.is_missing_checkout) lines.push('Tidak absen pulang');
   if (rec.is_leave_punch)      lines.push('Absen saat cuti (perlu ditinjau)');
+  if (rec.no_shift)            lines.push('Tanpa shift — tidak dinilai terlambat/pulang awal');
   return lines.join('\n');
 }
 

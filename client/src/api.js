@@ -462,6 +462,9 @@ export const createEmployeeWage     = (id, data) => api.post(`/hr/employees/${id
 // Skala grade kinerja: skor bulanan → % dibayar dari komponen yang ikut grade.
 export const getPerformanceGrades  = ()       => api.get('/hr/performance-grades');
 export const savePerformanceGrades = (grades) => api.put('/hr/performance-grades', { grades });
+// Kebijakan HRD settings: payroll cut-off day + Kebijakan Kasbon conditions.
+export const getPolicySettings  = ()     => api.get('/hr/policy-settings');
+export const savePolicySettings = (data) => api.put('/hr/policy-settings', data);
 
 // Template gaji per jabatan: isi awal struktur gaji + terapkan massal.
 export const getPositionWageTemplates   = ()                 => api.get('/hr/position-wage-templates');
@@ -574,6 +577,7 @@ export const createLeaveRequest   = (data) => api.post('/hr/leave-requests', dat
 export const approveLeaveRequest  = (id, note) => api.post(`/hr/leave-requests/${id}/approve`, { note });
 export const rejectLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/reject`, { note });
 export const cancelLeaveRequest   = (id, note) => api.post(`/hr/leave-requests/${id}/cancel`, { note });
+export const setLeaveDoctorNote   = (id, hasDoctorNote) => api.put(`/hr/leave-requests/${id}/doctor-note`, { has_doctor_note: hasDoctorNote });
 export const bulkApproveLeaveRequests = (ids, note) => api.post('/hr/leave-requests/bulk-approve', { ids, note });
 export const bulkRejectLeaveRequests  = (ids, note) => api.post('/hr/leave-requests/bulk-reject', { ids, note });
 
@@ -599,6 +603,7 @@ export const payoutBenefitPension    = (id, data) => api.post(`/hr/benefit-fund/
 // ── HR: Kasbon (Cash Advance) ───────────────────────────────────────────────
 export const getKasbons      = (params) => api.get('/hr/kasbons', { params });
 export const getKasbon       = (id) => api.get(`/hr/kasbons/${id}`);
+export const getKasbonEligibility = (employeeId) => api.get('/hr/kasbons/eligibility', { params: { employee_id: employeeId } });
 export const createKasbon    = (data) => api.post('/hr/kasbons', data);
 export const updateKasbon    = (id, data) => api.put(`/hr/kasbons/${id}`, data);
 export const approveKasbon   = (id, data) => api.post(`/hr/kasbons/${id}/approve`, data);

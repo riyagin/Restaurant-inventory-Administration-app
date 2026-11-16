@@ -8,9 +8,12 @@ const EXAMPLE = 300000;
 
 // The company-wide grade scale: a monthly performance score of at least
 // min_score earns pay_percent of every grade-linked wage component. Exactly one
-// tier applies (the highest one reached). Saved as a whole; the server checks
-// that there is a tier at 0 and that pay never rises as the score falls.
-export default function GradeScaleEditor() {
+// tier applies (the highest one reached). A tier can override its percentage for
+// individual components (Kebijakan HRD: Tier B pays Service Charge at 50% but
+// Uang Kerajinan / Insentif Jabatan at 0%). Saved as a whole; the server checks
+// that there is a tier at 0 and that pay never rises as the score falls, for
+// every component.
+export default function GradeScaleEditor({ components = [] }) {
   const [rows, setRows] = useState([]);
   const [saved, setSaved] = useState([]);
   const [error, setError] = useState('');
@@ -19,7 +22,10 @@ export default function GradeScaleEditor() {
 
   const load = () => getPerformanceGrades()
     .then((r) => {
-      const data = (r.data || []).map((g) => ({ label: g.label, min_score: String(g.min_score), pay_percent: String(g.pay_percent) }));
+      const data = (r.data || []).map((g) => ({
+        label: g.label, min_score: String(g.min_score), pay_percent: String(g.pay_percent),
+        overrides: Object.fromEntries(Object.entries(g.component_percents || {}).map(([k, v]) => [k, String(v)])),
+      }));
       setRows(data);
       setSaved(data);
     })
@@ -28,7 +34,15 @@ export default function GradeScaleEditor() {
 
   const dirty = JSON.stringify(rows) !== JSON.stringify(saved);
   const set = (i, key, value) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [key]: value } : r)));
-  const add = () => setRows((rs) => [...rs, { label: '', min_score: '', pay_percent: '' }]);
+  const add = () => setRows((rs) => [...rs, { label: '', min_score: '', pay_percent: '', overrides: {} }]);
+  const setOverride = (i, compId, value) => setRows((rs) => rs.map((r, j) => {
+    if (j !== i) return r;
+    const overrides = { ...(r.overrides || {}) };
+    if (value === '') delete overrides[compId]; else overrides[compId] = value;
+    return { ...r, overrides };
+  }));
+  const linked = components.filter((c) => c.grade_linked);
+  const linkedIds = new Set(linked.map((c) => c.id));
   const remove = (i) => setRows((rs) => rs.filter((_, j) => j !== i));
 
   // Score range each tier covers, for display ("90–100", "80–89", …).
@@ -57,6 +71,12 @@ export default function GradeScaleEditor() {
     try {
       await savePerformanceGrades(rows.map((r) => ({
         label: r.label.trim(), min_score: Number(r.min_score), pay_percent: Number(r.pay_percent),
+        // Only overrides of components that are still grade-linked are kept.
+        component_percents: Object.fromEntries(
+          Object.entries(r.overrides || {})
+            .filter(([id, v]) => v !== '' && linkedIds.has(id))
+            .map(([id, v]) => [id, Number(v)]),
+        ),
       })));
       await load();
       setNotice('Skala grade disimpan. Berlaku untuk baris penggajian yang dibuat atau dibuat ulang setelah ini.');
@@ -71,7 +91,7 @@ export default function GradeScaleEditor() {
     <div className="card" style={{ maxWidth: 760, marginBottom: '1rem' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: '1.05rem' }}>Skala Grade Kinerja</h2>
-        <small style={{ color: '#8a93a6' }}>Satu skala untuk semua komponen yang ikut grade</small>
+        <small style={{ color: '#8a93a6' }}>Satu skala, bisa dibedakan per komponen</small>
       </div>
       <p style={{ color: '#667', fontSize: '0.85rem', margin: '0.5rem 0 0.75rem' }}>
         Skor kinerja bulanan (100 − poin pelanggaran) menentukan grade karyawan. Komponen yang <strong>ikut grade</strong> dibayar
@@ -115,6 +135,46 @@ export default function GradeScaleEditor() {
           </tbody>
         </table>
       </div>
+
+      {linked.length > 0 && rows.length > 0 && (
+        <div style={{ marginTop: '1rem' }}>
+          <h3 style={{ margin: '0 0 0.25rem', fontSize: '0.95rem' }}>Persentase per Komponen</h3>
+          <p style={{ color: '#667', fontSize: '0.82rem', margin: '0 0 0.5rem' }}>
+            Kosongkan untuk memakai persentase grade di atas. Isi bila satu komponen dibayar berbeda pada grade yang sama —
+            mis. Tier B: Service Charge 50%, Uang Kerajinan dan Insentif Jabatan 0%.
+          </p>
+          <div style={{ overflowX: 'auto' }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Komponen</th>
+                  {rows.map((r, i) => <th key={i} style={{ textAlign: 'center' }}>{r.label || '—'}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {linked.map((c) => (
+                  <tr key={c.id}>
+                    <td>{c.name}{!c.is_active && <small style={{ color: '#999' }}> (nonaktif)</small>}</td>
+                    {rows.map((r, i) => (
+                      <td key={i} style={{ textAlign: 'center' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <input
+                            type="number" min="0" max="100" style={{ width: 64 }}
+                            value={(r.overrides || {})[c.id] ?? ''}
+                            placeholder={r.pay_percent === '' ? '' : r.pay_percent}
+                            onChange={(e) => setOverride(i, c.id, e.target.value)}
+                            aria-label={`${c.name} — grade ${r.label}`}
+                          />%
+                        </span>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
         <button type="button" onClick={add} className="btn btn-secondary btn-sm">+ Tambah Grade</button>

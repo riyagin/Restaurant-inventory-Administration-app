@@ -616,6 +616,9 @@ func main() {
 			// Grade scale: monthly score → % paid of grade-linked components
 			r.Get("/api/hr/performance-grades", hrWagesHandler.ListGrades)
 			r.Put("/api/hr/performance-grades", hrWagesHandler.SaveGrades)
+			// Kebijakan HRD: payroll cut-off day + Kebijakan Kasbon conditions
+			r.Get("/api/hr/policy-settings", hrWagesHandler.GetPolicySettings)
+			r.Put("/api/hr/policy-settings", hrWagesHandler.SavePolicySettings)
 			// Position (role) wage templates: prefill + bulk apply
 			r.Get("/api/hr/position-wage-templates", hrWagesHandler.ListPositionTemplates)
 			r.Get("/api/hr/position-wage-templates/{positionId}", hrWagesHandler.GetPositionTemplate)
@@ -715,6 +718,7 @@ func main() {
 			r.Get("/api/hr/leave-requests", leaveHandler.ListLeaveRequests)
 			r.Post("/api/hr/leave-requests", leaveHandler.CreateLeaveRequest)
 			r.Post("/api/hr/leave-requests/{id}/cancel", leaveHandler.CancelLeaveRequest)
+			r.Put("/api/hr/leave-requests/{id}/doctor-note", leaveHandler.SetDoctorNote)
 			// Balances + per-employee history
 			r.Get("/api/hr/employees/{id}/leave-balance", leaveHandler.GetLeaveBalance)
 			r.Put("/api/hr/employees/{id}/leave-balance", leaveHandler.SetLeaveBalanceQuota)
@@ -751,6 +755,7 @@ func main() {
 
 		// HR Kasbon (cash advance) — list and detail viewable by all authenticated.
 		r.Get("/api/hr/kasbons", kasbonHandler.List)
+		r.Get("/api/hr/kasbons/eligibility", kasbonHandler.Eligibility)
 		r.Get("/api/hr/kasbons/{id}", kasbonHandler.Get)
 		// Mutations require HR access.
 		r.Group(func(r chi.Router) {

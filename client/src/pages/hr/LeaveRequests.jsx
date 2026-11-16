@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   getLeaveRequests, approveLeaveRequest, rejectLeaveRequest,
-  cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches,
+  cancelLeaveRequest, getLeaveTypes, getEmployees, getBranches, setLeaveDoctorNote,
   bulkApproveLeaveRequests, bulkRejectLeaveRequests,
 } from '../../api';
 import { canApprove } from '../../roles';
 import { todayLocal, submitLeaveRequest } from './leaveRules';
-import { QuotaPreview, BackdatedNotice, BackdatedBadge } from './LeaveRuleWidgets';
+import { QuotaPreview, BackdatedNotice, BackdatedBadge, DoctorNoteField } from './LeaveRuleWidgets';
 import LeaveBalancesPanel from './LeaveBalancesPanel';
 
 const STATUS_LABELS = {
@@ -91,6 +91,8 @@ function CreateModal({ onClose, onSaved }) {
           <option value="">— Pilih jenis —</option>
           {types.map(t => <option key={t.id} value={t.id}>{t.name}{t.uses_quota ? ' (kuota)' : ''}{!t.is_paid ? ' — tanpa gaji' : ''}</option>)}
         </select>
+        <DoctorNoteField type={types.find(t => t.id === form.leave_type_id)} checked={form.has_doctor_note}
+          onChange={v => setForm({ ...form, has_doctor_note: v })} />
 
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <div style={{ flex: 1 }}>
@@ -264,6 +266,22 @@ export default function LeaveRequests() {
   const switchTab = (t) => { setTab(t); setSelected(new Set()); };
 
   const onDecision = () => { setDecision(null); load(); };
+
+  // HR records the doctor's note after checking it; on approved leave the
+  // past days are re-scored at once by the server.
+  const toggleDoctorNote = async (rq) => {
+    const next = !rq.has_doctor_note;
+    const msg = next
+      ? 'Tandai surat keterangan dokter sudah diterima dan diverifikasi?'
+      : 'Batalkan tanda surat dokter? Hari sakit ini akan dikenai −8 poin dan potongan gaji 1 hari.';
+    if (!window.confirm(msg)) return;
+    try {
+      await setLeaveDoctorNote(rq.id, next);
+      load();
+    } catch (err) {
+      window.alert(err?.response?.data?.error || 'Gagal menyimpan surat dokter.');
+    }
+  };
   const onBulkDecision = () => { setBulkDecision(null); setSelected(new Set()); load(); };
 
   // Backdated requests are approved one by one, never in bulk (server enforces it too).
@@ -344,7 +362,19 @@ export default function LeaveRequests() {
                   </td>
                 )}
                 <td>{rq.employee_name}<div style={{ fontSize: '0.78rem', color: '#889' }}>{rq.employee_code}</div></td>
-                <td>{rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}<BackdatedBadge request={rq} /></td>
+                <td>
+                  {rq.leave_type_name}{!rq.is_paid && <span style={{ fontSize: '0.72rem', color: '#c5221f' }}> (tanpa gaji)</span>}<BackdatedBadge request={rq} />
+                  {rq.requires_doctor_note && (
+                    <div style={{ fontSize: '0.75rem', marginTop: 2 }}>
+                      <button type="button" className="btn btn-link" onClick={() => toggleDoctorNote(rq)}
+                        disabled={rq.status !== 'pending' && rq.status !== 'approved'}
+                        style={{ padding: 0, fontSize: '0.75rem', color: rq.has_doctor_note ? '#1e7e34' : '#c5221f' }}
+                        title="Klik untuk mengubah">
+                        {rq.has_doctor_note ? '✓ Ada surat dokter' : '✗ Tanpa surat dokter'}
+                      </button>
+                    </div>
+                  )}
+                </td>
                 <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}>{fmtDate(rq.start_date)} – {fmtDate(rq.end_date)}</td>
                 <td style={{ textAlign: 'center' }}>{rq.day_count}</td>
                 <td><StatusChip status={rq.status} /></td>
