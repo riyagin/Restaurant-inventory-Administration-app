@@ -166,10 +166,22 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		}
 		deductions = append(deductions, service.PayslipLineItem{Label: label, Amount: line.KasbonDeduction})
 	}
-	if line.UnpaidLeaveDeduction != 0 {
+	// unpaid_leave_* includes uncovered Alpha days; show that share on its own.
+	var alphaDays int32
+	var alphaAmount int64
+	if a, aerr := h.queries.GetPayrollLineAlpha(ctx, lineID); aerr == nil {
+		alphaDays, alphaAmount = a.AlphaUnpaidDays, a.AlphaDeduction
+	}
+	if leave := line.UnpaidLeaveDeduction - alphaAmount; leave != 0 {
 		deductions = append(deductions, service.PayslipLineItem{
-			Label:  fmt.Sprintf("Cuti Tanpa Gaji (%d hari)", line.UnpaidLeaveDays),
-			Amount: line.UnpaidLeaveDeduction,
+			Label:  fmt.Sprintf("Cuti Tanpa Gaji (%d hari)", line.UnpaidLeaveDays-alphaDays),
+			Amount: leave,
+		})
+	}
+	if alphaAmount != 0 {
+		deductions = append(deductions, service.PayslipLineItem{
+			Label:  fmt.Sprintf("Alpha, jatah libur habis (%d hari)", alphaDays),
+			Amount: alphaAmount,
 		})
 	}
 	if line.HalfDayDeduction != 0 {

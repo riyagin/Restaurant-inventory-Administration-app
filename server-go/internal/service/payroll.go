@@ -437,6 +437,15 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		if err != nil {
 			return nil, err
 		}
+		// Alpha the leave allowance could not cover (service/alpha.go). Folded
+		// into the unpaid-leave figures so every net-pay formula already counts
+		// it; the Alpha share is recorded separately below for the payslip.
+		alphaDays, alphaDeduction, err := AlphaPayCut(ctx, qtx, emp.ID, start, end, ws.DailyRate)
+		if err != nil {
+			return nil, err
+		}
+		unpaidDays += alphaDays
+		unpaidDeduction += alphaDeduction
 
 		// Half-day corrections: deduct pay for the lost working hours (arrival past
 		// the max late threshold), reclassified manually on the corrections page.
@@ -501,6 +510,11 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 			return nil, err
 		}
 		if err := FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
+			return nil, err
+		}
+		if err := qtx.SetPayrollLineAlpha(ctx, &db.SetPayrollLineAlphaParams{
+			ID: line.ID, AlphaUnpaidDays: int32(alphaDays), AlphaDeduction: alphaDeduction,
+		}); err != nil {
 			return nil, err
 		}
 		if err := qtx.SetPayrollLineHolidayRate(ctx, &db.SetPayrollLineHolidayRateParams{

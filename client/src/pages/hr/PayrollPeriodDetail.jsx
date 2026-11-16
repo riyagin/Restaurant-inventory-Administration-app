@@ -481,7 +481,7 @@ export default function PayrollPeriodDetail() {
                 { key: 'bonus_total', label: 'Bonus', align: 'right' },
                 { key: 'overtime', label: 'Lembur', align: 'right' },
                 { key: 'kasbon_deduction', label: 'Kasbon', align: 'right' },
-                { key: 'unpaid_leave_deduction', label: 'Pot. Cuti', align: 'right' },
+                { key: 'unpaid_leave_deduction', label: 'Pot. Cuti/Alpha', align: 'right' },
                 { key: 'attendance_cut_deduction', label: 'Telat/Pulang Awal', align: 'right' },
                 { key: 'net_pay', label: 'Gaji Bersih', align: 'right' },
                 { key: 'performance_score', label: 'Skor', align: 'center' },
@@ -509,7 +509,14 @@ export default function PayrollPeriodDetail() {
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(l.bonus_total)}</td>
                 <td style={{ padding: 10, textAlign: 'right' }}>{fmtIDR(numVal(l.overtime_amount) + numVal(l.overtime_hourly_amount) + numVal(l.public_holiday_amount))}</td>
                 <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.kasbon_deduction)}</td>
-                <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>{fmtIDR(l.unpaid_leave_deduction)}</td>
+                <td style={{ padding: 10, textAlign: 'right', color: '#c5221f' }}>
+                  {fmtIDR(l.unpaid_leave_deduction)}
+                  {numVal(l.alpha_deduction) > 0 && (
+                    <div style={{ fontSize: '0.74rem' }} title="Alpha yang tidak tertutup jatah libur">
+                      alpha {l.alpha_unpaid_days} hari: {fmtIDR(l.alpha_deduction)}
+                    </div>
+                  )}
+                </td>
                 <td style={{ padding: 10, textAlign: 'right' }}>
                   {numVal(l.attendance_cut_deduction) > 0 ? (
                     <button onClick={(e) => { e.stopPropagation(); setCutLineId(l.id); }} title="Lihat rincian per hari"

@@ -992,6 +992,12 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries, month, month.AddDate(0, 1, 0))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data alpha")
+		return
+	}
+
 	type row struct {
 		EmployeeID   pgtype.UUID `json:"employee_id"`
 		EmployeeName string      `json:"employee_name"`
@@ -1007,7 +1013,7 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 			EmployeeCode: rr.EmployeeCode,
 			BranchName:   rr.BranchName,
 			MonthlyLeaveBalance: service.NewMonthlyLeaveBalance(month, int(rr.QuotaDays), int(rr.UsedDays),
-				rr.Overridden, today()),
+				rr.Overridden, today()).WithAlpha(alpha[rr.EmployeeID.Bytes][month]),
 		})
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -1311,6 +1317,12 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 	}
 	now := today()
 	balanceBy := map[string][]service.MonthlyLeaveBalance{} // employee id → one per window month
+	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries,
+		windowMonths[0], windowMonths[len(windowMonths)-1].AddDate(0, 1, 0))
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data alpha")
+		return
+	}
 	for _, m := range windowMonths {
 		rows, err := h.queries.ListMonthlyLeaveBalances(ctx, &db.ListMonthlyLeaveBalancesParams{
 			Month:        pgtype.Date{Time: m, Valid: true},
@@ -1323,7 +1335,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		for _, rr := range rows {
 			empID := uuid.UUID(rr.EmployeeID.Bytes).String()
 			balanceBy[empID] = append(balanceBy[empID], service.NewMonthlyLeaveBalance(
-				m, int(rr.QuotaDays), int(rr.UsedDays), rr.Overridden, now))
+				m, int(rr.QuotaDays), int(rr.UsedDays), rr.Overridden, now).WithAlpha(alpha[rr.EmployeeID.Bytes][m]))
 		}
 	}
 

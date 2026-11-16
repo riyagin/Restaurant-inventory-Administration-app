@@ -72,7 +72,7 @@ export default function LeaveBalancesPanel() {
                 <td style={{ textAlign: 'center' }}>
                   {r.quota_days}{r.overridden && <span title="Jatah bulan ini diatur khusus" style={{ color: '#889' }}> *</span>}
                 </td>
-                <td style={{ textAlign: 'center' }}>{r.used_days}</td>
+                <td style={{ textAlign: 'center' }}><UsedDaysCell balance={r} /></td>
                 <td style={{ textAlign: 'center' }}>
                   <UnusedChip days={r.unused_days} closed={r.closed} />
                 </td>
@@ -82,6 +82,22 @@ export default function LeaveBalancesPanel() {
         </table>
       </div>
     </div>
+  );
+}
+
+// UsedDaysCell: allowance used, with the Alpha share spelled out. Alpha (absent
+// without permission) draws on the same allowance as a day off; an Alpha day
+// the allowance can't cover in full is cut from pay instead (service/alpha.go).
+export function UsedDaysCell({ balance: b }) {
+  if (!b.alpha_days) return <>{b.used_days}</>;
+  const parts = [];
+  if (b.alpha_used_days) parts.push(`${b.alpha_used_days} hari dari alpha`);
+  if (b.alpha_unpaid_days) parts.push(`${b.alpha_unpaid_days} alpha tidak dibayar`);
+  return (
+    <span title={`Cuti ${b.leave_used_days} hari + alpha ${b.alpha_used_days} hari. Alpha yang tidak tertutup jatah dipotong dari gaji.`}>
+      {b.used_days}
+      <div style={{ fontSize: '0.74rem', color: '#c5221f' }}>{parts.join(' · ')}</div>
+    </span>
   );
 }
 

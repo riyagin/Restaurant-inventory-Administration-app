@@ -232,11 +232,23 @@ func (h *PayrollHandler) ListLines(w http.ResponseWriter, r *http.Request) {
 	for _, g := range grades {
 		byLine[g.ID.Bytes] = g
 	}
+	alphas, err := h.queries.ListPayrollLineAlphaForPeriod(ctx, params.PayrollPeriodID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil potongan alpha")
+		return
+	}
+	alphaByLine := make(map[[16]byte]*db.ListPayrollLineAlphaForPeriodRow, len(alphas))
+	for _, a := range alphas {
+		alphaByLine[a.ID.Bytes] = a
+	}
 	out := make([]payrollLineWithGrade, 0, len(rows))
 	for _, row := range rows {
 		v := payrollLineWithGrade{ListPayrollLinesForPeriodRow: row}
 		if g := byLine[row.ID.Bytes]; g != nil {
 			v.PerformanceGrade, v.GradePayPercent = g.PerformanceGrade, g.GradePayPercent
+		}
+		if a := alphaByLine[row.ID.Bytes]; a != nil {
+			v.AlphaUnpaidDays, v.AlphaDeduction = a.AlphaUnpaidDays, a.AlphaDeduction
 		}
 		out = append(out, v)
 	}
@@ -249,6 +261,9 @@ type payrollLineWithGrade struct {
 	*db.ListPayrollLinesForPeriodRow
 	PerformanceGrade pgtype.Text `json:"performance_grade"`
 	GradePayPercent  pgtype.Int4 `json:"grade_pay_percent"`
+	// The Alpha share of unpaid_leave_days / unpaid_leave_deduction (migration 089).
+	AlphaUnpaidDays int32 `json:"alpha_unpaid_days"`
+	AlphaDeduction  int64 `json:"alpha_deduction"`
 }
 
 // ── Line review drawer data ──────────────────────────────────────────────────
@@ -1196,6 +1211,13 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 	if err != nil {
 		return err
 	}
+	// Same as service.GenerateLines: uncovered Alpha joins the unpaid-leave figures.
+	alphaDays, alphaDeduction, err := service.AlphaPayCut(ctx, qtx, empID, start, end, ws.DailyRate)
+	if err != nil {
+		return err
+	}
+	unpaidDays += alphaDays
+	unpaidDeduction += alphaDeduction
 
 	halfDayHours, halfDayDeduction, err := service.HalfDayDeductionForPeriod(ctx, qtx, empID, start, end, hourlyRate)
 	if err != nil {
@@ -1257,6 +1279,11 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 		return err
 	}
 	if err := service.FreezePayrollLineGrade(ctx, qtx, line.ID, tier); err != nil {
+		return err
+	}
+	if err := qtx.SetPayrollLineAlpha(ctx, &db.SetPayrollLineAlphaParams{
+		ID: line.ID, AlphaUnpaidDays: int32(alphaDays), AlphaDeduction: alphaDeduction,
+	}); err != nil {
 		return err
 	}
 	if err := qtx.SetPayrollLineHolidayRate(ctx, &db.SetPayrollLineHolidayRateParams{

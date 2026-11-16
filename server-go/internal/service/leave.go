@@ -226,22 +226,64 @@ func monthlyLeaveUsed(ctx context.Context, qtx *db.Queries, employeeID pgtype.UU
 type MonthlyLeaveBalance struct {
 	Month      string `json:"month"` // YYYY-MM
 	QuotaDays  int    `json:"quota_days"`
-	UsedDays   int    `json:"used_days"`
+	UsedDays   int    `json:"used_days"` // leave + Alpha
 	UnusedDays int    `json:"unused_days"`
 	Closed     bool   `json:"closed"`
 	Overridden bool   `json:"overridden"`
+	// Breakdown of UsedDays, and Alpha days the allowance could not cover
+	// (those are cut from pay instead). See service/alpha.go.
+	LeaveUsedDays   int `json:"leave_used_days"`
+	AlphaUsedDays   int `json:"alpha_used_days"`
+	AlphaDays       int `json:"alpha_days"`
+	AlphaUnpaidDays int `json:"alpha_unpaid_days"`
+}
+
+// WithAlpha applies the month's Alpha dates to a balance built from leave
+// usage alone.
+func (b MonthlyLeaveBalance) WithAlpha(alphaDates []time.Time) MonthlyLeaveBalance {
+	days := AllocateAlpha(b.QuotaDays-b.LeaveUsedDays, alphaDates)
+	b.AlphaDays = len(days)
+	b.AlphaUsedDays = AlphaQuotaUsed(days)
+	b.AlphaUnpaidDays = AlphaUnpaidDays(days)
+	b.UsedDays = b.LeaveUsedDays + b.AlphaUsedDays
+	b.UnusedDays = max(b.QuotaDays-b.UsedDays, 0)
+	return b
+}
+
+// AbsentDatesByEmployeeMonth groups every employee's absent dates in
+// [from, to) by employee id and month — the input WithAlpha needs.
+func AbsentDatesByEmployeeMonth(ctx context.Context, qtx *db.Queries, from, to time.Time) (map[[16]byte]map[time.Time][]time.Time, error) {
+	rows, err := qtx.ListAbsentDatesInRange(ctx, &db.ListAbsentDatesInRangeParams{
+		DateFrom: pgtype.Date{Time: dateOnlyUTC(from), Valid: true},
+		DateTo:   pgtype.Date{Time: dateOnlyUTC(to), Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := map[[16]byte]map[time.Time][]time.Time{}
+	for _, r := range rows {
+		byMonth := out[r.EmployeeID.Bytes]
+		if byMonth == nil {
+			byMonth = map[time.Time][]time.Time{}
+			out[r.EmployeeID.Bytes] = byMonth
+		}
+		m := MonthStart(r.Date.Time)
+		byMonth[m] = append(byMonth[m], r.Date.Time)
+	}
+	return out, nil
 }
 
 // NewMonthlyLeaveBalance derives the unused/closed fields for one month.
 func NewMonthlyLeaveBalance(month time.Time, quota, used int, overridden bool, today time.Time) MonthlyLeaveBalance {
 	m := MonthStart(month)
 	return MonthlyLeaveBalance{
-		Month:      m.Format("2006-01"),
-		QuotaDays:  quota,
-		UsedDays:   used,
-		UnusedDays: max(quota-used, 0),
-		Closed:     m.Before(MonthStart(dateOnlyUTC(today))),
-		Overridden: overridden,
+		Month:         m.Format("2006-01"),
+		QuotaDays:     quota,
+		UsedDays:      used,
+		UnusedDays:    max(quota-used, 0),
+		Closed:        m.Before(MonthStart(dateOnlyUTC(today))),
+		Overridden:    overridden,
+		LeaveUsedDays: used,
 	}
 }
 
@@ -261,6 +303,18 @@ func MonthlyLeaveBalances(ctx context.Context, qtx *db.Queries, employeeID pgtyp
 	for _, r := range rows {
 		byMonth[r.Month.Time.Month()] = r
 	}
+	absent, err := qtx.ListAbsentDatesForEmployee(ctx, &db.ListAbsentDatesForEmployeeParams{
+		EmployeeID: employeeID,
+		DateFrom:   pgtype.Date{Time: from, Valid: true},
+		DateTo:     pgtype.Date{Time: from.AddDate(1, 0, 0), Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	alphaBy := map[time.Month][]time.Time{}
+	for _, d := range absent {
+		alphaBy[d.Time.Month()] = append(alphaBy[d.Time.Month()], d.Time)
+	}
 	out := make([]MonthlyLeaveBalance, 12)
 	for i := range out {
 		m := from.AddDate(0, i, 0)
@@ -271,7 +325,7 @@ func MonthlyLeaveBalances(ctx context.Context, qtx *db.Queries, employeeID pgtyp
 				quota, overridden = int(r.QuotaDays.Int32), true
 			}
 		}
-		out[i] = NewMonthlyLeaveBalance(m, quota, used, overridden, today)
+		out[i] = NewMonthlyLeaveBalance(m, quota, used, overridden, today).WithAlpha(alphaBy[m.Month()])
 	}
 	return out, nil
 }
@@ -315,10 +369,13 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 			if err != nil {
 				return nil, err
 			}
-			used, err := monthlyLeaveUsed(ctx, qtx, req.EmployeeID, mc.Month)
+			// Allowance already gone to approved leave AND to Alpha days it
+			// covered: leave may not push a paid-for Alpha day into unpaid.
+			am, err := AlphaForMonth(ctx, qtx, req.EmployeeID, mc.Month, covered...)
 			if err != nil {
 				return nil, err
 			}
+			used := am.LeaveUsed + am.AlphaUsed()
 			if !QuotaSufficient(quota, used, mc.Cost) {
 				return nil, &QuotaExceededError{Month: mc.Month, Quota: quota, Used: used, Needed: mc.Cost}
 			}

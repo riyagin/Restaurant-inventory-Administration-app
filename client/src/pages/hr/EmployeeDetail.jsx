@@ -15,7 +15,7 @@ import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDash
 import { canUseHR } from '../../roles';
 import { todayLocal, fmtMonth } from './leaveRules';
 import { BackdatedBadge } from './LeaveRuleWidgets';
-import { UnusedChip } from './LeaveBalancesPanel';
+import { UnusedChip, UsedDaysCell } from './LeaveBalancesPanel';
 
 import { fmtDateTime, todayWIB, ymd } from '../../time';
 
@@ -329,7 +329,14 @@ function CutiTab({ employeeId }) {
           </div>
           <p style={{ fontSize: '0.78rem', color: '#888', margin: '0.6rem 0 0' }}>
             {balance.default_quota} hari libur berbayar per bulan; Sabtu/Minggu dihitung {balance.weekend_cost} hari. Sisa tidak terbawa ke bulan berikutnya.
+            {' '}Alpha (tidak masuk tanpa izin) memakai jatah yang sama; bila jatah tidak cukup, hari itu tidak dibayar.
           </p>
+          {current.alpha_days > 0 && (
+            <p style={{ fontSize: '0.85rem', color: '#c5221f', margin: '0.4rem 0 0' }}>
+              Bulan ini: {current.alpha_days} hari alpha — {current.alpha_used_days} hari jatah terpakai
+              {current.alpha_unpaid_days > 0 && `, ${current.alpha_unpaid_days} hari tidak dibayar`}.
+            </p>
+          )}
         </div>
       )}
 
@@ -356,7 +363,7 @@ function CutiTab({ employeeId }) {
                 <tr key={m.month}>
                   <td>{fmtMonth(m.month)}</td>
                   <td style={{ textAlign: 'center' }}>{m.quota_days}{m.overridden && <span title="Jatah bulan ini diatur khusus" style={{ color: '#889' }}> *</span>}</td>
-                  <td style={{ textAlign: 'center' }}>{m.used_days}</td>
+                  <td style={{ textAlign: 'center' }}><UsedDaysCell balance={m} /></td>
                   <td style={{ textAlign: 'center' }}><UnusedChip days={m.unused_days} closed={m.closed} /></td>
                   <td style={{ fontSize: '0.82rem', color: '#667' }}>{m.closed ? 'Final' : m.month === thisMonth ? 'Berjalan' : 'Akan datang'}</td>
                 </tr>
