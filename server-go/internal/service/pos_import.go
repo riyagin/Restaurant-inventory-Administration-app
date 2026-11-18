@@ -139,18 +139,21 @@ func ParsePOSExcel(file io.Reader, filename string) (*POSParseResult, error) {
 	colKategori := findCol("Kategori Produk")
 	colProduk := findCol("Nama Produk")
 	colGross := findCol("Penjualan Kotor")
-	colDisc := findCol("Diskon")
+	// Runchise's newer export splits the discount into "Diskon Penjualan" +
+	// "Diskon Produk" and carries their sum as "Total Diskon"; the older export
+	// had that sum as "Diskon".
+	colDisc := findCol("Diskon", "Total Diskon")
 	colBiaya := findCol("Biaya Tambahan")
 	colPayment := findCol("Jenis Pembayaran")
 	colStatus := findCol("Status")
 
 	// Validate required columns.
 	required := map[string]int{
-		"Kategori Produk":  colKategori,
-		"Penjualan Kotor":  colGross,
-		"Diskon":           colDisc,
-		"Jenis Pembayaran": colPayment,
-		"Status":           colStatus,
+		"Kategori Produk":       colKategori,
+		"Penjualan Kotor":       colGross,
+		"Diskon / Total Diskon": colDisc,
+		"Jenis Pembayaran":      colPayment,
+		"Status":                colStatus,
 	}
 	for name, idx := range required {
 		if idx == -1 {
