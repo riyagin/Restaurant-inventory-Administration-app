@@ -174,7 +174,7 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 	}
 	if leave := line.UnpaidLeaveDeduction - alphaAmount; leave != 0 {
 		deductions = append(deductions, service.PayslipLineItem{
-			Label:  fmt.Sprintf("Cuti Tanpa Gaji (%d hari)", line.UnpaidLeaveDays-alphaDays),
+			Label:  fmt.Sprintf("Libur Tanpa Gaji (%d hari)", line.UnpaidLeaveDays-alphaDays),
 			Amount: leave,
 		})
 	}

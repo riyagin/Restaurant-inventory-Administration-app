@@ -481,7 +481,7 @@ export default function PayrollPeriodDetail() {
                 { key: 'bonus_total', label: 'Bonus', align: 'right' },
                 { key: 'overtime', label: 'Lembur', align: 'right' },
                 { key: 'kasbon_deduction', label: 'Kasbon', align: 'right' },
-                { key: 'unpaid_leave_deduction', label: 'Pot. Cuti/Alpha', align: 'right' },
+                { key: 'unpaid_leave_deduction', label: 'Pot. Libur/Alpha', align: 'right' },
                 { key: 'attendance_cut_deduction', label: 'Telat/Pulang Awal', align: 'right' },
                 { key: 'net_pay', label: 'Gaji Bersih', align: 'right' },
                 { key: 'performance_score', label: 'Skor', align: 'center' },
@@ -960,7 +960,7 @@ function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Ringkasan Absensi</h3>
                 <div style={{ display: 'flex', gap: 8, marginBottom: holidaysWorked.length > 0 ? 8 : 0 }}>
-                  {[['Hadir', att?.hadir], ['Absen', att?.absen], ['Terlambat', att?.terlambat], ['Cuti', att?.cuti], ['Libur Nasional', holidaysWorked.length]].map(([k, v]) => (
+                  {[['Hadir', att?.hadir], ['Absen', att?.absen], ['Terlambat', att?.terlambat], ['Libur', att?.cuti], ['Libur Nasional', holidaysWorked.length]].map(([k, v]) => (
                     <div key={k} style={{ flex: 1, background: k === 'Libur Nasional' && v > 0 ? '#fff8e1' : '#f6f7fa', borderRadius: 8, padding: 8, textAlign: 'center', border: k === 'Libur Nasional' && v > 0 ? '1px solid #f9a825' : 'none' }}>
                       <div style={{ fontSize: 18, fontWeight: 700, color: k === 'Libur Nasional' && v > 0 ? '#a06800' : 'inherit' }}>{v ?? 0}</div>
                       <div style={{ fontSize: 11, color: k === 'Libur Nasional' && v > 0 ? '#a06800' : '#889' }}>{k}</div>

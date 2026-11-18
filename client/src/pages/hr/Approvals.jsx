@@ -10,7 +10,7 @@ import { canApprove } from '../../roles';
 import { BackdatedBadge } from './LeaveRuleWidgets';
 
 const TYPE_META = {
-  leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
+  leave:    { label: 'Libur',   bg: '#e3f2fd', color: '#1565c0' },
   overtime: { label: 'Lembur', bg: '#fff3e0', color: '#b45309' },
   shift:    { label: 'Shift',  bg: '#ede9fe', color: '#6d28d9' },
   permission: { label: 'Izin', bg: '#e0f2f1', color: '#00695c' },
@@ -135,7 +135,7 @@ export default function Approvals() {
         <h2 style={{ margin: 0 }}>Persetujuan</h2>
         <span style={{ fontSize: '0.85rem', color: '#667' }}>{rows.length} menunggu</span>
       </div>
-      <p style={{ color: '#667', marginTop: 0, fontSize: '0.88rem' }}>Pengajuan cuti, lembur, izin, dan perubahan shift hari ini yang menunggu keputusan manajer.</p>
+      <p style={{ color: '#667', marginTop: 0, fontSize: '0.88rem' }}>Pengajuan libur, lembur, izin, dan perubahan shift hari ini yang menunggu keputusan manajer.</p>
 
       {!manager && (
         <div style={{ background: '#fff8e1', color: '#a06800', padding: '0.6rem 0.9rem', borderRadius: 8, marginBottom: '1rem', fontSize: '0.88rem' }}>
@@ -147,7 +147,7 @@ export default function Approvals() {
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <select value={filters.type} onChange={e => setFilters({ ...filters, type: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
           <option value="">Semua jenis</option>
-          <option value="leave">Cuti</option>
+          <option value="leave">Libur</option>
           <option value="overtime">Lembur</option>
           <option value="shift">Perubahan shift</option>
           <option value="permission">Izin (masuk siang / pulang awal / dinas luar)</option>

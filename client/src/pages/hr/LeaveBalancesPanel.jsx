@@ -94,7 +94,7 @@ export function UsedDaysCell({ balance: b }) {
   if (b.alpha_used_days) parts.push(`${b.alpha_used_days} hari dari alpha`);
   if (b.alpha_unpaid_days) parts.push(`${b.alpha_unpaid_days} alpha tidak dibayar`);
   return (
-    <span title={`Cuti ${b.leave_used_days} hari + alpha ${b.alpha_used_days} hari. Alpha yang tidak tertutup jatah dipotong dari gaji.`}>
+    <span title={`Libur ${b.leave_used_days} hari + alpha ${b.alpha_used_days} hari. Alpha yang tidak tertutup jatah dipotong dari gaji.`}>
       {b.used_days}
       <div style={{ fontSize: '0.74rem', color: '#c5221f' }}>{parts.join(' · ')}</div>
     </span>

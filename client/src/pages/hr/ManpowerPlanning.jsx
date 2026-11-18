@@ -67,14 +67,14 @@ function buildManpowerPrintHtml({ data, days }) {
     const empRow = (emp) => {
       const cells = emp.days.map(day => {
         if (day.status === 'cuti') {
-          return `<td class="c cuti" title="${escapeHtml(day.leave_type || 'Cuti')}">${escapeHtml((day.leave_type || 'Cuti').slice(0, 8))}</td>`;
+          return `<td class="c cuti" title="${escapeHtml(day.leave_type || 'Libur')}">${escapeHtml((day.leave_type || 'Libur').slice(0, 8))}</td>`;
         }
         const s = shiftsById[day.shift_id];
         if (s) {
           return `<td class="c" style="background:${escapeHtml(s.color)}">${escapeHtml(s.code)}${day.status === 'pending' ? '<sup>M</sup>' : ''}</td>`;
         }
         if (day.status === 'pending') {
-          return `<td class="c pending" title="${escapeHtml(day.leave_type || 'Cuti')} (menunggu)">M</td>`;
+          return `<td class="c pending" title="${escapeHtml(day.leave_type || 'Libur')} (menunggu)">M</td>`;
         }
         return `<td class="c none">–</td>`;
       }).join('');
@@ -95,7 +95,7 @@ function buildManpowerPrintHtml({ data, days }) {
     const shiftLegend = branch.shifts.filter(s => s.is_active)
       .map(s => `<span><i style="background:${escapeHtml(s.color)}"></i> ${escapeHtml(s.code)} ${escapeHtml(s.name)} ${escapeHtml(shiftTimeLabel(s))} (${escapeHtml(shiftHoursLabel(s))})</span>`).join('');
     const meta = [`${branch.employees.length} karyawan`];
-    if (onLeave > 0) meta.push(`${onLeave} hari cuti`);
+    if (onLeave > 0) meta.push(`${onLeave} hari libur`);
     if (pending > 0) meta.push(`${pending} hari menunggu`);
     return `<div class="branch">
       <div class="bh"><b>${escapeHtml(branch.name)}</b> <span>${escapeHtml(meta.join(' · '))}</span></div>
@@ -148,8 +148,8 @@ function buildManpowerPrintHtml({ data, days }) {
   ${branchTables || '<p style="color:#888">Tidak ada karyawan aktif.</p>'}
   <div class="legend">
     <span><i style="background:#fff"></i> – Belum ada shift</span>
-    <span><i style="background:#fed7aa"></i> Cuti menunggu persetujuan (M)</span>
-    <span><i style="background:#1f2937"></i> Cuti Disetujui</span>
+    <span><i style="background:#fed7aa"></i> Libur menunggu persetujuan (M)</span>
+    <span><i style="background:#1f2937"></i> Libur Disetujui</span>
   </div>
   <div class="foot">Dicetak pada ${escapeHtml(printedAt)}</div>
 </body></html>`;
@@ -197,7 +197,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
 
   const submit = async () => {
     setError('');
-    if (!form.leave_type_id) { setError('Pilih jenis cuti.'); return; }
+    if (!form.leave_type_id) { setError('Pilih jenis libur.'); return; }
     if (new Date(form.end_date) < new Date(form.start_date)) {
       setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.');
       return;
@@ -207,7 +207,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
       const created = await submitLeaveRequest(form);
       if (created) onSaved(created);
     } catch (err) {
-      setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.');
+      setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.');
     } finally {
       setSaving(false);
     }
@@ -225,18 +225,18 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={modal}>
-        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Ajukan Cuti</h3>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Ajukan Libur</h3>
         <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6b7280' }}>
           {employee.name}{employee.position ? ` · ${employee.position}` : ''}
         </p>
 
-        {field('Jenis Cuti',
+        {field('Jenis Libur',
           <select
             style={inputStyle}
             value={form.leave_type_id}
             onChange={e => setForm(f => ({ ...f, leave_type_id: e.target.value }))}
           >
-            <option value="">— Pilih jenis cuti —</option>
+            <option value="">— Pilih jenis libur —</option>
             {types.map(t => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
@@ -278,7 +278,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
             style={{ ...inputStyle, resize: 'vertical', minHeight: 60 }}
             value={form.reason}
             onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
-            placeholder="Alasan cuti..."
+            placeholder="Alasan libur..."
           />
         )}
 
@@ -296,7 +296,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
             disabled={saving}
             style={{ padding: '7px 16px', borderRadius: 4, border: 'none', background: '#2563eb', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, opacity: saving ? 0.7 : 1 }}
           >
-            {saving ? 'Menyimpan...' : 'Ajukan Cuti'}
+            {saving ? 'Menyimpan...' : 'Ajukan Libur'}
           </button>
         </div>
       </div>
@@ -572,7 +572,7 @@ export default function ManpowerPlanning() {
       </div>
 
       <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 0.75rem' }}>
-        Klik kotak hari untuk mengatur shift atau mengajukan cuti. Hari yang sudah lewat (pudar) tidak dapat diubah;
+        Klik kotak hari untuk mengatur shift atau mengajukan libur. Hari yang sudah lewat (pudar) tidak dapat diubah;
         perubahan shift <b>hari ini</b> {approver ? 'langsung berlaku karena Anda manajer' : 'memerlukan persetujuan manajer'}.
         {' '}Jatah libur 4 hari/bulan, Sabtu/Minggu dihitung {WEEKEND_COST} hari.
       </p>
@@ -637,7 +637,7 @@ export default function ManpowerPlanning() {
                     {branch.employees.length} karyawan
                     {onLeaveCount > 0 && (
                       <span style={{ color: '#374151', marginLeft: 6 }}>
-                        · {onLeaveCount} hari cuti di periode ini
+                        · {onLeaveCount} hari libur di periode ini
                       </span>
                     )}
                     {pendingCount > 0 && (
@@ -723,8 +723,8 @@ export default function ManpowerPlanning() {
             <LegendItem color="#fff" label="– Belum ada shift" />
             <LegendItem color="#dbeafe" label="Kode shift (warna per shift)" />
             <LegendItem color="#fff" dashed label="Perubahan menunggu persetujuan" />
-            <LegendItem color="#fed7aa" label="Cuti menunggu persetujuan" />
-            <LegendItem color="#1f2937" label="Cuti (Disetujui)" />
+            <LegendItem color="#fed7aa" label="Libur menunggu persetujuan" />
+            <LegendItem color="#1f2937" label="Libur (Disetujui)" />
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', opacity: 0.6 }}>
               <span style={{ width: 14, height: 14, borderRadius: 3, background: '#dbeafe', border: '1px solid rgba(0,0,0,0.1)' }} />
               Sudah lewat (pudar, tidak dapat diubah)
@@ -752,7 +752,7 @@ export default function ManpowerPlanning() {
           employee={modal.employee}
           date={modal.day.date}
           onClose={() => setModal(null)}
-          onSaved={() => handleSaved('Pengajuan cuti disimpan.')}
+          onSaved={() => handleSaved('Pengajuan libur disimpan.')}
         />
       )}
 
@@ -821,7 +821,7 @@ function SectionRows({ section, colCount, shiftsById, today, compact, onCell, on
             const titleParts = [];
             if (day.status === 'cuti') titleParts.push(`${day.leave_type} (disetujui)`);
             if (shift) titleParts.push(`${shift.name} ${shiftTimeLabel(shift)}`);
-            if (day.status === 'pending') titleParts.push(`${day.leave_type} (cuti menunggu persetujuan)`);
+            if (day.status === 'pending') titleParts.push(`${day.leave_type} (libur menunggu persetujuan)`);
             if (pendingShift !== undefined) titleParts.push(`Menunggu persetujuan: ${pendingShift ? pendingShift.name : 'hapus shift'}`);
             if (!titleParts.length) titleParts.push('Belum ada shift');
             titleParts.push(past ? 'sudah lewat — tidak dapat diubah' : 'klik untuk ubah');
@@ -841,7 +841,7 @@ function SectionRows({ section, colCount, shiftsById, today, compact, onCell, on
                 {day.status === 'cuti' ? (
                   compact ? 'C' : (
                     <span style={{ display: 'block', fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {day.leave_type || 'Cuti'}
+                      {day.leave_type || 'Libur'}
                     </span>
                   )
                 ) : shift ? (
@@ -849,12 +849,12 @@ function SectionRows({ section, colCount, shiftsById, today, compact, onCell, on
                 ) : day.status === 'pending' ? (
                   compact ? 'M' : (
                     <span style={{ display: 'block', fontSize: 11, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {day.leave_type || 'Cuti'}
+                      {day.leave_type || 'Libur'}
                     </span>
                   )
                 ) : '–'}
                 {shift && day.status === 'pending' && (
-                  <span title="Cuti menunggu persetujuan" style={{ position: 'absolute', top: 2, right: 3, fontSize: 9, fontWeight: 700, color: '#c2410c' }}>M</span>
+                  <span title="Libur menunggu persetujuan" style={{ position: 'absolute', top: 2, right: 3, fontSize: 9, fontWeight: 700, color: '#c2410c' }}>M</span>
                 )}
                 {pendingShift !== undefined && !compact && (
                   <div style={{ fontSize: 10, color: '#c2410c', fontWeight: 600 }}>→ {pendingShift ? pendingShift.code : 'hapus'}</div>

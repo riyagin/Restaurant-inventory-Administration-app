@@ -3,23 +3,24 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   getEmployee, deleteEmployee, transitionEmployeeToPermanent, resignEmployee, deleteEmployeeFaceData,
   getEmployeeWage, getEmployeeWageHistory, createEmployeeWage, getWageComponents, getPositionWageTemplate,
-  getAttendance, getEmployeePerformance,
+  getAttendance, getEmployeePerformance, getEmployeeAttendanceHistory,
   getLeaveBalance, getEmployeeLeaveRequests,
   getEmployeeKasbons,
+  getWelfareFundEmployee, payoutWelfareFund, getAccounts,
   getEmployeeDocuments, uploadEmployeeDocument, downloadEmployeeDocument, deleteEmployeeDocument,
   uploadUrl,
 } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
 import KasbonFormModal from './KasbonFormModal';
 import { StatusChip, SourceBadge, AnomalyChips, fmtTime } from './AttendanceDashboard';
-import { canUseHR } from '../../roles';
+import { canUseHR, canApprove } from '../../roles';
 import { todayLocal, fmtMonth } from './leaveRules';
 import { BackdatedBadge } from './LeaveRuleWidgets';
 import { UnusedChip, UsedDaysCell } from './LeaveBalancesPanel';
 
 import { fmtDateTime, todayWIB, ymd } from '../../time';
 
-const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Dana Kesejahteraan' };
+const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Tunjangan Kesehatan', welfare_fund: 'Dana Kesejahteraan' };
 const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
@@ -59,8 +60,10 @@ const TABS = [
   { key: 'profil', label: 'Profil' },
   { key: 'gaji', label: 'Gaji' },
   { key: 'absensi', label: 'Absensi' },
+  { key: 'riwayat', label: '30 Hari Terakhir' },
   { key: 'kasbon', label: 'Kasbon' },
-  { key: 'cuti', label: 'Cuti' },
+  { key: 'kesejahteraan', label: 'Dana Kesejahteraan' },
+  { key: 'cuti', label: 'Libur' },
   { key: 'dokumen', label: 'Dokumen' },
 ];
 
@@ -100,7 +103,7 @@ function perfScoreColor(score) {
   return { bg: '#fce8e6', color: '#c5221f' };
 }
 
-const STATUS_PRINT_LABELS = { present: 'Hadir', absent: 'Absen', leave: 'Cuti', holiday: 'Libur' };
+const STATUS_PRINT_LABELS = { present: 'Hadir', absent: 'Absen', leave: 'Libur', holiday: 'Libur Nasional' };
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => (
@@ -183,7 +186,7 @@ function buildAttendancePrintHtml({ employee, month, rows, perf }) {
   <div class="summary">
     <span class="chip">Hadir <b>${counts.present}</b></span>
     <span class="chip">Absen <b>${counts.absent}</b></span>
-    <span class="chip">Cuti <b>${counts.leave}</b></span>
+    <span class="chip">Libur <b>${counts.leave}</b></span>
     <span class="chip">Libur <b>${counts.holiday}</b></span>
     <span class="chip">Terlambat <b>${lateCount}</b></span>
     <span class="chip">Skor Evaluasi <b>${score}/100</b> (${violCount} pelanggaran)</span>
@@ -284,6 +287,105 @@ function AttendanceTab({ employeeId, employee }) {
   );
 }
 
+// ── 30 Hari Terakhir ─────────────────────────────────────────────────────────
+// The employee's last 30 days exactly as the kiosk shows them to the employee
+// (GET /hr/employees/:id/attendance-history; the kiosk calls the same builder),
+// so HR and the employee are looking at the same thing. Unlike the monthly
+// Absensi tab it lists every day, including days with no record.
+
+const PERMIT_LABELS = { late_arrival: 'Izin masuk siang', early_departure: 'Izin pulang awal', off_site: 'Dinas luar' };
+
+function historyNotes(d) {
+  const notes = [];
+  if (d.is_late) notes.push({ text: `Terlambat ${d.late_minutes} mnt`, warn: true });
+  if (d.is_early_leave) notes.push({ text: `Pulang awal ${d.early_leave_minutes} mnt`, warn: true });
+  if (d.is_missing_checkin) notes.push({ text: 'Tidak absen masuk', warn: true });
+  if (d.is_missing_checkout) notes.push({ text: 'Tidak absen pulang', warn: true });
+  if (d.is_half_day) notes.push({ text: 'Setengah hari', warn: true });
+  if (d.alpha === 'quota') notes.push({ text: 'Alpha — memakai jatah libur', warn: true });
+  if (d.alpha === 'unpaid') notes.push({ text: 'Alpha — tidak dibayar', warn: true });
+  if (d.leave_type) notes.push({ text: d.leave_type });
+  if (d.excused_by) notes.push({ text: PERMIT_LABELS[d.excused_by] || d.excused_by });
+  if ((d.check_in && !d.check_in_verified) || (d.check_out && !d.check_out_verified)) {
+    notes.push({ text: 'Jam dari perangkat (belum terverifikasi)', warn: true });
+  }
+  return notes;
+}
+
+function HistoryStat({ label, value, sub, color }) {
+  return (
+    <div style={{ padding: '0.6rem 0.8rem', borderRadius: 6, background: '#f6f8fb' }}>
+      <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: color || '#223' }}>{value}</div>
+      {sub && <div style={{ fontSize: '0.75rem', color: '#889' }}>{sub}</div>}
+    </div>
+  );
+}
+
+function HistoryTab({ employeeId }) {
+  const [hist, setHist] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    getEmployeeAttendanceHistory(employeeId)
+      .then(r => { if (alive) { setHist(r.data); setError(''); } })
+      .catch(err => { if (alive) setError(err.response?.data?.error || 'Gagal memuat riwayat kehadiran'); });
+    return () => { alive = false; };
+  }, [employeeId]);
+
+  if (error) return <div className="error-msg">{error}</div>;
+  if (!hist) return <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>;
+
+  const s = hist.summary;
+  const fmtDay = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('id-ID', { weekday: 'short', day: '2-digit', month: 'short' });
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        <h3 style={{ margin: 0, fontSize: '1rem' }}>30 Hari Terakhir</h3>
+        <span style={{ fontSize: '0.82rem', color: '#889' }}>{fmtDay(hist.from)} – {fmtDay(hist.to)} · sama dengan yang dilihat karyawan di aplikasi</span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.6rem', marginBottom: '1rem' }}>
+        <HistoryStat label="Hadir" value={s.present} sub={`dari ${s.days} hari`} color="#2e7d32" />
+        <HistoryStat label="Terlambat" value={s.late} sub={s.late_minutes ? `total ${s.late_minutes} mnt` : null} color={s.late ? '#a06800' : undefined} />
+        <HistoryStat label="Pulang Awal" value={s.early_leave} color={s.early_leave ? '#a06800' : undefined} />
+        <HistoryStat label="Tidak Absen Pulang" value={s.missing_checkout} color={s.missing_checkout ? '#a06800' : undefined} />
+        <HistoryStat label="Alpha" value={s.alpha} sub={s.alpha_unpaid ? `${s.alpha_unpaid} tidak dibayar` : null} color={s.alpha ? '#c62828' : undefined} />
+        <HistoryStat label="Libur" value={s.leave} color="#1565c0" />
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%' }}>
+          <thead>
+            <tr><th>Tanggal</th><th>Shift</th><th>Masuk</th><th>Pulang</th><th>Status</th><th>Keterangan</th></tr>
+          </thead>
+          <tbody>
+            {hist.days.map(d => {
+              const notes = historyNotes(d);
+              return (
+                <tr key={d.date}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDay(d.date)}</td>
+                  <td style={{ fontSize: '0.82rem', color: '#556' }}>{d.shift || '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(d.check_in)} <SourceBadge source={d.check_in_source} /></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(d.check_out)} <SourceBadge source={d.check_out_source} /></td>
+                  <td>{d.status ? <StatusChip status={d.status} /> : <span style={{ color: '#aab', fontSize: '0.82rem' }}>Tidak ada catatan</span>}</td>
+                  <td style={{ fontSize: '0.82rem' }}>
+                    {notes.length === 0 ? <span style={{ color: '#ccc' }}>—</span> : notes.map((n, i) => (
+                      <span key={i} style={{ color: n.warn ? '#b3261e' : '#556' }}>{i > 0 && ' · '}{n.text}</span>
+                    ))}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const LEAVE_STATUS_LABELS = { pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak', cancelled: 'Dibatalkan' };
 const LEAVE_STATUS_COLORS = {
   pending: { bg: '#fff8e1', color: '#a06800' },
@@ -374,11 +476,11 @@ function CutiTab({ employeeId }) {
       </div>
 
       <div className="card">
-        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Riwayat Pengajuan Cuti</h3>
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Riwayat Pengajuan Libur</h3>
         {loading ? (
           <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
         ) : requests.length === 0 ? (
-          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Belum ada pengajuan cuti.</p>
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Belum ada pengajuan libur.</p>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%' }}>
@@ -429,6 +531,163 @@ const KASBON_STATUS_COLORS = {
 function KasbonStatusChip({ status }) {
   const c = KASBON_STATUS_COLORS[status] || KASBON_STATUS_COLORS.cancelled;
   return <span style={{ background: c.bg, color: c.color, padding: '0.15rem 0.55rem', borderRadius: '4px', fontWeight: 600, fontSize: '0.8rem' }}>{KASBON_STATUS_LABELS[status] || status}</span>;
+}
+
+// ── Dana Kesejahteraan ───────────────────────────────────────────────────────
+// The retirement fund (migration 090), separate from Tunjangan Kesehatan: the
+// employee's 'welfare_fund' components are credited every time a payroll period
+// is closed, and the whole balance is paid out once they retire / leave.
+
+const WELFARE_MOVEMENT_LABEL = { contribution: 'Iuran gajian', payout: 'Pencairan', opening: 'Saldo awal' };
+
+function WelfareTab({ employeeId }) {
+  const [d, setD] = useState(null);
+  const [error, setError] = useState('');
+  const [payout, setPayout] = useState(false);
+
+  const load = useCallback(() => {
+    getWelfareFundEmployee(employeeId)
+      .then(r => { setD(r.data); setError(''); })
+      .catch(err => setError(err.response?.data?.error || 'Gagal memuat dana kesejahteraan'));
+  }, [employeeId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (error) return <div className="error-msg">{error}</div>;
+  if (!d) return <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>;
+
+  const active = d.employee.status === 'active';
+  const mayPayout = !active && canApprove() && d.balance > 0 && d.unsettled_payrolls === 0;
+  const tile = (label, value, sub, color) => (
+    <div style={{ padding: '0.75rem 0.9rem', borderRadius: 6, background: '#f6f8fb' }}>
+      <div style={{ fontSize: '0.72rem', color: '#667', textTransform: 'uppercase', letterSpacing: '0.03em' }}>{label}</div>
+      <div style={{ fontSize: '1.35rem', fontWeight: 700, color: color || '#223' }}>{value}</div>
+      {sub && <div style={{ fontSize: '0.75rem', color: '#889' }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '0.6rem' }}>
+          {tile('Saldo Dana Kesejahteraan', fmtIDR(d.balance), 'Liabilitas 21300', '#1e7e34')}
+          {tile('Iuran per periode', fmtIDR(d.per_period_amount), d.per_period_amount > 0 ? 'dari struktur upah saat ini' : 'belum ada komponen')}
+          {tile('Total iuran', fmtIDR(d.total_contributed))}
+          {tile('Sudah dicairkan', fmtIDR(d.total_paid_out))}
+        </div>
+        <p style={{ fontSize: '0.82rem', color: '#667', margin: '0.75rem 0 0' }}>
+          Iuran perusahaan (komponen gaji tipe <em>Dana Kesejahteraan</em>) ditambahkan setiap kali periode penggajian ditutup,
+          terpisah dari Tunjangan Kesehatan. Seluruh saldo dicairkan saat karyawan pensiun / berhenti bekerja.
+        </p>
+        {d.per_period_amount === 0 && active && (
+          <p style={{ fontSize: '0.82rem', color: '#a06800', margin: '0.5rem 0 0' }}>
+            Karyawan ini belum punya komponen Dana Kesejahteraan. Tambahkan di <Link to="/hr/wage-components">Komponen Gaji</Link> lalu pasang di tab Gaji.
+          </p>
+        )}
+        {!active && (
+          <div style={{ marginTop: '0.75rem', padding: '0.6rem 0.8rem', borderRadius: 6, background: mayPayout ? '#e8f0fe' : '#f5f7fb', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+            <span>
+              {d.balance <= 0
+                ? 'Dana kesejahteraan sudah dicairkan / kosong.'
+                : d.unsettled_payrolls > 0
+                  ? <>Masih ada <strong>{d.unsettled_payrolls}</strong> periode penggajian yang belum ditutup/terposting. Selesaikan dulu agar iuran terakhir masuk.</>
+                  : canApprove()
+                    ? 'Karyawan sudah tidak aktif. Saldo dana kesejahteraan dapat dicairkan.'
+                    : 'Pencairan dana kesejahteraan dilakukan oleh manajer.'}
+            </span>
+            {mayPayout && <button className="btn btn-primary btn-sm" onClick={() => setPayout(true)}>Cairkan Dana Kesejahteraan</button>}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Mutasi Dana Kesejahteraan</h3>
+        {d.movements.length === 0 ? (
+          <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Belum ada iuran. Iuran pertama masuk saat periode penggajian berikutnya ditutup.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%' }}>
+              <thead>
+                <tr><th>Tanggal</th><th>Jenis</th><th>Periode</th><th>Keterangan</th><th style={{ textAlign: 'right' }}>Jumlah</th></tr>
+              </thead>
+              <tbody>
+                {d.movements.map(m => (
+                  <tr key={m.id}>
+                    <td>{fmtDate(m.movement_date)}</td>
+                    <td>{WELFARE_MOVEMENT_LABEL[m.movement_type] || m.movement_type}</td>
+                    <td>{m.period_month ? new Date(m.period_month).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-'}</td>
+                    <td style={{ color: '#667' }}>{m.note || '-'}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap', color: m.amount < 0 ? '#c5221f' : '#1e7e34' }}>{m.amount > 0 ? '+' : ''}{fmtIDR(m.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {payout && (
+        <WelfarePayoutModal employee={d.employee} balance={d.balance}
+          onClose={() => setPayout(false)}
+          onDone={(res) => { setPayout(false); load(); alert(`Dana kesejahteraan ${d.employee.full_name} dicairkan: ${fmtIDR(res.amount)}`); }} />
+      )}
+    </div>
+  );
+}
+
+function WelfarePayoutModal({ employee, balance, onClose, onDone }) {
+  const [accounts, setAccounts] = useState([]);
+  const [date, setDate] = useState(todayLocal());
+  const [fund, setFund] = useState('');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    getAccounts()
+      .then(r => setAccounts((r.data || []).filter(a => a.account_type === 'asset' && !a.is_system)))
+      .catch(() => setAccounts([]));
+  }, []);
+
+  const run = async () => {
+    if (!fund) { setError('Pilih sumber dana.'); return; }
+    setBusy(true); setError('');
+    try {
+      const r = await payoutWelfareFund(employee.id, { payout_date: date, fund_source_account_id: fund, note });
+      onDone(r.data);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Gagal mencairkan.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const lbl = { display: 'block', fontSize: '0.78rem', color: '#667', marginTop: '0.6rem', marginBottom: '0.2rem' };
+  const inp = { width: '100%', padding: '0.5rem', border: '1px solid #d4d9e2', borderRadius: 6, boxSizing: 'border-box' };
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }} onClick={onClose}>
+      <div className="card" style={{ width: 480, maxWidth: '96vw' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>Cairkan Dana Kesejahteraan</h3>
+        <div style={{ background: '#f5f7fb', borderRadius: 6, padding: '0.6rem 0.8rem', fontSize: '0.9rem' }}>
+          {employee.full_name} — dicairkan <strong>{fmtIDR(balance)}</strong> (seluruh saldo)
+        </div>
+        <p style={{ fontSize: '0.8rem', color: '#667' }}>Kasbon yang masih berjalan <strong>tidak</strong> dipotong otomatis.</p>
+        <label style={lbl}>Tanggal pencairan</label>
+        <input type="date" value={date} max={todayLocal()} onChange={e => setDate(e.target.value)} style={inp} />
+        <label style={lbl}>Dibayar dari</label>
+        <select className="select-clean" value={fund} onChange={e => setFund(e.target.value)} style={inp}>
+          <option value="">— pilih akun —</option>
+          {accounts.map(x => <option key={x.id} value={x.id}>{x.account_number ? `${x.account_number} · ` : ''}{x.name}</option>)}
+        </select>
+        <label style={lbl}>Catatan (opsional)</label>
+        <input value={note} onChange={e => setNote(e.target.value)} style={inp} />
+        {error && <div className="error-msg" style={{ marginTop: '0.75rem' }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Batal</button>
+          <button className="btn btn-primary" onClick={run} disabled={busy}>{busy ? 'Memproses…' : 'Cairkan'}</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function KasbonTab({ employeeId }) {
@@ -1117,6 +1376,7 @@ export default function EmployeeDetail() {
                 <Field label="Nama Lengkap" value={emp.full_name} />
                 <Field label="Jabatan" value={emp.position_name} />
                 <Field label="Cabang" value={emp.branch_name} />
+                <Field label="Divisi" value={emp.division_name || 'Tanpa divisi'} />
                 <Field label="Tanggal Lahir" value={fmtDate(emp.dob)} />
                 <Field label="Tanggal Bergabung" value={fmtDate(emp.join_date)} />
                 <Field label="NIK / KTP" value={emp.national_id} />
@@ -1172,7 +1432,9 @@ export default function EmployeeDetail() {
 
       {tab === 'gaji' && <WageTab employeeId={id} editable={editable} isContract={emp.employment_type === 'contract'} positionId={emp.position_id} positionName={emp.position_name} />}
       {tab === 'absensi' && <AttendanceTab employeeId={id} employee={emp} />}
+      {tab === 'riwayat' && <HistoryTab employeeId={id} />}
       {tab === 'kasbon' && <KasbonTab employeeId={id} />}
+      {tab === 'kesejahteraan' && <WelfareTab employeeId={id} />}
       {tab === 'cuti' && <CutiTab employeeId={id} />}
       {tab === 'dokumen' && <DokumenTab employeeId={id} editable={editable} />}
 

@@ -29,9 +29,9 @@ const groups = (approver) => [
   },
   {
     title: 'Izin & Pengajuan',
-    desc: 'Cuti, lembur, dan persetujuannya.',
+    desc: 'Libur, lembur, dan persetujuannya.',
     items: [
-      { to: '/hr/requests', icon: '📝', label: 'Pengajuan', desc: 'Cuti & lembur' },
+      { to: '/hr/requests', icon: '📝', label: 'Pengajuan', desc: 'Libur & lembur' },
       { to: '/hr/approvals', icon: '✅', label: 'Persetujuan',
         desc: approver ? 'Antrean persetujuan' : 'Antrean persetujuan (hanya manajer yang menyetujui)' },
     ],
@@ -42,7 +42,7 @@ const groups = (approver) => [
     items: [
       { to: '/hr/payroll', icon: '🧾', label: 'Penggajian', desc: 'Periode gaji & slip' },
       { to: '/hr/thr', icon: '🎁', label: 'THR', desc: 'Tunjangan Hari Raya' },
-      { to: '/hr/benefit-fund', icon: '🩺', label: 'Dana Kesejahteraan', desc: 'Klaim sakit & dana pensiun' },
+      { to: '/hr/benefit-fund', icon: '🩺', label: 'Tunjangan Kesehatan', desc: 'Klaim sakit & dana pensiun' },
       { to: '/hr/kasbon', icon: '💵', label: 'Kasbon', desc: 'Pinjaman & cicilan karyawan' },
     ],
   },
@@ -50,6 +50,7 @@ const groups = (approver) => [
     title: 'Kinerja',
     desc: 'Evaluasi dan target staf.',
     items: [
+      { to: '/hr/service-charge', icon: '💰', label: 'Service Charge', desc: 'Pot per cabang sebelum evaluasi' },
       { to: '/hr/performance', icon: '📈', label: 'Evaluasi', desc: 'Skor kinerja bulanan' },
       { to: '/hr/performance/adjustments', icon: '🔧', label: 'Penyesuaian Evaluasi', desc: 'Koreksi poin evaluasi' },
       { to: '/hr/kpi', icon: '🎯', label: 'KPI & Tugas Harian', desc: 'Target staf & pencapaian bulanan' },

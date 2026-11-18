@@ -310,6 +310,13 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		return nil, err
 	}
 
+	// Service Charge pots (service/service_charge.go): a branch with a pool for
+	// the month pays its members their share instead of fixed amount × grade.
+	scPools, err := NewServiceChargeResolver(ctx, qtx, period)
+	if err != nil {
+		return nil, err
+	}
+
 	periodMonth := period.PeriodMonth.Time
 	start := period.StartDate.Time
 	end := period.EndDate.Time
@@ -391,6 +398,12 @@ func GenerateLines(ctx context.Context, qtx *db.Queries, period *db.PayrollPerio
 		for _, c := range components {
 			amt := GradedComponentAmount(EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
 				c.ComponentGradeLinked, tier, c.WageComponentID)
+			// The pool share is already graded (it is the weight), so it replaces amt.
+			if share, ok, err := scPools.Amount(ctx, emp.BranchID, emp.ID, c.WageComponentID); err != nil {
+				return nil, err
+			} else if ok {
+				amt = share
+			}
 			compAmounts[c.WageComponentID] = amt
 			switch c.ComponentType {
 			case ComponentTypeAllowance:

@@ -529,6 +529,8 @@ export const importPerformancePolicies = (formData) => api.post('/hr/performance
 // Scores & breakdown
 export const getPerformanceScores     = (params) => api.get('/hr/performance/scores', { params });
 export const getEmployeePerformance   = (id, params) => api.get(`/hr/employees/${id}/performance`, { params });
+// Last 30 days, as the employee sees it on the kiosk (same server builder).
+export const getEmployeeAttendanceHistory = (id) => api.get(`/hr/employees/${id}/attendance-history`);
 
 // Violations & evaluation
 export const createPerformanceViolation = (data) => api.post('/hr/performance/violations', data);
@@ -538,6 +540,12 @@ export const resetAutoViolations        = (from, to) => api.delete('/hr/performa
 // Penyesuaian Evaluasi: dry-run a month's re-evaluation, then apply it
 export const getEvaluationAdjustments   = (month) => api.get('/hr/performance/adjustments', { params: { month } });
 export const applyEvaluationAdjustments = (month) => api.post('/hr/performance/adjustments/apply', null, { params: { month } });
+
+// Service Charge pot per branch per month (set before evaluation; payroll pays the shares)
+export const getServiceCharge          = (params) => api.get('/hr/service-charge', { params });
+export const saveServiceChargePool     = (data) => api.put('/hr/service-charge', data);
+export const deleteServiceChargePool   = (branchId, month) => api.delete('/hr/service-charge', { params: { branch_id: branchId, month } });
+export const setServiceChargeComponent = (wageComponentId) => api.put('/hr/service-charge/component', { wage_component_id: wageComponentId || null });
 
 // Attendance permits (Izin Masuk Siang / Izin Pulang Awal / Dinas Luar)
 export const getAttendancePermissions    = (params) => api.get('/hr/attendance-permissions', { params });
@@ -550,7 +558,7 @@ export const getAttendanceReviewSettings    = () => api.get('/hr/attendance/revi
 export const updateAttendanceReviewSettings = (data) => api.put('/hr/attendance/review-settings', data);
 export const setAttendanceReviewed          = (id, resolved = true) => api.post(`/hr/attendance/${id}/review`, { resolved });
 
-// ── HR: Cuti (Leave Management) ─────────────────────────────────────────────
+// ── HR: Libur (Leave Management) ─────────────────────────────────────────────
 // Leave types
 export const getLeaveTypes    = (params) => api.get('/hr/leave-types', { params });
 export const createLeaveType  = (data) => api.post('/hr/leave-types', data);
@@ -591,7 +599,7 @@ export const setLeaveBalanceQuota   = (id, data) => api.put(`/hr/employees/${id}
 export const getLeaveBalances       = (month) => api.get('/hr/leave-balances', { params: { month } });
 export const getEmployeeLeaveRequests = (id) => api.get(`/hr/employees/${id}/leave-requests`);
 
-// ── HR: Dana Kesejahteraan (health benefit + pension fund) ─────────────────
+// ── HR: Tunjangan Kesehatan (health benefit + pension fund) ────────────────
 export const getBenefitFundSummary   = (month) => api.get('/hr/benefit-fund/summary', { params: { month } });
 export const getBenefitFundEmployee  = (id, month) => api.get(`/hr/benefit-fund/employees/${id}`, { params: { month } });
 export const getBenefitClaims        = (params) => api.get('/hr/benefit-fund/claims', { params });
@@ -599,6 +607,10 @@ export const previewBenefitClaim     = (params) => api.get('/hr/benefit-fund/cla
 export const createBenefitClaim      = (data) => api.post('/hr/benefit-fund/claims', data);
 export const cancelBenefitClaim      = (id, note) => api.post(`/hr/benefit-fund/claims/${id}/cancel`, { note });
 export const payoutBenefitPension    = (id, data) => api.post(`/hr/benefit-fund/employees/${id}/payout`, data);
+
+// ── HR: Dana Kesejahteraan (retirement fund, separate from health) ────────
+export const getWelfareFundEmployee  = (id) => api.get(`/hr/welfare-fund/employees/${id}`);
+export const payoutWelfareFund       = (id, data) => api.post(`/hr/welfare-fund/employees/${id}/payout`, data);
 
 // ── HR: Kasbon (Cash Advance) ───────────────────────────────────────────────
 export const getKasbons      = (params) => api.get('/hr/kasbons', { params });

@@ -36,6 +36,7 @@ SELECT
     e.id, e.employee_code, e.full_name, e.dob, e.join_date,
     e.position_id, p.name AS position_name,
     e.branch_id, b.name AS branch_name,
+    e.division_id, d.name AS division_name, e.is_delivery_staff,
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
@@ -45,6 +46,7 @@ SELECT
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
+LEFT JOIN divisions d ON d.id = e.division_id
 WHERE e.id = $1;
 
 -- name: ResignEmployee :exec
@@ -118,9 +120,19 @@ UPDATE employees SET
     status = $15,
     employment_type = $16,
     contract_end_date = $17,
+    -- The home division belongs to a branch; moving branches drops it rather
+    -- than leave the employee counted in another branch's coverage. Set it
+    -- explicitly with SetEmployeeDivision.
+    division_id = CASE WHEN branch_id = $6 THEN division_id ELSE NULL END,
     updated_at = now()
 WHERE id = $18
 RETURNING id;
+
+-- name: SetEmployeeDivision :exec
+-- Home division: which division the employee is counted in for manpower
+-- planning (a day's shift assignment may override it). Unrelated to the job
+-- position, which drives the wage structure.
+UPDATE employees SET division_id = $2, updated_at = now() WHERE id = $1;
 
 -- name: UpdateEmployeePhotoPath :exec
 UPDATE employees SET photo_path = $1, updated_at = now() WHERE id = $2;

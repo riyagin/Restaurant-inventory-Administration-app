@@ -18,7 +18,7 @@ import (
 	"inventory-app/server-go/internal/service"
 )
 
-// BenefitFundHandler serves Dana Kesejahteraan Karyawan (health benefit + pension
+// BenefitFundHandler serves Tunjangan Kesehatan (health benefit + pension
 // fund). Business rules live in service/benefit_fund.go.
 type BenefitFundHandler struct {
 	pool    *pgxpool.Pool
@@ -44,7 +44,7 @@ func benefitErrStatus(err error) (int, string) {
 	case errors.Is(err, service.ErrBenefitAccountsGone):
 		return http.StatusInternalServerError, err.Error()
 	}
-	return http.StatusInternalServerError, "gagal memproses dana kesejahteraan: " + err.Error()
+	return http.StatusInternalServerError, "gagal memproses tunjangan kesehatan: " + err.Error()
 }
 
 func parseISODate(s string) (time.Time, error) {
@@ -85,7 +85,7 @@ func (h *BenefitFundHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		PeriodMonth: pgtype.Date{Time: month, Valid: true},
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan dana kesejahteraan")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil ringkasan tunjangan kesehatan")
 		return
 	}
 	if rows == nil {
@@ -289,7 +289,7 @@ func (h *BenefitFundHandler) CreateClaim(w http.ResponseWriter, r *http.Request)
 	if s := strings.TrimSpace(body.LeaveRequestID); s != "" {
 		lid, err := parseUUID(s)
 		if err != nil {
-			respondError(w, http.StatusBadRequest, "pengajuan cuti tidak valid")
+			respondError(w, http.StatusBadRequest, "pengajuan libur tidak valid")
 			return
 		}
 		leaveID = pgtype.UUID{Bytes: lid, Valid: true}

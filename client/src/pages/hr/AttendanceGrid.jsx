@@ -113,8 +113,8 @@ const LEGEND = [
   { bg: '#fff0e0', border: '#ff7043', label: 'Anomali Ganda' },
   { bg: '#e8f5e9', border: '#9e9e9e', label: 'Tanpa Shift (S)' },
   { bg: '#ffebee', border: '#ef5350', label: 'Absen' },
-  { bg: '#e3f2fd', border: '#42a5f5', label: 'Cuti' },
-  { bg: '#e3f2fd', border: '#42a5f5', label: 'Absen saat Cuti (!)' },
+  { bg: '#e3f2fd', border: '#42a5f5', label: 'Libur' },
+  { bg: '#e3f2fd', border: '#42a5f5', label: 'Absen saat Libur (!)' },
   { bg: '#f3e5f5', border: '#ab47bc', label: 'Libur' },
   { bg: '#f5f5f5', border: '#e0e0e0', label: 'Tidak Ada Data' },
 ];
@@ -131,7 +131,7 @@ function cellTooltip(iso, rec) {
   const dateLabel = new Date(iso + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' });
   if (!rec) return `${dateLabel}\nTidak ada data`;
 
-  const STATUS_LABEL = { present: 'Hadir', absent: 'Absen', leave: 'Cuti', holiday: 'Libur' };
+  const STATUS_LABEL = { present: 'Hadir', absent: 'Absen', leave: 'Libur', holiday: 'Libur Nasional' };
   const lines = [`${dateLabel}`, `Status: ${STATUS_LABEL[rec.status] ?? rec.status}`];
 
   const ci = fmtTime(rec.check_in);
@@ -141,7 +141,7 @@ function cellTooltip(iso, rec) {
   if (rec.is_late)             lines.push(`Terlambat ${rec.late_minutes} mnt`);
   if (rec.is_early_leave)      lines.push(`Pulang awal ${rec.early_leave_minutes} mnt`);
   if (rec.is_missing_checkout) lines.push('Tidak absen pulang');
-  if (rec.is_leave_punch)      lines.push('Absen saat cuti (perlu ditinjau)');
+  if (rec.is_leave_punch)      lines.push('Absen saat libur (perlu ditinjau)');
   if (rec.no_shift)            lines.push('Tanpa shift — tidak dinilai terlambat/pulang awal');
   return lines.join('\n');
 }
@@ -440,7 +440,7 @@ export default function AttendanceGrid() {
                 {/* summary headers */}
                 <th style={{ ...summaryTh('#2e7d32'), borderLeft: '2px solid #e0e0e0' }} title="Hadir">H</th>
                 <th style={summaryTh('#c62828')} title="Absen">A</th>
-                <th style={summaryTh('#1565c0')} title="Cuti">C</th>
+                <th style={summaryTh('#1565c0')} title="Libur">LB</th>
                 <th style={summaryTh('#e65100')} title="Terlambat">L</th>
               </tr>
             </thead>

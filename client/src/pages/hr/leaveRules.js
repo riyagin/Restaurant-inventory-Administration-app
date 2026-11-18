@@ -1,7 +1,7 @@
 import { createLeaveRequest } from '../../api';
 
 import { todayWIB } from '../../time';
-// Shared leave rules for every form that creates a leave request (Cuti,
+// Shared leave rules for every form that creates a leave request (Libur,
 // Pengajuan, Perencanaan Tenaga Kerja). The server is authoritative for both
 // rules; this module only warns early and previews.
 //

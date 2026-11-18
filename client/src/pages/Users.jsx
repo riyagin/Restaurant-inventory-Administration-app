@@ -17,8 +17,8 @@ const ROLES = [
 const ROLE_NOTES = {
   staff: 'Akses penuh operasional & HR, kecuali laporan dan log aktivitas. Tidak dapat menyetujui pengajuan.',
   hr: 'Hanya modul HR, dengan dasbor sendiri. Tidak dapat menyetujui pengajuan.',
-  branch_operator: 'Satu cabang saja: cek & koreksi absensi, ajukan cuti, lembur, dan kasbon untuk karyawan cabang tersebut. Tidak dapat menyetujui pengajuan.',
-  manager: 'Akses penuh, termasuk menyetujui kasbon, cuti, dan lembur.',
+  branch_operator: 'Satu cabang saja: cek & koreksi absensi, ajukan libur, lembur, dan kasbon untuk karyawan cabang tersebut. Tidak dapat menyetujui pengajuan.',
+  manager: 'Akses penuh, termasuk menyetujui kasbon, libur, dan lembur.',
   admin: 'Akses penuh kecuali persetujuan pengajuan.',
   superuser: 'Seluruh akses tanpa terkecuali, termasuk persetujuan pengajuan. Navigasi ditandai merah tua saat login. Berikan hanya kepada pemilik.',
 };

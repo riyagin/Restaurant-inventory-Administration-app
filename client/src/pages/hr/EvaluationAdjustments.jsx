@@ -18,13 +18,13 @@ import { canApprove } from '../../roles';
 // "Terapkan" is pressed.
 
 const REASONS = {
-  stale_absence:   { label: 'Pinalti alpa basi',     hint: 'Hari ini sudah tercatat hadir/cuti, tapi pinalti alpa dari evaluasi malam masih menempel.', color: '#2e7d32', bg: '#e8f5e9' },
+  stale_absence:   { label: 'Pinalti alpa basi',     hint: 'Hari ini sudah tercatat hadir/libur, tapi pinalti alpa dari evaluasi malam masih menempel.', color: '#2e7d32', bg: '#e8f5e9' },
   not_scored:      { label: 'Belum dinilai',          hint: 'Data absen masuk setelah evaluasi malam, jadi pelanggarannya belum pernah dibuat.',        color: '#c62828', bg: '#fdecea' },
   absence_recount: { label: 'Alpa dihitung ulang',    hint: 'Toleransi alpa bulanan dan alpa berturut-turut dihitung ulang dari alpa yang sebenarnya.',   color: '#6a1b9a', bg: '#f3e5f5' },
   recalculated:    { label: 'Dihitung ulang',         hint: 'Dihitung ulang dari data absensi terbaru.',                                                   color: '#455a64', bg: '#eceff1' },
 };
 
-const STATUS_LABEL = { present: 'Hadir', absent: 'Alpa', leave: 'Cuti', holiday: 'Libur' };
+const STATUS_LABEL = { present: 'Hadir', absent: 'Alpa', leave: 'Libur', holiday: 'Libur Nasional' };
 
 const fmtDay = (iso) =>
   new Date(iso + 'T00:00:00').toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' });
@@ -263,7 +263,7 @@ export default function EvaluationAdjustments() {
             <Tile value={data.removed} label="Pelanggaran akan dihapus" tone={data.removed ? 'good' : undefined} />
             <Tile value={data.added} label="Pelanggaran akan ditambah" tone={data.added ? 'bad' : undefined} />
             <Tile value={data.new_absent} label="Hari tanpa data → alpa" tone={data.new_absent ? 'bad' : undefined} />
-            <Tile value={data.leave_punches.length} label="Absen saat cuti (tinjau)" tone={data.leave_punches.length ? 'bad' : undefined} />
+            <Tile value={data.leave_punches.length} label="Absen saat libur (tinjau)" tone={data.leave_punches.length ? 'bad' : undefined} />
             <Tile value={data.review_days.length} label="Datang/pulang jauh di luar shift" tone={data.review_days.length ? 'bad' : undefined} />
           </div>
 
@@ -354,11 +354,11 @@ export default function EvaluationAdjustments() {
             )}
           </div>
 
-          <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.5rem' }}>Absen saat Cuti</h2>
+          <h2 style={{ fontSize: '1.05rem', margin: '0 0 0.5rem' }}>Absen saat Libur</h2>
           <div className="card" style={{ overflowX: 'auto' }}>
             <p style={{ margin: '0 0 0.6rem', color: '#555', fontSize: '0.84rem' }}>
-              Karyawan absen di hari cuti yang sudah disetujui. Status tetap <strong>cuti</strong>, jadi hari ini tidak
-              dinilai terlambat/pulang awal dan tidak dipotong. Jika karyawan sebenarnya bekerja, batalkan cutinya atau
+              Karyawan absen di hari libur yang sudah disetujui. Status tetap <strong>libur</strong>, jadi hari ini tidak
+              dinilai terlambat/pulang awal dan tidak dipotong. Jika karyawan sebenarnya bekerja, batalkan liburnya atau
               ubah statusnya di <Link to="/hr/attendance/corrections">Koreksi Kehadiran</Link>.
             </p>
             {data.leave_punches.length === 0 ? (

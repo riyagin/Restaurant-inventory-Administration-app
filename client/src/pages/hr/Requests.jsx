@@ -18,7 +18,7 @@ const STATUS_COLORS = {
   cancelled: { bg: '#eef1f6', color: '#667' },
 };
 const TYPE_META = {
-  leave:    { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0' },
+  leave:    { label: 'Libur',   bg: '#e3f2fd', color: '#1565c0' },
   overtime: { label: 'Lembur', bg: '#fff3e0', color: '#b45309' },
   permission: { label: 'Izin', bg: '#e0f2f1', color: '#00695c' },
 };
@@ -144,7 +144,7 @@ export default function Requests() {
           <button className="btn btn-primary" onClick={() => setShowAjukan(v => !v)}>+ Ajukan ▾</button>
           {showAjukan && (
             <div style={{ position: 'absolute', right: 0, top: '110%', background: '#fff', border: '1px solid #e3e6ec', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.12)', zIndex: 50, minWidth: 160 }}>
-              <button style={menuItem} onClick={() => { setCreateType('leave'); setShowAjukan(false); }}>Cuti</button>
+              <button style={menuItem} onClick={() => { setCreateType('leave'); setShowAjukan(false); }}>Libur</button>
               <button style={menuItem} onClick={() => { setCreateType('overtime'); setShowAjukan(false); }}>Lembur</button>
               <button style={menuItem} onClick={() => { setCreateType('permission'); setShowAjukan(false); }}>Izin</button>
             </div>
@@ -158,7 +158,7 @@ export default function Requests() {
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
         <select value={filters.type} onChange={e => setFilters({ ...filters, type: e.target.value })} style={{ ...inp, width: 'auto', margin: 0 }}>
           <option value="">Semua jenis</option>
-          <option value="leave">Cuti</option>
+          <option value="leave">Libur</option>
           <option value="overtime">Lembur</option>
           <option value="permission">Izin</option>
         </select>
@@ -240,18 +240,18 @@ function LeaveCreateModal({ onClose, onSaved }) {
   const submit = async () => {
     setError('');
     if (!form.employee_id) { setError('Pilih karyawan.'); return; }
-    if (!form.leave_type_id) { setError('Pilih jenis cuti.'); return; }
+    if (!form.leave_type_id) { setError('Pilih jenis libur.'); return; }
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
     try { if (await submitLeaveRequest(form)) onSaved(); }
-    catch (err) { setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.'); }
+    catch (err) { setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.'); }
     finally { setSaving(false); }
   };
 
   return (
     <div style={overlay} onClick={onClose}>
       <div className="card" style={modal} onClick={e => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>Pengajuan Cuti Baru</h3>
+        <h3 style={{ marginTop: 0 }}>Pengajuan Libur Baru</h3>
         {error && <div style={errBox}>{error}</div>}
 
         <label style={lbl}>Karyawan</label>
@@ -260,7 +260,7 @@ function LeaveCreateModal({ onClose, onSaved }) {
           {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_code})</option>)}
         </select>
 
-        <label style={lbl}>Jenis Cuti</label>
+        <label style={lbl}>Jenis Libur</label>
         <select value={form.leave_type_id} onChange={e => setForm({ ...form, leave_type_id: e.target.value })} style={inp}>
           <option value="">— Pilih jenis —</option>
           {types.map(t => <option key={t.id} value={t.id}>{t.name}{t.uses_quota ? ' (kuota)' : ''}{!t.is_paid ? ' — tanpa gaji' : ''}</option>)}

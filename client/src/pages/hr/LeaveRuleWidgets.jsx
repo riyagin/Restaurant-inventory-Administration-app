@@ -68,7 +68,7 @@ export function BackdatedBadge({ request }) {
 
 // Sick leave without a doctor's note costs 8 points and a day's pay per day
 // (Kebijakan HRD V.3.6). Shown for leave types flagged requires_doctor_note;
-// HR can still record the note later from the Cuti list.
+// HR can still record the note later from the Libur list.
 export function DoctorNoteField({ type, checked, onChange }) {
   if (!type?.requires_doctor_note) return null;
   return (

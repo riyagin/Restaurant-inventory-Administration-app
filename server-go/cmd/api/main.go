@@ -224,6 +224,7 @@ func main() {
 	attendanceDeviceHandler := handler.NewAttendanceDeviceHandler(pool, queries)
 	attendanceDeviceHandler.SetUploadsDir(cfg.UploadsDir)
 	performanceHandler := handler.NewPerformanceHandler(pool, queries)
+	serviceChargeHandler := handler.NewServiceChargeHandler(pool, queries)
 	leaveHandler := handler.NewLeaveHandler(pool, queries)
 	kasbonHandler := handler.NewKasbonHandler(pool, queries)
 	kasbonHandler.SetUploadsDir(cfg.UploadsDir)
@@ -243,6 +244,7 @@ func main() {
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 	thrHandler := handler.NewThrHandler(pool, queries)
 	benefitFundHandler := handler.NewBenefitFundHandler(pool, queries)
+	welfareFundHandler := handler.NewWelfareFundHandler(pool, queries)
 	thrHandler.SetUploadsDir(cfg.UploadsDir)
 	hrDocumentsHandler := handler.NewHRDocumentsHandler(pool, queries)
 	hrDocumentsHandler.SetUploadsDir(cfg.UploadsDir)
@@ -297,6 +299,7 @@ func main() {
 		r.Post("/api/hr/attendance/device/event", attendanceDeviceHandler.Event)
 		r.Get("/api/hr/attendance/device/employees", attendanceDeviceHandler.Employees)
 		r.Get("/api/hr/attendance/device/today", attendanceDeviceHandler.Today)
+		r.Get("/api/hr/attendance/device/employees/{code}/history", attendanceDeviceHandler.History)
 		r.Post("/api/hr/attendance/device/face", attendanceDeviceHandler.EnrollFace)
 		r.Post("/api/hr/attendance/device/face/sync", attendanceDeviceHandler.FaceSync)
 	})
@@ -571,6 +574,9 @@ func main() {
 			r.Post("/api/hr/employees", hrEmployeesHandler.Create)
 			r.Put("/api/hr/employees/{id}", hrEmployeesHandler.Update)
 			r.Post("/api/hr/employees/{id}/transition-permanent", hrEmployeesHandler.TransitionToPermanent)
+			// Read, but HR-gated: the detail above is open to everyone, a
+			// day-by-day record of lateness is not.
+			r.Get("/api/hr/employees/{id}/attendance-history", hrEmployeesHandler.AttendanceHistory)
 			r.Post("/api/hr/employees/{id}/resign", hrEmployeesHandler.Resign)
 			r.Delete("/api/hr/employees/{id}", hrEmployeesHandler.Delete)
 			r.Post("/api/hr/employees/{id}/photo", hrEmployeesHandler.UploadPhoto)
@@ -701,6 +707,11 @@ func main() {
 			r.Delete("/api/hr/performance/violations/{id}", performanceHandler.DeleteViolation)
 			// Manual backfill
 			r.Post("/api/hr/performance/evaluate", performanceHandler.Evaluate)
+			// Service Charge pot per branch per month (set before evaluation)
+			r.Get("/api/hr/service-charge", serviceChargeHandler.Get)
+			r.Put("/api/hr/service-charge", serviceChargeHandler.Save)
+			r.Delete("/api/hr/service-charge", serviceChargeHandler.Delete)
+			r.Put("/api/hr/service-charge/component", serviceChargeHandler.SetComponent)
 		})
 
 		// HR Leave management.
@@ -765,7 +776,7 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
 			r.Post("/api/hr/kasbons/{id}/cancel", kasbonHandler.Cancel)
 		})
-		// Dana Kesejahteraan Karyawan (health benefit + pension fund, migration 085).
+		// Tunjangan Kesehatan (health benefit + pension fund, migration 085).
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireHRAccess)
 			r.Get("/api/hr/benefit-fund/summary", benefitFundHandler.Summary)
@@ -779,6 +790,16 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireManager)
 			r.Post("/api/hr/benefit-fund/employees/{id}/payout", benefitFundHandler.Payout)
+		})
+		// Dana Kesejahteraan Karyawan (retirement fund, migration 090): balance and
+		// ledger for the employee tab; the payout, like the pension's, is manager-only.
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireHRAccess)
+			r.Get("/api/hr/welfare-fund/employees/{id}", welfareFundHandler.EmployeeDetail)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(appmiddleware.RequireManager)
+			r.Post("/api/hr/welfare-fund/employees/{id}/payout", welfareFundHandler.Payout)
 		})
 
 		// HR Kasbon approval / rejection — manager only.

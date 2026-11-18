@@ -129,6 +129,7 @@ SELECT
     e.id, e.employee_code, e.full_name, e.dob, e.join_date,
     e.position_id, p.name AS position_name,
     e.branch_id, b.name AS branch_name,
+    e.division_id, d.name AS division_name, e.is_delivery_staff,
     e.phone, e.email, e.address, e.national_id,
     e.bank_name, e.bank_account_number, e.bank_account_holder,
     e.photo_path, e.user_id, e.status,
@@ -138,6 +139,7 @@ SELECT
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
+LEFT JOIN divisions d ON d.id = e.division_id
 WHERE e.id = $1
 `
 
@@ -151,6 +153,9 @@ type GetEmployeeByIDRow struct {
 	PositionName      string             `json:"position_name"`
 	BranchID          pgtype.UUID        `json:"branch_id"`
 	BranchName        string             `json:"branch_name"`
+	DivisionID        pgtype.UUID        `json:"division_id"`
+	DivisionName      pgtype.Text        `json:"division_name"`
+	IsDeliveryStaff   bool               `json:"is_delivery_staff"`
 	Phone             pgtype.Text        `json:"phone"`
 	Email             pgtype.Text        `json:"email"`
 	Address           pgtype.Text        `json:"address"`
@@ -184,6 +189,9 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmpl
 		&i.PositionName,
 		&i.BranchID,
 		&i.BranchName,
+		&i.DivisionID,
+		&i.DivisionName,
+		&i.IsDeliveryStaff,
 		&i.Phone,
 		&i.Email,
 		&i.Address,
@@ -380,6 +388,23 @@ func (q *Queries) ListPositions(ctx context.Context) ([]*Position, error) {
 	return items, nil
 }
 
+const setEmployeeDivision = `-- name: SetEmployeeDivision :exec
+UPDATE employees SET division_id = $2, updated_at = now() WHERE id = $1
+`
+
+type SetEmployeeDivisionParams struct {
+	ID         pgtype.UUID `json:"id"`
+	DivisionID pgtype.UUID `json:"division_id"`
+}
+
+// Home division: which division the employee is counted in for manpower
+// planning (a day's shift assignment may override it). Unrelated to the job
+// position, which drives the wage structure.
+func (q *Queries) SetEmployeeDivision(ctx context.Context, arg *SetEmployeeDivisionParams) error {
+	_, err := q.db.Exec(ctx, setEmployeeDivision, arg.ID, arg.DivisionID)
+	return err
+}
+
 const updateEmployee = `-- name: UpdateEmployee :one
 UPDATE employees SET
     employee_code = $1,
@@ -399,6 +424,10 @@ UPDATE employees SET
     status = $15,
     employment_type = $16,
     contract_end_date = $17,
+    -- The home division belongs to a branch; moving branches drops it rather
+    -- than leave the employee counted in another branch's coverage. Set it
+    -- explicitly with SetEmployeeDivision.
+    division_id = CASE WHEN branch_id = $6 THEN division_id ELSE NULL END,
     updated_at = now()
 WHERE id = $18
 RETURNING id

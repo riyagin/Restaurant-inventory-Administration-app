@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   getPerformanceScores, getBranches, getEmployeePerformance,
   createPerformanceViolation, getEmployees, evaluatePerformance, resetAutoViolations,
-  getPerformancePolicies,
+  getPerformancePolicies, getServiceCharge,
 } from '../../api';
 
 import { todayWIB } from '../../time';
@@ -15,7 +15,7 @@ const RULE_LABELS = {
   no_punch: 'Tidak Absen Masuk & Pulang',
   half_day_late: 'Setengah Hari (Datang Siang)',
   half_day_early: 'Setengah Hari (Pulang Awal)',
-  absent_no_leave: 'Absen Tanpa Cuti',
+  absent_no_leave: 'Absen Tanpa Libur',
   consecutive_absent: 'Absen Berturut-turut',
   unpaid_leave: 'Izin Satu Hari',
   sick_no_note: 'Sakit Tanpa Surat Dokter',
@@ -77,6 +77,29 @@ function DailyAllowancePanel({ a }) {
         <div style={{ fontSize: '0.75rem', color: '#667' }}>sebelum tunjangan, lembur & potongan</div>
       </div>
     </div>
+  );
+}
+
+// One employee's slice of their branch's Service Charge pot.
+function ServiceChargeCell({ s, pool }) {
+  if (!s) return <span style={{ color: '#bbb' }} title="Tidak ikut service charge">—</span>;
+  if (!s.hasPool) return <span style={{ color: '#a06800', fontSize: '0.8rem' }}>Pot belum diatur</span>;
+  if (s.weight === 0) {
+    return (
+      <>
+        <div style={{ color: '#c5221f', fontWeight: 500 }}>{fmtIDR(0)}</div>
+        <div style={{ fontSize: '0.75rem', color: '#999' }}>Tidak berhak (grade {s.grade})</div>
+      </>
+    );
+  }
+  return (
+    <>
+      <div style={{ fontWeight: 500 }}>{fmtIDR(s.amount)}</div>
+      <div style={{ fontSize: '0.75rem', color: '#999' }}
+        title={pool ? `Pot ${fmtIDR(pool.pool_amount)} ÷ ${pool.total_weight / 100} bagian` : undefined}>
+        {s.weight === 100 ? '1 bagian' : `${s.weight}% bagian`}{s.grade ? ` · grade ${s.grade}` : ''}
+      </div>
+    </>
   );
 }
 
@@ -239,6 +262,10 @@ export default function PerformanceDashboard() {
   const [branches, setBranches] = useState([]);
   const [rows, setRows] = useState([]);
   const [allowanceTotal, setAllowanceTotal] = useState(0);
+  // Service Charge pot per branch (set on /hr/service-charge) and each member's
+  // share. Recomputed by the server from the current scores, so re-evaluating
+  // moves the shares: a share someone forfeits goes to the rest of the branch.
+  const [sc, setSc] = useState(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [showModal, setShowModal] = useState(false);
@@ -258,7 +285,20 @@ export default function PerformanceDashboard() {
       .then(r => { setRows(r.data?.data || []); setAllowanceTotal(r.data?.daily_allowance_total || 0); })
       .catch(() => { setRows([]); setAllowanceTotal(0); })
       .finally(() => setLoading(false));
+    getServiceCharge(branchId ? { month, branch_id: branchId } : { month })
+      .then(r => setSc(r.data))
+      .catch(() => setSc(null));
   };
+
+  // employee id → { amount, weight }, and branch id → its pot (null = not set).
+  const scByEmployee = {};
+  const scPoolByBranch = {};
+  for (const b of sc?.branches || []) {
+    scPoolByBranch[b.branch_id] = b.pool ? b : null;
+    for (const s of b.shares || []) scByEmployee[s.employee_id] = { ...s, hasPool: !!b.pool };
+  }
+  const scMissing = (sc?.branches || []).filter(b => !b.pool && b.member_count > 0);
+  const scShownTotal = rows.reduce((t, r) => t + (scByEmployee[r.id]?.hasPool ? scByEmployee[r.id].amount : 0), 0);
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [month, branchId]);
 
@@ -288,6 +328,7 @@ export default function PerformanceDashboard() {
             {evaluating ? 'Mengevaluasi…' : 'Evaluasi Bulan Ini'}
           </button>
           <button onClick={() => setShowModal(true)} className="btn btn-primary">Tambah Pelanggaran Manual</button>
+          <Link to="/hr/service-charge" className="btn btn-secondary">Service Charge</Link>
           <Link to="/hr/performance/adjustments" className="btn btn-secondary">Penyesuaian</Link>
           <Link to="/hr/performance/policies" className="btn btn-secondary">Kebijakan</Link>
         </div>
@@ -315,6 +356,18 @@ export default function PerformanceDashboard() {
         </div>
       </div>
 
+      {sc && !sc.component && (
+        <div className="card" style={{ marginBottom: '1.25rem', background: '#fff8e1', fontSize: '0.9rem' }}>
+          Komponen Service Charge belum dipilih — <Link to="/hr/service-charge">atur di halaman Service Charge</Link>.
+        </div>
+      )}
+      {sc?.component && scMissing.length > 0 && (
+        <div className="card" style={{ marginBottom: '1.25rem', background: '#fff8e1', fontSize: '0.9rem' }}>
+          Service charge {month} belum diatur untuk <b>{scMissing.map(b => b.branch_name).join(', ')}</b> — payroll cabang tersebut
+          memakai nominal tetap × grade. <Link to="/hr/service-charge">Atur sekarang</Link>.
+        </div>
+      )}
+
       <div className="card" style={{ overflowX: 'auto' }}>
         {loading ? (
           <p style={{ color: '#888', textAlign: 'center', padding: '1.5rem' }}>Memuat…</p>
@@ -323,7 +376,7 @@ export default function PerformanceDashboard() {
         ) : (
           <table>
             <thead>
-              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th><th title="Uang makan tunai harian yang diterima bulan ini">Uang Makan</th><th></th></tr>
+              <tr><th></th><th>Karyawan</th><th>Cabang</th><th>Skor</th><th>Pelanggaran</th><th title="Uang makan tunai harian yang diterima bulan ini">Uang Makan</th><th title="Bagian dari pot service charge cabang, sesuai bobot grade">Service Charge</th><th></th></tr>
             </thead>
             <tbody>
               {rows.map(r => (
@@ -345,6 +398,9 @@ export default function PerformanceDashboard() {
                         </>
                       )}
                     </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <ServiceChargeCell s={scByEmployee[r.id]} pool={scPoolByBranch[r.branch_id]} />
+                    </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button
                         className="btn btn-secondary btn-sm"
@@ -356,7 +412,7 @@ export default function PerformanceDashboard() {
                   </tr>
                   {expanded === r.id && (
                     <tr>
-                      <td colSpan={7} style={{ padding: 0 }}>
+                      <td colSpan={8} style={{ padding: 0 }}>
                         <ViolationBreakdown employeeId={r.id} month={month} />
                       </td>
                     </tr>
@@ -370,6 +426,7 @@ export default function PerformanceDashboard() {
                   Total uang makan bulan ini (dibukukan sebagai beban saat payroll diposting)
                 </td>
                 <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtIDR(allowanceTotal)}</td>
+                <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }} title="Total bagian service charge karyawan yang tampil">{fmtIDR(scShownTotal)}</td>
                 <td></td>
               </tr>
             </tfoot>

@@ -1,10 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/middleware"
@@ -128,17 +132,9 @@ func (h *AttendanceDeviceHandler) Today(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// slotVerified: a manager's manual value is the server's own record; a punch is
-// verified unless its time came from an unchecked device clock. Fingerprint
-// imports carry the scanner's clock and are therefore not verified either.
+// slotVerified: see service.SlotVerified (shared with the history view).
 func slotVerified(at pgtype.Timestamptz, src, timeSource pgtype.Text) bool {
-	if !at.Valid {
-		return false
-	}
-	if src.Valid && src.String == "manual" && !timeSource.Valid {
-		return true // correction keyed in by a manager, not a punch
-	}
-	return timeSource.Valid && timeSource.String != service.PunchTimeDevice
+	return service.SlotVerified(at, src, timeSource)
 }
 
 func textPtr(t pgtype.Text) *string {
@@ -155,4 +151,61 @@ func tsPtr(t pgtype.Timestamptz) *time.Time {
 	}
 	v := t.Time
 	return &v
+}
+
+// History — GET /api/hr/attendance/device/employees/{code}/history
+//
+// The kiosk's per-employee view: the last service.HistoryWindowDays days as the
+// server recorded them (lateness, early leave, missing check-out, leave, Alpha
+// and whether the allowance covered it). The same builder serves the HR
+// employee page, so the two can never disagree.
+//
+// Scoped like the "today" list: an employee of the device's branch, or a
+// visitor who punched on this device inside the window.
+func (h *AttendanceDeviceHandler) History(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	dev, ok := middleware.DeviceFromCtx(ctx)
+	if !ok || dev == nil {
+		respondError(w, http.StatusUnauthorized, "perangkat tidak dikenal")
+		return
+	}
+	if !dev.BranchID.Valid {
+		respondError(w, http.StatusBadRequest, "perangkat belum terhubung ke cabang")
+		return
+	}
+	emp, err := h.queries.GetEmployeeByCode(ctx, strings.TrimSpace(chi.URLParam(r, "code")))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+
+	today := service.TodayWIB()
+	if !emp.BranchID.Valid || emp.BranchID.Bytes != dev.BranchID.Bytes {
+		var visited bool
+		if err := h.pool.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM attendance_punches
+			               WHERE employee_id = $1 AND device_id = $2 AND work_date >= $3)`,
+			emp.ID, dev.DeviceID,
+			pgtype.Date{Time: today.AddDate(0, 0, -(service.HistoryWindowDays - 1)), Valid: true},
+		).Scan(&visited); err != nil || !visited {
+			respondError(w, http.StatusForbidden, "karyawan bukan bagian dari cabang perangkat ini")
+			return
+		}
+	}
+
+	hist, err := service.GetAttendanceHistory(ctx, h.pool, h.queries, emp.ID, today)
+	if err != nil {
+		log.Printf("attendance device history (emp=%s): %v", emp.EmployeeCode, err)
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat kehadiran")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"employee_code": emp.EmployeeCode,
+		"full_name":     emp.FullName,
+		"history":       hist,
+	})
 }

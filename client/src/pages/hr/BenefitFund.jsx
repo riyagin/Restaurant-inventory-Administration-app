@@ -8,8 +8,9 @@ import CurrencyInput from '../../components/CurrencyInput';
 import SearchSelect from '../../components/SearchSelect';
 import { canApprove } from '../../roles';
 
-// Dana Kesejahteraan Karyawan. Each employee has a monthly allowance (wage
-// component type "Dana Kesejahteraan"). Sick claims are paid from that month's
+// Tunjangan Kesehatan (formerly "Dana Kesejahteraan" — that name now belongs to
+// the separate retirement fund on the employee page). Each employee has a monthly allowance (wage
+// component type "Tunjangan Kesehatan"). Sick claims are paid from that month's
 // allowance; anything above it becomes a kasbon. On payday the unused part of the
 // month moves to the pension fund, which is paid out on resignation.
 
@@ -74,11 +75,11 @@ export default function BenefitFund() {
   return (
     <div>
       <div className="page-header">
-        <h1>Dana Kesejahteraan</h1>
+        <h1>Tunjangan Kesehatan</h1>
         <button className="btn btn-primary" onClick={() => setClaimFor('')}>+ Klaim Sakit</button>
       </div>
       <p style={{ color: '#667', fontSize: '0.88rem', marginTop: '-0.5rem', maxWidth: '760px' }}>
-        Jatah bulanan dari perusahaan (komponen gaji tipe <em>Dana Kesejahteraan</em>). Klaim sakit dibayar dari jatah bulan itu;
+        Jatah bulanan dari perusahaan (komponen gaji tipe <em>Tunjangan Kesehatan</em>). Klaim sakit dibayar dari jatah bulan itu;
         kelebihannya menjadi kasbon. Saat gajian, sisa jatah yang tidak terpakai dipindah ke dana pensiun, yang dicairkan saat karyawan resign.
       </p>
 
@@ -111,7 +112,7 @@ export default function BenefitFund() {
             {loading && <tr><td colSpan={8} style={emptyTd}>Memuat…</td></tr>}
             {!loading && rows.length === 0 && (
               <tr><td colSpan={8} style={emptyTd}>
-                Belum ada karyawan dengan dana kesejahteraan. Tambahkan komponen bertipe <em>Dana Kesejahteraan</em> di{' '}
+                Belum ada karyawan dengan tunjangan kesehatan. Tambahkan komponen bertipe <em>Tunjangan Kesehatan</em> di{' '}
                 <Link to="/hr/wage-components">Komponen Gaji</Link>, lalu pasang di struktur upah karyawan.
               </td></tr>
             )}
@@ -257,7 +258,7 @@ function ClaimModal({ presetEmployeeId, accounts, onClose, onSaved }) {
               <Row k="Kelebihan → kasbon" v={fmtIDR(excess)} bold={excess > 0} color={excess > 0 ? '#a06800' : undefined} />
             </>}
             {!allowance.open && <div style={{ color: '#c5221f', marginTop: '0.3rem' }}>Penggajian bulan ini sudah ditutup — klaim tidak bisa dicatat ke bulan ini.</div>}
-            {allowance.monthly_amount === 0 && <div style={{ color: '#c5221f', marginTop: '0.3rem' }}>Karyawan ini tidak punya komponen Dana Kesejahteraan.</div>}
+            {allowance.monthly_amount === 0 && <div style={{ color: '#c5221f', marginTop: '0.3rem' }}>Karyawan ini tidak punya komponen Tunjangan Kesehatan.</div>}
           </div>
         )}
 

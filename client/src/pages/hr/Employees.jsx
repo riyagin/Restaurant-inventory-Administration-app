@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getEmployees, getBranches, getPositions, getContractAlerts } from '../../api';
+import { getEmployees, getBranches, getDivisions, getPositions, getContractAlerts } from '../../api';
 import PersonAvatar from '../../components/PersonAvatar';
 import { canUseHR } from '../../roles';
 
@@ -66,11 +66,13 @@ export default function Employees() {
   const [rows, setRows]         = useState([]);
   const [total, setTotal]       = useState(0);
   const [branches, setBranches] = useState([]);
+  const [divisions, setDivisions] = useState([]);
   const [positions, setPositions] = useState([]);
   const [loading, setLoading]   = useState(true);
 
   const [q, setQ]                 = useState('');
   const [branchId, setBranchId]   = useState('');
+  const [divisionId, setDivisionId] = useState(''); // '' | 'none' | division id
   const [positionId, setPositionId] = useState('');
   const [status, setStatus]       = useState('');
   const [employmentType, setEmploymentType] = useState('');
@@ -88,7 +90,7 @@ export default function Employees() {
 
   const load = () => {
     setLoading(true);
-    getEmployees({ q, branch_id: branchId, position_id: positionId, status, employment_type: employmentType, face, sort, dir, page, limit })
+    getEmployees({ q, branch_id: branchId, division_id: divisionId, position_id: positionId, status, employment_type: employmentType, face, sort, dir, page, limit })
       .then(r => {
         setRows(r.data?.data || []);
         setTotal(r.data?.total || 0);
@@ -99,11 +101,12 @@ export default function Employees() {
 
   useEffect(() => {
     getBranches().then(r => setBranches(r.data)).catch(() => {});
+    getDivisions().then(r => setDivisions(r.data || [])).catch(() => {});
     getPositions().then(r => setPositions(r.data)).catch(() => {});
     getContractAlerts().then(r => setAlerts(r.data?.data || [])).catch(() => setAlerts([]));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, positionId, status, employmentType, face, sort, dir, page]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, divisionId, positionId, status, employmentType, face, sort, dir, page]);
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -184,9 +187,20 @@ export default function Employees() {
           </div>
           <div className="form-group" style={{ margin: 0, flex: '1 1 160px' }}>
             <label>Cabang</label>
-            <select value={branchId} onChange={e => { setPage(1); setBranchId(e.target.value); }}>
+            <select value={branchId} onChange={e => { setPage(1); setBranchId(e.target.value); setDivisionId(''); }}>
               <option value="">Semua Cabang</option>
               {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ margin: 0, flex: '1 1 160px' }}>
+            <label>Divisi</label>
+            <select value={divisionId} onChange={e => { setPage(1); setDivisionId(e.target.value); }}>
+              <option value="">Semua Divisi</option>
+              <option value="none">Tanpa divisi</option>
+              {/* Each branch owns its own divisions (several "Dapur"s), so name the branch unless one is picked. */}
+              {divisions.filter(d => !branchId || d.branch_id === branchId).map(d => (
+                <option key={d.id} value={d.id}>{branchId ? d.name : `${d.name} — ${d.branch_name}`}</option>
+              ))}
             </select>
           </div>
           <div className="form-group" style={{ margin: 0, flex: '1 1 160px' }}>
@@ -233,6 +247,7 @@ export default function Employees() {
               <SortHeader col="name">Nama</SortHeader>
               <th>Jabatan</th>
               <th>Cabang</th>
+              <th>Divisi</th>
               <th>Tipe</th>
               <SortHeader col="join_date">Tgl Bergabung</SortHeader>
               <th>Status</th>
@@ -241,9 +256,9 @@ export default function Employees() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
+              <tr><td colSpan={10} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Memuat...</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={9} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
+              <tr><td colSpan={10} style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>Belum ada karyawan</td></tr>
             ) : rows.map(e => (
               <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/hr/employees/${e.id}`)}>
                 <td>
@@ -253,6 +268,7 @@ export default function Employees() {
                 <td style={{ fontWeight: 500 }}>{e.full_name}</td>
                 <td>{e.position_name}</td>
                 <td>{e.branch_name}</td>
+                <td style={e.division_name ? undefined : { color: '#999' }}>{e.division_name || '-'}</td>
                 <td><EmploymentBadge type={e.employment_type} contractEnd={e.contract_end_date} /></td>
                 <td style={{ color: '#888', fontSize: '0.85rem' }}>{fmtDate(e.join_date)}</td>
                 <td><StatusBadge status={e.status} /></td>

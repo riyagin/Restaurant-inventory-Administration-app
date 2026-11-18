@@ -76,7 +76,7 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
     const days = employee.days.filter(d => d.date >= day.date && d.date <= endDate);
     const target = shiftId && days.some(d => d.status === 'cuti') ? days.filter(d => d.status !== 'cuti') : days;
     const skipped = days.length - target.length;
-    if (target.length === 0) { setError('Semua tanggal di rentang ini adalah hari cuti.'); return; }
+    if (target.length === 0) { setError('Semua tanggal di rentang ini adalah hari libur.'); return; }
     setSaving(true);
     try {
       const { data } = await saveShiftAssignments({
@@ -89,7 +89,7 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
       const parts = [];
       if (data.applied) parts.push(`${data.applied} hari disimpan`);
       if (data.pending) parts.push(`${data.pending} hari menunggu persetujuan manajer`);
-      if (skipped) parts.push(`${skipped} hari cuti dilewati`);
+      if (skipped) parts.push(`${skipped} hari libur dilewati`);
       onSaved(parts.join(', ') || 'Tidak ada perubahan');
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan jadwal shift.');
@@ -117,12 +117,12 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
 
         {onLeave && (
           <div style={{ background: '#1f2937', color: '#f9fafb', borderRadius: 6, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
-            Cuti disetujui: <b>{day.leave_type || 'Cuti'}</b>. Batalkan cutinya di Manajemen Cuti untuk menjadwalkan shift.
+            Libur disetujui: <b>{day.leave_type || 'Libur'}</b>. Batalkan liburnya di Manajemen Libur untuk menjadwalkan shift.
           </div>
         )}
         {day.status === 'pending' && (
           <div style={{ background: '#fed7aa', color: '#9a3412', borderRadius: 6, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
-            Ada pengajuan cuti <b>{day.leave_type}</b> yang menunggu persetujuan pada hari ini.
+            Ada pengajuan libur <b>{day.leave_type}</b> yang menunggu persetujuan pada hari ini.
           </div>
         )}
 
@@ -184,7 +184,7 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
               <input type="date" style={inputStyle} value={endDate} min={day.date} max={lastDate}
                 onChange={e => setEndDate(e.target.value)} />
               <p style={{ fontSize: 11, color: '#9ca3af', margin: '4px 0 0' }}>
-                Isi rentang untuk menjadwalkan beberapa hari sekaligus (dalam periode yang ditampilkan). Hari cuti dilewati.
+                Isi rentang untuk menjadwalkan beberapa hari sekaligus (dalam periode yang ditampilkan). Hari libur dilewati.
               </p>
             </div>
 
@@ -204,7 +204,7 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
           <div>
             {!onLeave && day.status !== 'pending' && (
               <button style={btn} onClick={onRequestLeave} title={past ? 'Pengajuan mundur tanggal perlu persetujuan manajer/pemilik' : ''}>
-                Ajukan Cuti…
+                Ajukan Libur…
               </button>
             )}
           </div>
@@ -462,7 +462,7 @@ export function ShiftCoverageView({ data, date, onCellClick }) {
         {pendingAware && day.pending_request_id && (
           <span style={{ fontSize: 10, color: '#c2410c' }}> → {shiftsById[day.pending_shift_id]?.code || 'hapus'}</span>
         )}
-        {day.status === 'pending' && <span style={{ fontSize: 10, color: '#c2410c' }}> (cuti?)</span>}
+        {day.status === 'pending' && <span style={{ fontSize: 10, color: '#c2410c' }}> (libur?)</span>}
       </div>
     ));
 
@@ -493,7 +493,7 @@ export function ShiftCoverageView({ data, date, onCellClick }) {
                   </th>
                 ))}
                 <th style={{ ...th, color: '#6b7280' }}>Belum dijadwalkan</th>
-                <th style={{ ...th, background: '#1f2937', color: '#f9fafb' }}>Cuti / Libur</th>
+                <th style={{ ...th, background: '#1f2937', color: '#f9fafb' }}>Libur</th>
               </tr>
             </thead>
             <tbody>

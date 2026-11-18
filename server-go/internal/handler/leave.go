@@ -48,12 +48,12 @@ func (h *LeaveHandler) ListLeaveTypes(w http.ResponseWriter, r *http.Request) {
 		types, err = h.queries.ListLeaveTypes(ctx)
 	}
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis libur")
 		return
 	}
 	flags, err := h.doctorNoteFlags(ctx)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis libur")
 		return
 	}
 	out := make([]leaveTypeView, 0, len(types))
@@ -133,7 +133,7 @@ func (h *LeaveHandler) CreateLeaveType(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" {
-		respondError(w, http.StatusBadRequest, "nama jenis cuti wajib diisi")
+		respondError(w, http.StatusBadRequest, "nama jenis libur wajib diisi")
 		return
 	}
 	isPaid := true
@@ -159,10 +159,10 @@ func (h *LeaveHandler) CreateLeaveType(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			respondError(w, http.StatusConflict, "nama jenis cuti sudah digunakan")
+			respondError(w, http.StatusConflict, "nama jenis libur sudah digunakan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal membuat jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal membuat jenis libur")
 		return
 	}
 
@@ -172,12 +172,12 @@ func (h *LeaveHandler) CreateLeaveType(w http.ResponseWriter, r *http.Request) {
 		Action:      "CREATE",
 		EntityType:  "leave_type",
 		EntityID:    lt.ID.Bytes,
-		Description: fmt.Sprintf("Membuat jenis cuti %s", lt.Name),
+		Description: fmt.Sprintf("Membuat jenis libur %s", lt.Name),
 	})
 
 	view, err := h.saveDoctorNoteFlag(ctx, lt, body.RequiresDoctorNote)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis libur")
 		return
 	}
 	respondJSON(w, http.StatusCreated, view)
@@ -197,7 +197,7 @@ func (h *LeaveHandler) UpdateLeaveType(w http.ResponseWriter, r *http.Request) {
 	}
 	body.Name = strings.TrimSpace(body.Name)
 	if body.Name == "" {
-		respondError(w, http.StatusBadRequest, "nama jenis cuti wajib diisi")
+		respondError(w, http.StatusBadRequest, "nama jenis libur wajib diisi")
 		return
 	}
 	isPaid := true
@@ -223,15 +223,15 @@ func (h *LeaveHandler) UpdateLeaveType(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "jenis cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "jenis libur tidak ditemukan")
 			return
 		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			respondError(w, http.StatusConflict, "nama jenis cuti sudah digunakan")
+			respondError(w, http.StatusConflict, "nama jenis libur sudah digunakan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal memperbarui jenis libur")
 		return
 	}
 
@@ -241,12 +241,12 @@ func (h *LeaveHandler) UpdateLeaveType(w http.ResponseWriter, r *http.Request) {
 		Action:      "UPDATE",
 		EntityType:  "leave_type",
 		EntityID:    id,
-		Description: fmt.Sprintf("Memperbarui jenis cuti %s", lt.Name),
+		Description: fmt.Sprintf("Memperbarui jenis libur %s", lt.Name),
 	})
 
 	view, err := h.saveDoctorNoteFlag(ctx, lt, body.RequiresDoctorNote)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan jenis libur")
 		return
 	}
 	respondJSON(w, http.StatusOK, view)
@@ -266,16 +266,16 @@ func (h *LeaveHandler) DeleteLeaveType(w http.ResponseWriter, r *http.Request) {
 	lt, err := h.queries.GetLeaveTypeByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "jenis cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "jenis libur tidak ditemukan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis libur")
 		return
 	}
 
 	refs, err := h.queries.CountLeaveTypeReferences(ctx, pgID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memeriksa penggunaan jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal memeriksa penggunaan jenis libur")
 		return
 	}
 
@@ -285,7 +285,7 @@ func (h *LeaveHandler) DeleteLeaveType(w http.ResponseWriter, r *http.Request) {
 			ID:       pgID,
 		})
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menonaktifkan jenis cuti")
+			respondError(w, http.StatusInternalServerError, "gagal menonaktifkan jenis libur")
 			return
 		}
 		_ = service.LogActivity(ctx, h.queries, service.LogParams{
@@ -294,10 +294,10 @@ func (h *LeaveHandler) DeleteLeaveType(w http.ResponseWriter, r *http.Request) {
 			Action:      "UPDATE",
 			EntityType:  "leave_type",
 			EntityID:    id,
-			Description: fmt.Sprintf("Menonaktifkan jenis cuti %s (masih dipakai pengajuan)", lt.Name),
+			Description: fmt.Sprintf("Menonaktifkan jenis libur %s (masih dipakai pengajuan)", lt.Name),
 		})
 		respondJSON(w, http.StatusOK, map[string]any{
-			"message":     "jenis cuti masih dipakai pengajuan, dinonaktifkan (bukan dihapus)",
+			"message":     "jenis libur masih dipakai pengajuan, dinonaktifkan (bukan dihapus)",
 			"deactivated": true,
 			"leave_type":  updated,
 		})
@@ -305,7 +305,7 @@ func (h *LeaveHandler) DeleteLeaveType(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.queries.DeleteLeaveType(ctx, pgID); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menghapus jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal menghapus jenis libur")
 		return
 	}
 
@@ -315,11 +315,11 @@ func (h *LeaveHandler) DeleteLeaveType(w http.ResponseWriter, r *http.Request) {
 		Action:      "DELETE",
 		EntityType:  "leave_type",
 		EntityID:    id,
-		Description: fmt.Sprintf("Menghapus jenis cuti %s", lt.Name),
+		Description: fmt.Sprintf("Menghapus jenis libur %s", lt.Name),
 	})
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"message":     "jenis cuti berhasil dihapus",
+		"message":     "jenis libur berhasil dihapus",
 		"deactivated": false,
 	})
 }
@@ -364,7 +364,7 @@ func (h *LeaveHandler) ListLeaveRequests(w http.ResponseWriter, r *http.Request)
 
 	rows, err := h.queries.ListLeaveRequests(ctx, params)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan libur")
 		return
 	}
 	ids := make([]pgtype.UUID, 0, len(rows))
@@ -373,12 +373,12 @@ func (h *LeaveHandler) ListLeaveRequests(w http.ResponseWriter, r *http.Request)
 	}
 	notes, err := h.requestDoctorNotes(ctx, ids)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan libur")
 		return
 	}
 	needsNote, err := h.doctorNoteFlags(ctx)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan libur")
 		return
 	}
 	out := make([]leaveRequestView, 0, len(rows))
@@ -439,7 +439,7 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	}
 	typeID, err := parseUUID(strings.TrimSpace(body.LeaveTypeID))
 	if err != nil {
-		respondError(w, http.StatusBadRequest, "jenis cuti tidak valid")
+		respondError(w, http.StatusBadRequest, "jenis libur tidak valid")
 		return
 	}
 	startDate, err := time.Parse("2006-01-02", strings.TrimSpace(body.StartDate))
@@ -481,10 +481,10 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 
 	if _, err := h.queries.GetLeaveTypeByID(ctx, pgTypeID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "jenis cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "jenis libur tidak ditemukan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis libur")
 		return
 	}
 
@@ -498,11 +498,11 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		EndDate:    pgEnd,
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memeriksa tumpang tindih cuti")
+		respondError(w, http.StatusInternalServerError, "gagal memeriksa tumpang tindih libur")
 		return
 	}
 	if len(overlaps) > 0 {
-		respondError(w, http.StatusConflict, "rentang tanggal bertabrakan dengan pengajuan cuti lain yang masih aktif")
+		respondError(w, http.StatusConflict, "rentang tanggal bertabrakan dengan pengajuan libur lain yang masih aktif")
 		return
 	}
 
@@ -534,19 +534,19 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		IsBackdated: isBackdated,
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
 		return
 	}
 	if body.HasDoctorNote {
 		if err := h.queries.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
 			ID: req.ID, HasDoctorNote: true,
 		}); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan cuti")
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
 			return
 		}
 	}
 
-	desc := fmt.Sprintf("Mengajukan cuti %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount)
+	desc := fmt.Sprintf("Mengajukan libur %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount)
 	if isBackdated {
 		desc += " — MUNDUR TANGGAL, menunggu persetujuan manajer/pemilik"
 	}
@@ -652,7 +652,7 @@ func (h *LeaveHandler) rejectOne(ctx context.Context, id [16]byte, note pgtype.T
 		Action:      "UPDATE",
 		EntityType:  "leave_request",
 		EntityID:    id,
-		Description: "Menolak pengajuan cuti",
+		Description: "Menolak pengajuan libur",
 	})
 
 	return updated, nil
@@ -677,13 +677,13 @@ func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaveRequestNotFound):
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "pengajuan libur tidak ditemukan")
 		case errors.Is(err, errLeaveRequestNotPending):
 			respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat disetujui")
 		case errors.Is(err, service.ErrQuotaExceeded):
 			respondError(w, http.StatusBadRequest, err.Error())
 		default:
-			respondError(w, http.StatusInternalServerError, "gagal menyetujui pengajuan cuti")
+			respondError(w, http.StatusInternalServerError, "gagal menyetujui pengajuan libur")
 		}
 		return
 	}
@@ -710,11 +710,11 @@ func (h *LeaveHandler) RejectLeaveRequest(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaveRequestNotFound):
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "pengajuan libur tidak ditemukan")
 		case errors.Is(err, errLeaveRequestNotPending):
 			respondError(w, http.StatusBadRequest, "hanya pengajuan berstatus menunggu yang dapat ditolak")
 		default:
-			respondError(w, http.StatusInternalServerError, "gagal menolak pengajuan cuti")
+			respondError(w, http.StatusInternalServerError, "gagal menolak pengajuan libur")
 		}
 		return
 	}
@@ -739,7 +739,7 @@ type bulkDecisionResult struct {
 func (h *LeaveHandler) BulkApproveLeaveRequests(w http.ResponseWriter, r *http.Request) {
 	var body bulkDecisionBody
 	if err := parseBody(r, &body); err != nil || len(body.IDs) == 0 {
-		respondError(w, http.StatusBadRequest, "daftar ID pengajuan cuti wajib diisi")
+		respondError(w, http.StatusBadRequest, "daftar ID pengajuan libur wajib diisi")
 		return
 	}
 
@@ -770,7 +770,7 @@ func (h *LeaveHandler) BulkApproveLeaveRequests(w http.ResponseWriter, r *http.R
 func (h *LeaveHandler) BulkRejectLeaveRequests(w http.ResponseWriter, r *http.Request) {
 	var body bulkDecisionBody
 	if err := parseBody(r, &body); err != nil || len(body.IDs) == 0 {
-		respondError(w, http.StatusBadRequest, "daftar ID pengajuan cuti wajib diisi")
+		respondError(w, http.StatusBadRequest, "daftar ID pengajuan libur wajib diisi")
 		return
 	}
 
@@ -798,8 +798,8 @@ func (h *LeaveHandler) BulkRejectLeaveRequests(w http.ResponseWriter, r *http.Re
 }
 
 var (
-	errLeaveRequestNotFound      = errors.New("pengajuan cuti tidak ditemukan")
-	errLeaveRequestNotPending    = errors.New("pengajuan cuti sudah tidak menunggu persetujuan")
+	errLeaveRequestNotFound      = errors.New("pengajuan libur tidak ditemukan")
+	errLeaveRequestNotPending    = errors.New("pengajuan libur sudah tidak menunggu persetujuan")
 	errLeaveRequestBackdatedBulk = errors.New("pengajuan mundur tanggal harus disetujui satu per satu")
 )
 
@@ -810,15 +810,15 @@ func bulkErrorMessage(err error) string {
 		errors.Is(err, errLeaveRequestBackdatedBulk) {
 		return err.Error()
 	}
-	return "gagal memproses pengajuan cuti"
+	return "gagal memproses pengajuan libur"
 }
 
 func approveDescription(req *db.LeaveRequest, res *service.ApproveResult) string {
-	desc := fmt.Sprintf("Menyetujui pengajuan cuti (%d hari kehadiran ditandai cuti)", res.CoveredDays)
+	desc := fmt.Sprintf("Menyetujui pengajuan libur (%d hari kehadiran ditandai libur)", res.CoveredDays)
 	if req.IsBackdated {
-		desc = "Menyetujui pengajuan cuti MUNDUR TANGGAL " +
+		desc = "Menyetujui pengajuan libur MUNDUR TANGGAL " +
 			req.StartDate.Time.Format("2006-01-02") + " s/d " + req.EndDate.Time.Format("2006-01-02") +
-			fmt.Sprintf(" (%d hari kehadiran ditandai cuti)", res.CoveredDays)
+			fmt.Sprintf(" (%d hari kehadiran ditandai libur)", res.CoveredDays)
 	}
 	return desc
 }
@@ -841,23 +841,23 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "pengajuan libur tidak ditemukan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan libur")
 		return
 	}
 	if !requireEmployeeInScope(w, r, h.queries, req.EmployeeID) {
 		return
 	}
 	if req.Status == "cancelled" || req.Status == "rejected" {
-		respondError(w, http.StatusBadRequest, "pengajuan cuti sudah tidak aktif")
+		respondError(w, http.StatusBadRequest, "pengajuan libur sudah tidak aktif")
 		return
 	}
 
 	leaveType, err := h.queries.GetLeaveTypeByID(ctx, req.LeaveTypeID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil jenis libur")
 		return
 	}
 
@@ -872,7 +872,7 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 	// Reverse quota + attendance side-effects only if the request was approved.
 	if req.Status == "approved" {
 		if err := service.CancelApprovedLeave(ctx, qtx, req, leaveType, service.TodayWIB()); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal membatalkan efek persetujuan cuti")
+			respondError(w, http.StatusInternalServerError, "gagal membatalkan efek persetujuan libur")
 			return
 		}
 	}
@@ -890,7 +890,7 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 		ID:           pgID,
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membatalkan pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal membatalkan pengajuan libur")
 		return
 	}
 
@@ -900,7 +900,7 @@ func (h *LeaveHandler) CancelLeaveRequest(w http.ResponseWriter, r *http.Request
 		Action:      "UPDATE",
 		EntityType:  "leave_request",
 		EntityID:    id,
-		Description: "Membatalkan pengajuan cuti",
+		Description: "Membatalkan pengajuan libur",
 	})
 
 	if err := tx.Commit(ctx); err != nil {
@@ -950,7 +950,7 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 
 	months, err := service.MonthlyLeaveBalances(ctx, h.queries, pgEmpID, year, today())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo libur")
 		return
 	}
 	unusedClosed := 0
@@ -988,7 +988,7 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 		DefaultQuota: service.DefaultMonthlyLeaveQuota,
 	})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo libur")
 		return
 	}
 
@@ -1035,7 +1035,7 @@ func (h *LeaveHandler) ListEmployeeLeaveRequests(w http.ResponseWriter, r *http.
 	ctx := r.Context()
 	rows, err := h.queries.ListLeaveRequestsByEmployee(ctx, pgtype.UUID{Bytes: id, Valid: true})
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat libur")
 		return
 	}
 	ids := make([]pgtype.UUID, 0, len(rows))
@@ -1044,7 +1044,7 @@ func (h *LeaveHandler) ListEmployeeLeaveRequests(w http.ResponseWriter, r *http.
 	}
 	notes, err := h.requestDoctorNotes(ctx, ids)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat libur")
 		return
 	}
 	type view struct {
@@ -1090,10 +1090,10 @@ func (h *LeaveHandler) SetDoctorNote(w http.ResponseWriter, r *http.Request) {
 	req, err := qtx.GetLeaveRequestByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "pengajuan cuti tidak ditemukan")
+			respondError(w, http.StatusNotFound, "pengajuan libur tidak ditemukan")
 			return
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan libur")
 		return
 	}
 	if err := qtx.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
@@ -1271,7 +1271,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		  AND lr.end_date   >= $1
 	`, startPg, endPg)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data libur")
 		return
 	}
 	defer leaveRows.Close()
@@ -1287,7 +1287,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		var empID, leaveTypeName, status string
 		var sd, ed pgtype.Date
 		if err := leaveRows.Scan(&empID, &sd, &ed, &leaveTypeName, &status); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal membaca data cuti")
+			respondError(w, http.StatusInternalServerError, "gagal membaca data libur")
 			return
 		}
 		entryStatus := "pending"
@@ -1306,7 +1306,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	if err := leaveRows.Err(); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membaca data cuti")
+		respondError(w, http.StatusInternalServerError, "gagal membaca data libur")
 		return
 	}
 
@@ -1329,7 +1329,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 			DefaultQuota: service.DefaultMonthlyLeaveQuota,
 		})
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+			respondError(w, http.StatusInternalServerError, "gagal mengambil saldo libur")
 			return
 		}
 		for _, rr := range rows {
@@ -1493,7 +1493,7 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if body.QuotaDays < 0 {
-		respondError(w, http.StatusBadRequest, "kuota cuti tidak boleh negatif")
+		respondError(w, http.StatusBadRequest, "kuota libur tidak boleh negatif")
 		return
 	}
 	month, err := time.Parse("2006-01", strings.TrimSpace(body.Month))
@@ -1520,7 +1520,7 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		Month:      pgtype.Date{Time: month, Valid: true},
 		QuotaDays:  body.QuotaDays,
 	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui kuota cuti")
+		respondError(w, http.StatusInternalServerError, "gagal memperbarui kuota libur")
 		return
 	}
 
@@ -1530,12 +1530,12 @@ func (h *LeaveHandler) SetLeaveBalanceQuota(w http.ResponseWriter, r *http.Reque
 		Action:      "UPDATE",
 		EntityType:  "leave_balance",
 		EntityID:    id,
-		Description: fmt.Sprintf("Mengatur jatah cuti %s bulan %s menjadi %d hari", emp.FullName, month.Format("01/2006"), body.QuotaDays),
+		Description: fmt.Sprintf("Mengatur jatah libur %s bulan %s menjadi %d hari", emp.FullName, month.Format("01/2006"), body.QuotaDays),
 	})
 
 	months, err := service.MonthlyLeaveBalances(ctx, h.queries, pgEmpID, month.Year(), today())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo cuti")
+		respondError(w, http.StatusInternalServerError, "gagal mengambil saldo libur")
 		return
 	}
 	respondJSON(w, http.StatusOK, months[month.Month()-1])

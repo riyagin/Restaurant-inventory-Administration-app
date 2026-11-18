@@ -253,6 +253,12 @@ func (p *PayrollPoster) post(ctx context.Context, periodID pgtype.UUID, actor uu
 	// Kesehatan and the sweep of whatever claims left unused into Dana Pensiun.
 	// Same transaction, so a period is never marked posted with the fund missing.
 	if _, err := PostBenefitFundPeriod(ctx, qtx, period, actor); err != nil {
+		return fmt.Errorf("tunjangan kesehatan: %w", err)
+	}
+
+	// Dana Kesejahteraan (migration 090): the period's retirement-fund
+	// contributions, same transaction for the same reason.
+	if _, err := PostWelfareFundPeriod(ctx, qtx, period, actor); err != nil {
 		return fmt.Errorf("dana kesejahteraan: %w", err)
 	}
 

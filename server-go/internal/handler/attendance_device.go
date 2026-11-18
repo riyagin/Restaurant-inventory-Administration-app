@@ -217,6 +217,16 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		deviceID = dev.DeviceID
 	}
 
+	// One employee's punches can arrive from several kiosks at once; serialise
+	// them so each rebuild sees the others' punches (service/attendance_sync.go).
+	// Taken before the client_event_id lookup, so two copies of one retried
+	// event cannot both miss each other either.
+	if err := service.LockEmployeeAttendance(ctx, tx, emp.ID); err != nil {
+		log.Printf("attendance device event: lock (emp=%s) failed: %v", employeeCode, err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
+		return
+	}
+
 	// Log the punch on the work day its shift window places it in (a check-out
 	// at 00:20 after a late shift belongs to the previous day), then rebuild that
 	// day: first punch = check-in, last = check-out, by the rostered shift.
@@ -238,9 +248,16 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	if isManual {
 		manualNote = fmt.Sprintf("Absen manual (visitor) oleh %s", recordedBy)
 	}
-	state, _, err := service.RebuildDay(ctx, qtx, emp.ID, workDate, sched, service.RebuildOptions{DeviceID: deviceID, Note: manualNote})
+	state, rec, err := service.RebuildDay(ctx, qtx, emp.ID, workDate, sched, service.RebuildOptions{DeviceID: deviceID, Note: manualNote})
 	if err != nil || state == nil {
 		log.Printf("attendance device event: RebuildDay(emp=%s date=%s) failed: %v", employeeCode, workDate.Format("2006-01-02"), err)
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
+		return
+	}
+	// A punch for a day the nightly job already judged (an offline kiosk
+	// flushing late) must lift the Alpha penalty that day was given.
+	if err := service.ReevaluateFinishedDay(ctx, qtx, rec); err != nil {
+		log.Printf("attendance device event: re-evaluate (emp=%s date=%s) failed: %v", employeeCode, workDate.Format("2006-01-02"), err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 		return
 	}

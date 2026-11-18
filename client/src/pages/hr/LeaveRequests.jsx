@@ -61,14 +61,14 @@ function CreateModal({ onClose, onSaved }) {
   const submit = async () => {
     setError('');
     if (!form.employee_id) { setError('Pilih karyawan.'); return; }
-    if (!form.leave_type_id) { setError('Pilih jenis cuti.'); return; }
+    if (!form.leave_type_id) { setError('Pilih jenis libur.'); return; }
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
     try {
       const created = await submitLeaveRequest(form);
       if (created) onSaved(created);
     } catch (err) {
-      setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan cuti.');
+      setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.');
     } finally {
       setSaving(false);
     }
@@ -77,7 +77,7 @@ function CreateModal({ onClose, onSaved }) {
   return (
     <div style={overlay} onClick={onClose}>
       <div className="card" style={modal} onClick={e => e.stopPropagation()}>
-        <h3 style={{ marginTop: 0 }}>Pengajuan Cuti Baru</h3>
+        <h3 style={{ marginTop: 0 }}>Pengajuan Libur Baru</h3>
         {error && <div style={errBox}>{error}</div>}
 
         <label style={lbl}>Karyawan</label>
@@ -86,7 +86,7 @@ function CreateModal({ onClose, onSaved }) {
           {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.employee_code})</option>)}
         </select>
 
-        <label style={lbl}>Jenis Cuti</label>
+        <label style={lbl}>Jenis Libur</label>
         <select value={form.leave_type_id} onChange={e => setForm({ ...form, leave_type_id: e.target.value })} style={inp}>
           <option value="">— Pilih jenis —</option>
           {types.map(t => <option key={t.id} value={t.id}>{t.name}{t.uses_quota ? ' (kuota)' : ''}{!t.is_paid ? ' — tanpa gaji' : ''}</option>)}
@@ -303,8 +303,8 @@ export default function LeaveRequests() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <h2 style={{ margin: 0 }}>Cuti</h2>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Pengajuan Cuti</button>
+        <h2 style={{ margin: 0 }}>Libur</h2>
+        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Pengajuan Libur</button>
       </div>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', borderBottom: '1px solid #e3e6ec' }}>

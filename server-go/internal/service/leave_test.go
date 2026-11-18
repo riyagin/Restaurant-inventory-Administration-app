@@ -154,7 +154,7 @@ func TestQuotaExceededErrorMatchesSentinel(t *testing.T) {
 	if !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatal("QuotaExceededError should match ErrQuotaExceeded")
 	}
-	if want := "jatah cuti 10/2026 tidak mencukupi: sisa 1 hari, dibutuhkan 2 hari"; err.Error() != want {
+	if want := "jatah libur 10/2026 tidak mencukupi: sisa 1 hari, dibutuhkan 2 hari"; err.Error() != want {
 		t.Errorf("message = %q, want %q", err.Error(), want)
 	}
 }

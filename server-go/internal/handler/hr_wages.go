@@ -32,7 +32,7 @@ func validComponentType(t string) bool {
 	switch t {
 	case service.ComponentTypeAllowance, service.ComponentTypeBonus,
 		service.ComponentTypeDeduction, service.ComponentTypeDailyAllowance,
-		service.ComponentTypeBenefitFund:
+		service.ComponentTypeBenefitFund, service.ComponentTypeWelfareFund:
 		return true
 	}
 	return false
@@ -113,7 +113,7 @@ func (h *HRWagesHandler) CreateComponent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !validComponentType(body.Type) {
-		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, atau benefit_fund")
+		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, benefit_fund, atau welfare_fund")
 		return
 	}
 	calcMethod, ok := resolveCalcMethod(body.CalcMethod)
@@ -184,7 +184,7 @@ func (h *HRWagesHandler) UpdateComponent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !validComponentType(body.Type) {
-		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, atau benefit_fund")
+		respondError(w, http.StatusBadRequest, "tipe komponen harus allowance, bonus, deduction, daily_allowance, benefit_fund, atau welfare_fund")
 		return
 	}
 	calcMethod, ok := resolveCalcMethod(body.CalcMethod)

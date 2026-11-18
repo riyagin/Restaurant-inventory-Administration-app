@@ -62,7 +62,7 @@ const (
 	codePrefix    = "SIM-DK-"
 	monthly       = int64(200_000)
 	baseSalary    = int64(3_000_000)
-	componentName = "Dana Kesejahteraan"
+	componentName = "Tunjangan Kesehatan"  // the benefit_fund component (renamed from "Dana Kesejahteraan" by migration 090)
 	openingSource = "benefit_fund_opening" // simulated history, source_id = employee
 )
 

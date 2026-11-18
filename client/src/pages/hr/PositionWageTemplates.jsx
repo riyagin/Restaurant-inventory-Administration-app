@@ -14,7 +14,8 @@ const TYPE_LABELS = {
   bonus: 'Bonus',
   deduction: 'Potongan',
   daily_allowance: 'Harian (Tunai)',
-  benefit_fund: 'Dana Kesejahteraan',
+  benefit_fund: 'Tunjangan Kesehatan',
+  welfare_fund: 'Dana Kesejahteraan',
 };
 
 // First day of next month (YYYY-MM-DD) — the usual date a pay change takes effect.

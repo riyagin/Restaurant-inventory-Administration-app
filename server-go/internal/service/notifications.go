@@ -226,7 +226,7 @@ func formatThousands(n int64) string {
 func approvalNotifications(ctx context.Context, pool *pgxpool.Pool) ([]Notification, error) {
 	queues := []struct{ kind, table, title, link string }{
 		{"kasbon", "kasbons", "Kasbon menunggu persetujuan", "/hr/approvals"},
-		{"leave", "leave_requests", "Pengajuan cuti menunggu persetujuan", "/hr/approvals"},
+		{"leave", "leave_requests", "Pengajuan libur menunggu persetujuan", "/hr/approvals"},
 		{"overtime", "overtime_requests", "Pengajuan lembur menunggu persetujuan", "/hr/approvals"},
 	}
 	out := []Notification{}

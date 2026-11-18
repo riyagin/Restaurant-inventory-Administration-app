@@ -488,7 +488,7 @@ func resolveShiftEntry(ctx context.Context, q db.DBTX, e shiftAssignmentEntry) (
 		WHERE lr.employee_id = $1 AND lr.status = 'approved' AND $2::date BETWEEN lr.start_date AND lr.end_date
 		LIMIT 1`, out.employeeID, pgtype.Date{Time: date, Valid: true}).Scan(&leaveName)
 	if err == nil {
-		return nil, shiftRule(http.StatusConflict, "%s sedang %s pada %s — batalkan cutinya dulu untuk menjadwalkan shift",
+		return nil, shiftRule(http.StatusConflict, "%s sedang %s pada %s — batalkan liburnya dulu untuk menjadwalkan shift",
 			out.employeeName, leaveName, fmtIndoDate(date))
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

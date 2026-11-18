@@ -346,9 +346,9 @@ export default function AttendanceCorrections() {
                       Hadir Tanpa Absen
                     </span>
                   ) : r.is_leave_punch ? (
-                    <span title="Karyawan absen di hari cuti yang sudah disetujui. Status tetap cuti; tinjau di Penyesuaian Evaluasi."
+                    <span title="Karyawan absen di hari libur yang sudah disetujui. Status tetap libur; tinjau di Penyesuaian Evaluasi."
                       style={{ background: '#e3f2fd', color: '#1565c0', padding: '0.15rem 0.5rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.76rem' }}>
-                      Absen saat Cuti
+                      Absen saat Libur
                     </span>
                   ) : r.no_shift ? (
                     <span title="Tidak ada shift di jadwal hari ini, jadi tidak dinilai terlambat atau pulang awal. Atur shiftnya di Rencana Tenaga Kerja."

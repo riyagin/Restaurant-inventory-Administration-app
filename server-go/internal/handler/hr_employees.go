@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -98,6 +99,36 @@ type employeeBody struct {
 	Status            string `json:"status"`
 	EmploymentType    string `json:"employment_type"`
 	ContractEndDate   string `json:"contract_end_date"`
+	// Home division for manpower planning — separate from the position, which
+	// drives the wage structure. Omitted = leave unchanged (callers that do not
+	// know about divisions, e.g. onboarding); null/"" = no division.
+	DivisionID *string `json:"division_id"`
+}
+
+// resolveEmployeeDivision validates a requested home division against the
+// branch the employee will belong to. Divisions are per-branch rows, so a
+// division of another branch would count the person in the wrong roster.
+func resolveEmployeeDivision(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, raw *string, branchID pgtype.UUID) (pgtype.UUID, error) {
+	id, err := optUUID(raw)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("divisi tidak valid")
+	}
+	if !id.Valid {
+		return id, nil
+	}
+	var divBranch pgtype.UUID
+	if err := q.QueryRow(ctx, `SELECT branch_id FROM divisions WHERE id = $1`, id).Scan(&divBranch); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgtype.UUID{}, fmt.Errorf("divisi tidak ditemukan")
+		}
+		return pgtype.UUID{}, fmt.Errorf("gagal memeriksa divisi")
+	}
+	if divBranch != branchID {
+		return pgtype.UUID{}, fmt.Errorf("divisi bukan milik cabang karyawan ini")
+	}
+	return id, nil
 }
 
 // normalizeEmployment validates the employment type + contract end date pair.
@@ -136,6 +167,8 @@ type employeeListRow struct {
 	PositionName    string      `json:"position_name"`
 	BranchID        pgtype.UUID `json:"branch_id"`
 	BranchName      string      `json:"branch_name"`
+	DivisionID      pgtype.UUID `json:"division_id"`
+	DivisionName    pgtype.Text `json:"division_name"`
 	EmploymentType  string      `json:"employment_type"`
 	ContractEndDate pgtype.Date `json:"contract_end_date"`
 	HasFace         bool        `json:"has_face"`
@@ -158,6 +191,8 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		branchID = b
 	}
 	positionID := strings.TrimSpace(q.Get("position_id"))
+	// "none" lists employees with no home division yet.
+	divisionFilter := strings.TrimSpace(q.Get("division_id"))
 	status := strings.TrimSpace(q.Get("status"))
 	employmentType := strings.TrimSpace(q.Get("employment_type"))
 	// Face enrollment filter: "enrolled" = has stored face data, "not" = missing it.
@@ -211,6 +246,16 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, positionID)
 		conds = append(conds, fmt.Sprintf("e.position_id = $%d::uuid", len(args)))
 	}
+	if divisionFilter == "none" {
+		conds = append(conds, "e.division_id IS NULL")
+	} else if divisionFilter != "" {
+		if _, err := parseUUID(divisionFilter); err != nil {
+			respondError(w, http.StatusBadRequest, "divisi tidak valid")
+			return
+		}
+		args = append(args, divisionFilter)
+		conds = append(conds, fmt.Sprintf("e.division_id = $%d::uuid", len(args)))
+	}
 	if status != "" && status != "all" {
 		args = append(args, status)
 		conds = append(conds, fmt.Sprintf("e.status = $%d", len(args)))
@@ -241,12 +286,14 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		    e.id, e.employee_code, e.full_name, e.join_date, e.status, e.photo_path,
 		    e.position_id, p.name AS position_name,
 		    e.branch_id, b.name AS branch_name,
+		    e.division_id, d.name AS division_name,
 		    e.employment_type, e.contract_end_date,
 		    (e.face_embedding IS NOT NULL) AS has_face,
 		    (SELECT fp.photo_path FROM employee_face_photos fp WHERE fp.employee_id = e.id ORDER BY fp.captured_at DESC, fp.created_at DESC LIMIT 1) AS face_photo_path
 		FROM employees e
 		JOIN positions p ON p.id = e.position_id
 		JOIN branches  b ON b.id = e.branch_id
+		LEFT JOIN divisions d ON d.id = e.division_id
 		%s
 		ORDER BY %s
 		LIMIT $%d OFFSET $%d`, whereClause, orderBy, limitIdx, offsetIdx)
@@ -265,6 +312,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 			&row.ID, &row.EmployeeCode, &row.FullName, &row.JoinDate, &row.Status, &row.PhotoPath,
 			&row.PositionID, &row.PositionName,
 			&row.BranchID, &row.BranchName,
+			&row.DivisionID, &row.DivisionName,
 			&row.EmploymentType, &row.ContractEndDate,
 			&row.HasFace, &row.FacePhotoPath,
 		); err != nil {
@@ -464,6 +512,12 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	divisionID, err := resolveEmployeeDivision(ctx, h.pool, body.DivisionID, branchID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -509,6 +563,12 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		respondError(w, http.StatusInternalServerError, "gagal membuat karyawan")
 		return
+	}
+	if divisionID.Valid {
+		if err := qtx.SetEmployeeDivision(ctx, &db.SetEmployeeDivisionParams{ID: newID, DivisionID: divisionID}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan divisi karyawan")
+			return
+		}
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
@@ -601,6 +661,14 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	var divisionID pgtype.UUID
+	if body.DivisionID != nil {
+		if divisionID, err = resolveEmployeeDivision(ctx, h.pool, body.DivisionID, branchID); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal memulai transaksi")
@@ -609,6 +677,8 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
+	// UpdateEmployee itself drops the home division when the branch changes;
+	// an explicit division_id in the body is applied after it.
 	_, err = qtx.UpdateEmployee(ctx, &db.UpdateEmployeeParams{
 		EmployeeCode:      body.EmployeeCode,
 		FullName:          body.FullName,
@@ -641,6 +711,12 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		respondError(w, http.StatusInternalServerError, "gagal memperbarui karyawan")
 		return
+	}
+	if body.DivisionID != nil {
+		if err := qtx.SetEmployeeDivision(ctx, &db.SetEmployeeDivisionParams{ID: pgID, DivisionID: divisionID}); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan divisi karyawan")
+			return
+		}
 	}
 
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
@@ -1178,4 +1254,32 @@ func (h *HREmployeesHandler) DeletePosition(w http.ResponseWriter, r *http.Reque
 	})
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "jabatan berhasil dihapus"})
+}
+
+// AttendanceHistory — GET /api/hr/employees/:id/attendance-history
+// The employee's last service.HistoryWindowDays days — exactly what the
+// employee sees on the kiosk (same builder).
+func (h *HREmployeesHandler) AttendanceHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "ID tidak valid")
+		return
+	}
+	ctx := r.Context()
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	if _, err := h.queries.GetEmployeeByID(ctx, pgID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
+		return
+	}
+	hist, err := service.GetAttendanceHistory(ctx, h.pool, h.queries, pgID, service.TodayWIB())
+	if err != nil {
+		log.Printf("attendance history (emp=%s): %v", id, err)
+		respondError(w, http.StatusInternalServerError, "gagal mengambil riwayat kehadiran")
+		return
+	}
+	respondJSON(w, http.StatusOK, hist)
 }

@@ -67,6 +67,7 @@ import AttendanceCorrections from './pages/hr/AttendanceCorrections';
 import FaceDashboard from './pages/hr/FaceDashboard';
 import FaceUnregistered from './pages/hr/FaceUnregistered';
 import PerformanceDashboard from './pages/hr/PerformanceDashboard';
+import ServiceCharge from './pages/hr/ServiceCharge';
 import EvaluationAdjustments from './pages/hr/EvaluationAdjustments';
 import PerformancePolicies from './pages/hr/PerformancePolicies';
 import Requests from './pages/hr/Requests';
@@ -238,10 +239,11 @@ const HR_GROUPS = [
   { label: 'Gaji & Tunjangan', links: [
     ['/hr/payroll', 'Penggajian'],
     ['/hr/thr', 'THR'],
-    ['/hr/benefit-fund', 'Dana Kesejahteraan'],
+    ['/hr/benefit-fund', 'Tunjangan Kesehatan'],
     ['/hr/kasbon', 'Kasbon'],
   ] },
   { label: 'Kinerja', links: [
+    ['/hr/service-charge', 'Service Charge'],
     ['/hr/performance', 'Evaluasi'],
     ['/hr/performance/adjustments', 'Penyesuaian Evaluasi'],
     ['/hr/kpi', 'KPI & Tugas Harian'],
@@ -610,6 +612,7 @@ export default function App() {
                 <Route path="/hr/attendance/settings" element={<RequireHR><AttendanceSettings /></RequireHR>} />
                 <Route path="/hr/face" element={<RequireHR><FaceDashboard /></RequireHR>} />
                 <Route path="/hr/face/unregistered" element={<RequireHR><FaceUnregistered /></RequireHR>} />
+                <Route path="/hr/service-charge" element={<RequireHR><ServiceCharge /></RequireHR>} />
                 <Route path="/hr/performance" element={<RequireHR><PerformanceDashboard /></RequireHR>} />
                 <Route path="/hr/performance/adjustments" element={<RequireHR><EvaluationAdjustments /></RequireHR>} />
                 <Route path="/hr/performance/policies" element={<RequireHR><PerformancePolicies /></RequireHR>} />

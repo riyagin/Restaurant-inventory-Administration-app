@@ -12,7 +12,8 @@ import (
 	"inventory-app/server-go/internal/db"
 )
 
-// Dana Kesejahteraan Karyawan — employer-funded health benefit + pension fund.
+// Tunjangan Kesehatan — employer-funded health benefit + pension fund (formerly
+// labelled "Dana Kesejahteraan"; that name now belongs to welfare_fund.go).
 // See migration 085 for the money flow. In short, per employee and month M:
 //
 //	sick claim in M      covered = min(claim, M's allowance − already covered in M)
@@ -59,7 +60,7 @@ const (
 )
 
 var (
-	ErrBenefitNoAllowance   = errors.New("karyawan tidak memiliki komponen dana kesejahteraan pada tanggal klaim")
+	ErrBenefitNoAllowance   = errors.New("karyawan tidak memiliki komponen tunjangan kesehatan pada tanggal klaim")
 	ErrBenefitMonthClosed   = errors.New("penggajian bulan klaim sudah ditutup; dana bulan itu sudah dialihkan ke dana pensiun")
 	ErrBenefitFutureDate    = errors.New("tanggal tidak boleh di masa depan")
 	ErrBenefitKasbonLocked  = errors.New("kasbon kelebihan klaim sudah dicairkan; klaim tidak dapat dibatalkan")
@@ -498,7 +499,7 @@ func PostBenefitFundPeriod(ctx context.Context, qtx *db.Queries, period *db.Payr
 		if memo == "" {
 			memo = "Tanpa Cabang"
 		}
-		lines = append(lines, Dr(resolveWageAccount(ctx, qtx, b, name), byBranch[b]).WithMemo("iuran dana kesejahteraan "+memo))
+		lines = append(lines, Dr(resolveWageAccount(ctx, qtx, b, name), byBranch[b]).WithMemo("iuran tunjangan kesehatan "+memo))
 	}
 	lines = append(lines, Cr(healthAcct, totalContrib).WithMemo("iuran bulan ini"))
 	if totalSweep > 0 {
@@ -512,7 +513,7 @@ func PostBenefitFundPeriod(ctx context.Context, qtx *db.Queries, period *db.Payr
 		Date:        period.EndDate.Time,
 		SourceType:  SourceBenefitFund,
 		SourceID:    period.ID.Bytes,
-		Description: fmt.Sprintf("Dana kesejahteraan karyawan %s", month.Format("2006-01")),
+		Description: fmt.Sprintf("Tunjangan kesehatan karyawan %s", month.Format("2006-01")),
 		CreatedBy:   actor,
 		Lines:       lines,
 	})
@@ -632,7 +633,7 @@ func settleFinalMonth(ctx context.Context, qtx *db.Queries, in PayoutInput, heal
 		Date:        date,
 		SourceType:  SourceBenefitFund,
 		SourceID:    in.EmployeeID.Bytes,
-		Description: fmt.Sprintf("Dana kesejahteraan bulan terakhir %s — %s", month.Format("2006-01"), in.EmployeeName),
+		Description: fmt.Sprintf("Tunjangan kesehatan bulan terakhir %s — %s", month.Format("2006-01"), in.EmployeeName),
 		CreatedBy:   in.Actor,
 		Lines:       lines,
 	})

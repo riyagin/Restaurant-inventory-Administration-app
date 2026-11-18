@@ -12,7 +12,7 @@ const RULE_LABELS = {
   missing_checkout: 'Tidak Absen Pulang',
   missing_checkin: 'Tidak Absen Masuk',
   no_punch: 'Tidak Absen Masuk & Pulang',
-  absent_no_leave: 'Absen Tanpa Cuti',
+  absent_no_leave: 'Absen Tanpa Libur',
   consecutive_absent: 'Absen Berturut-turut',
   unpaid_leave: 'Izin Satu Hari',
   sick_no_note: 'Sakit Tanpa Surat Dokter',

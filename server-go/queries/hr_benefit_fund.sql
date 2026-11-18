@@ -1,4 +1,4 @@
--- Dana Kesejahteraan Karyawan (health benefit + pension fund). See migration 085.
+-- Tunjangan Kesehatan (health benefit + pension fund). See migration 085.
 
 -- name: GetBenefitMonthlyAmount :one
 -- The employee's monthly benefit allowance: the sum of 'benefit_fund' components on

@@ -1165,11 +1165,22 @@ func (h *PayrollHandler) regenerateSingle(ctx context.Context, qtx *db.Queries, 
 	}
 	tier := grades.Resolve(perfScore)
 
+	// Service Charge pot share — same resolver as service.GenerateLines.
+	scPools, err := service.NewServiceChargeResolver(ctx, qtx, period)
+	if err != nil {
+		return err
+	}
+
 	compAmounts := make(map[pgtype.UUID]int64, len(components))
 	var allowanceTotal, bonusTotal, deductionTotal int64
 	for _, c := range components {
 		amt := service.GradedComponentAmount(service.EffectiveComponentAmount(c.ComponentCalcMethod, c.Amount, presentDays),
 			c.ComponentGradeLinked, tier, c.WageComponentID)
+		if share, ok, err := scPools.Amount(ctx, emp.BranchID, empID, c.WageComponentID); err != nil {
+			return err
+		} else if ok {
+			amt = share
+		}
 		compAmounts[c.WageComponentID] = amt
 		switch c.ComponentType {
 		case service.ComponentTypeAllowance:

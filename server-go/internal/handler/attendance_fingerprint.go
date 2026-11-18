@@ -183,11 +183,27 @@ func (h *AttendanceHandler) FingerprintConfirm(w http.ResponseWriter, r *http.Re
 	}
 
 	// ── Phase 3: rebuild each touched day from its punches ───────────────────
+	// Same per-employee lock as kiosk events (service/attendance_sync.go), all
+	// taken up front in id order so two imports cannot deadlock each other.
+	lockIDs := make([]pgtype.UUID, 0, len(order))
+	for _, k := range order {
+		lockIDs = append(lockIDs, touched[k].empID)
+	}
+	if err := service.LockEmployeesAttendance(ctx, tx, lockIDs); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran sidik jari")
+		return
+	}
 	matched := 0
 	for _, k := range order {
 		d := touched[k]
-		if _, _, rerr := service.RebuildDay(ctx, qtx, d.empID, d.date, d.sched, service.RebuildOptions{}); rerr != nil {
+		_, rec, rerr := service.RebuildDay(ctx, qtx, d.empID, d.date, d.sched, service.RebuildOptions{})
+		if rerr != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran sidik jari")
+			return
+		}
+		// Imports are usually of past days the nightly job already judged.
+		if err := service.ReevaluateFinishedDay(ctx, qtx, rec); err != nil {
+			respondError(w, http.StatusInternalServerError, "gagal mengevaluasi ulang kehadiran sidik jari")
 			return
 		}
 		matched++

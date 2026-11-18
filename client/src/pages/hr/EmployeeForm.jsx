@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   getEmployee, createEmployee, updateEmployee,
-  getBranches, getPositions, createPosition,
+  getBranches, getDivisions, getPositions, createPosition,
   uploadEmployeePhoto, deleteEmployeePhoto, getUsers,
   uploadUrl,
 } from '../../api';
@@ -11,7 +11,7 @@ import SearchSelect from '../../components/SearchSelect';
 
 const empty = {
   employee_code: '', full_name: '', dob: '', join_date: '',
-  position_id: '', branch_id: '',
+  position_id: '', branch_id: '', division_id: '',
   phone: '', email: '', address: '', national_id: '',
   bank_name: '', bank_account_number: '', bank_account_holder: '',
   status: 'active', employment_type: 'permanent', contract_end_date: '',
@@ -27,6 +27,7 @@ export default function EmployeeForm() {
 
   const [form, setForm]         = useState(empty);
   const [branches, setBranches] = useState([]);
+  const [divisions, setDivisions] = useState([]);
   const [users, setUsers] = useState([]);
   const [positions, setPositions] = useState([]);
   const [photoPath, setPhotoPath] = useState('');
@@ -39,6 +40,7 @@ export default function EmployeeForm() {
 
   useEffect(() => {
     getBranches().then(r => setBranches(r.data)).catch(() => {});
+    getDivisions().then(r => setDivisions(r.data || [])).catch(() => {});
     getPositions().then(r => setPositions(r.data)).catch(() => {});
     getUsers().then(r => setUsers(r.data || [])).catch(() => {});
   }, []);
@@ -54,6 +56,7 @@ export default function EmployeeForm() {
         join_date: toDateInput(e.join_date),
         position_id: e.position_id || '',
         branch_id: e.branch_id || '',
+        division_id: e.division_id || '',
         phone: e.phone || '',
         email: e.email || '',
         address: e.address || '',
@@ -71,6 +74,12 @@ export default function EmployeeForm() {
   }, [id, isEdit]);
 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
+
+  // Divisions belong to a branch, so only the selected branch's are offered.
+  const branchDivisions = useMemo(
+    () => divisions.filter(d => d.branch_id === form.branch_id),
+    [divisions, form.branch_id],
+  );
 
   const userOptions = useMemo(
     () => users.map(u => ({ value: u.id, label: u.username, sub: u.role })),
@@ -189,10 +198,24 @@ export default function EmployeeForm() {
             </div>
             <div className="form-group">
               <label>Cabang *</label>
-              <select value={form.branch_id} onChange={set('branch_id')}>
+              <select
+                value={form.branch_id}
+                // A division of the old branch is meaningless in the new one.
+                onChange={e => setForm(f => ({ ...f, branch_id: e.target.value, division_id: '' }))}
+              >
                 <option value="">Pilih cabang</option>
                 {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
+            </div>
+            <div className="form-group">
+              <label>Divisi</label>
+              <select value={form.division_id} onChange={set('division_id')} disabled={!form.branch_id}>
+                <option value="">{form.branch_id ? 'Tanpa divisi' : 'Pilih cabang dulu'}</option>
+                {branchDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <div style={{ fontSize: '0.78rem', color: 'var(--ink-3)', marginTop: 4 }}>
+                Divisi asal untuk perencanaan tenaga kerja &amp; shift. Jabatan menentukan struktur gaji.
+              </div>
             </div>
             <div className="form-group">
               <label>Status</label>

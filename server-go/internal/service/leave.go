@@ -18,7 +18,7 @@ import (
 
 // ErrQuotaExceeded is matched (errors.Is) by every *QuotaExceededError, which
 // ApproveLeave returns when a quota leave type would overdraw a month's allowance.
-var ErrQuotaExceeded = errors.New("quota cuti tidak mencukupi")
+var ErrQuotaExceeded = errors.New("quota libur tidak mencukupi")
 
 // Employees work seven days a week, and their days off are paid leave drawn from
 // a monthly allowance. A Saturday or Sunday off costs two days of it, because
@@ -39,7 +39,7 @@ type QuotaExceededError struct {
 }
 
 func (e *QuotaExceededError) Error() string {
-	return fmt.Sprintf("jatah cuti %s tidak mencukupi: sisa %d hari, dibutuhkan %d hari",
+	return fmt.Sprintf("jatah libur %s tidak mencukupi: sisa %d hari, dibutuhkan %d hari",
 		e.Month.Format("01/2006"), max(e.Quota-e.Used, 0), e.Needed)
 }
 

@@ -36,7 +36,7 @@ var ruleTypeLabels = map[string]string{
 	"no_punch":         "Tidak Absen Masuk & Pulang",
 	"half_day_late":    "Setengah Hari (Datang Siang)",
 	"half_day_early":   "Setengah Hari (Pulang Awal)",
-	"absent_no_leave":    "Absen Tanpa Cuti",
+	"absent_no_leave":    "Absen Tanpa Libur",
 	"consecutive_absent": "Absen Berturut-turut",
 	"unpaid_leave":       "Izin Satu Hari",
 	"sick_no_note":       "Sakit Tanpa Surat Dokter",

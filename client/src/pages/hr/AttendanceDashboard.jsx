@@ -35,8 +35,8 @@ function buildBranchColorMap(rows) {
 const STATUS_META = {
   present: { label: 'Hadir',  bg: '#e8f5e9', color: '#2e7d32', dot: '#43a047' },
   absent:  { label: 'Absen',  bg: '#fdecea', color: '#c62828', dot: '#e53935' },
-  leave:   { label: 'Cuti',   bg: '#e3f2fd', color: '#1565c0', dot: '#1e88e5' },
-  holiday: { label: 'Libur',  bg: '#f3e5f5', color: '#6a1b9a', dot: '#8e24aa' },
+  leave:   { label: 'Libur',   bg: '#e3f2fd', color: '#1565c0', dot: '#1e88e5' },
+  holiday: { label: 'Libur Nasional', bg: '#f3e5f5', color: '#6a1b9a', dot: '#8e24aa' },
 };
 
 const SOURCE_META = {
@@ -78,7 +78,7 @@ export function AnomalyChips({ record }) {
   if (record.is_missing_checkout) chips.push('Tidak Absen Pulang');
   if (record.is_missing_checkin)  chips.push('Tidak Absen Masuk');
   if (record.is_no_punch)         chips.push('Tidak Absen Masuk & Pulang');
-  if (record.is_leave_punch)      chips.push('Absen saat Cuti');
+  if (record.is_leave_punch)      chips.push('Absen saat Libur');
   // No rostered shift: not judged late/early (lateness follows the shift).
   if (record.no_shift)            chips.push('Tanpa Shift');
   if (record.excused_by)          chips.push(EXCUSE_LABEL[record.excused_by] || 'Izin');
@@ -212,8 +212,8 @@ function SummaryBar({ rows, activeStatus, onStatusChange }) {
     { key: '',        label: 'Semua'  },
     { key: 'present', label: 'Hadir'  },
     { key: 'absent',  label: 'Absen'  },
-    { key: 'leave',   label: 'Cuti'   },
-    { key: 'holiday', label: 'Libur'  },
+    { key: 'leave',   label: 'Libur'   },
+    { key: 'holiday', label: 'Libur Nasional' },
   ];
 
   return (
