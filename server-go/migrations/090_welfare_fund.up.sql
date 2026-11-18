@@ -30,20 +30,39 @@ ALTER TABLE wage_components
 -- Before 090 the health component was itself called "Dana Kesejahteraan", so that
 -- row is renamed (keeping its id, so every wage structure using it keeps paying
 -- the health allowance), and the name is then free for the new fund.
--- A same-named row of another type is never converted silently — that would
--- move money in or out of gross pay — the migration stops instead.
+-- A same-named row of another type (e.g. a hand-made "Tunjangan Kesehatan"
+-- allowance) is never converted — that would move money in or out of gross pay.
+-- It is renamed out of the way instead, "<name> (lama)": same id, type and
+-- amounts, so nobody's pay changes, only its label. Each rename is reported as
+-- a NOTICE.
 DO $$
+DECLARE
+  conflict RECORD;
+  free_name TEXT;
+  n INT;
 BEGIN
+  FOR conflict IN
+    SELECT id, name FROM wage_components
+    WHERE (name = 'Tunjangan Kesehatan' AND type <> 'benefit_fund')
+       -- A benefit_fund "Dana Kesejahteraan" is the pre-090 health component and
+       -- is renamed below, unless "Tunjangan Kesehatan" already is one.
+       OR (name = 'Dana Kesejahteraan' AND type <> 'welfare_fund' AND type <> 'benefit_fund')
+       OR (name = 'Dana Kesejahteraan' AND type = 'benefit_fund'
+           AND EXISTS (SELECT 1 FROM wage_components WHERE name = 'Tunjangan Kesehatan' AND type = 'benefit_fund'))
+  LOOP
+    free_name := conflict.name || ' (lama)';
+    n := 1;
+    WHILE EXISTS (SELECT 1 FROM wage_components WHERE name = free_name) LOOP
+      n := n + 1;
+      free_name := conflict.name || ' (lama ' || n || ')';
+    END LOOP;
+    UPDATE wage_components SET name = free_name WHERE id = conflict.id;
+    RAISE NOTICE 'komponen gaji "%" diganti nama menjadi "%" (tipe dan nominal tidak berubah)', conflict.name, free_name;
+  END LOOP;
+
   IF NOT EXISTS (SELECT 1 FROM wage_components WHERE name = 'Tunjangan Kesehatan') THEN
     UPDATE wage_components SET name = 'Tunjangan Kesehatan'
     WHERE name = 'Dana Kesejahteraan' AND type = 'benefit_fund';
-  END IF;
-
-  IF EXISTS (SELECT 1 FROM wage_components WHERE name = 'Tunjangan Kesehatan' AND type <> 'benefit_fund') THEN
-    RAISE EXCEPTION 'komponen gaji "Tunjangan Kesehatan" sudah ada dengan tipe lain; ubah nama/tipenya dulu';
-  END IF;
-  IF EXISTS (SELECT 1 FROM wage_components WHERE name = 'Dana Kesejahteraan' AND type <> 'welfare_fund') THEN
-    RAISE EXCEPTION 'komponen gaji "Dana Kesejahteraan" sudah ada dengan tipe lain; ubah nama/tipenya dulu';
   END IF;
 
   INSERT INTO wage_components (name, type, is_fixed, calc_method)
