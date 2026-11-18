@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -59,6 +60,29 @@ type PayslipData struct {
 
 	// Catatan (review note), optional.
 	Note string
+
+	// Performance is the month's point record (Kebijakan HRD III: everyone
+	// starts at 100, violations deduct). Nil = not shown (e.g. the THR slip).
+	Performance *PayslipPerformance
+}
+
+// PayslipPerformance is the KINERJA block: the score frozen on the payroll line,
+// its grade, and the month's violations grouped by offense. Employees are
+// entitled to an explanation of their monthly points (Ketentuan Tambahan 5).
+type PayslipPerformance struct {
+	Score      int // 0–100; -1 = not evaluated
+	Grade      string
+	Violations []PayslipViolation
+	// GradeLinked: the slip carries components paid by grade, so the block
+	// says which grade they were paid at.
+	GradeLinked bool
+}
+
+// PayslipViolation is one offense and how often it occurred in the month.
+type PayslipViolation struct {
+	Label  string
+	Count  int
+	Points int // total points deducted (positive)
 }
 
 // formatRupiah renders a whole-rupiah amount in id-ID style, e.g. 1500000 ->
@@ -298,6 +322,59 @@ func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
 		pdf.Ln(2)
 	}
 
+	// ── Kinerja (points, grade, offenses) ──────────────────────────────────────
+	if p := d.Performance; p != nil {
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 7)
+		pdf.CellFormat(contentW*0.5, 4.5, tr("KINERJA BULAN INI"), "B", 0, "L", false, 0, "")
+		head := "Poin: belum dievaluasi"
+		if p.Score >= 0 {
+			head = fmt.Sprintf("Poin: %d / 100", p.Score)
+			if strings.TrimSpace(p.Grade) != "" {
+				head += "  ·  Grade " + p.Grade
+			}
+		}
+		pdf.CellFormat(contentW*0.5, 4.5, tr(head), "B", 1, "R", false, 0, "")
+		pdf.SetFont("Arial", "", 7)
+		if len(p.Violations) == 0 {
+			pdf.SetX(left)
+			pdf.SetFont("Arial", "I", 7)
+			pdf.CellFormat(contentW, 4, tr("Tidak ada pelanggaran — poin penuh."), "", 1, "L", false, 0, "")
+		}
+		total := 0
+		for _, v := range p.Violations {
+			total += v.Points
+			label := v.Label
+			if v.Count > 1 {
+				label = fmt.Sprintf("%s (%dx)", label, v.Count)
+			}
+			pdf.SetX(left)
+			pdf.CellFormat(contentW-amtW, 3.7, tr(label), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 3.7, tr(fmt.Sprintf("-%d poin", v.Points)), "", 1, "R", false, 0, "")
+		}
+		if len(p.Violations) > 0 {
+			pdf.SetX(left)
+			pdf.SetFont("Arial", "B", 7)
+			pdf.CellFormat(contentW-amtW, 4, tr("Total pengurangan"), "T", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 4, tr(fmt.Sprintf("-%d poin", total)), "T", 1, "R", false, 0, "")
+		}
+		var notes []string
+		if total > 100 {
+			notes = append(notes, "Poin tidak dapat kurang dari 0.")
+		}
+		if p.GradeLinked && strings.TrimSpace(p.Grade) != "" {
+			notes = append(notes, "Komponen yang mengikuti grade dibayar sesuai Grade "+p.Grade+".")
+		}
+		if len(notes) > 0 {
+			pdf.SetX(left)
+			pdf.SetFont("Arial", "I", 6.5)
+			pdf.SetTextColor(110, 110, 110)
+			pdf.MultiCell(contentW, 3.2, tr(strings.Join(notes, " ")), "", "L", false)
+			pdf.SetTextColor(0, 0, 0)
+		}
+		pdf.Ln(2)
+	}
+
 	// ── Catatan ────────────────────────────────────────────────────────────────
 	if strings.TrimSpace(d.Note) != "" {
 		pdf.SetX(left)
@@ -317,20 +394,14 @@ func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
 	return bodyEnd
 }
 
-// tr converts a UTF-8 string to the cp1252 encoding fpdf's core fonts expect.
-// Indonesian text is Latin-1 compatible so this is effectively a passthrough but
-// keeps accented characters (if any creep in) from breaking the PDF.
-func tr(s string) string {
-	r := make([]rune, 0, len(s))
-	for _, c := range s {
-		if c < 256 {
-			r = append(r, c)
-		} else {
-			r = append(r, '?')
-		}
-	}
-	return string(r)
-}
+// cp1252 encodes UTF-8 text into the cp1252 bytes fpdf's core fonts expect.
+var cp1252 = fpdf.New("P", "mm", "A4", "").UnicodeTranslatorFromDescriptor("")
+
+// tr converts a UTF-8 string to the cp1252 encoding fpdf's core fonts expect,
+// so Indonesian text and the usual typography (é, ·, ×, —, “ ”) print as
+// themselves. It used to rebuild the string from runes, which re-encoded every
+// character from U+0080 up as UTF-8 and printed two wrong glyphs (· → "Â·").
+func tr(s string) string { return cp1252(s) }
 
 func orDash(s string) string {
 	if strings.TrimSpace(s) == "" {

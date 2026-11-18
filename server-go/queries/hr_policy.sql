@@ -122,3 +122,20 @@ WHERE lr.employee_id = @employee_id
   AND (lt.is_paid = false OR (lt.requires_doctor_note AND NOT lr.has_doctor_note))
   AND lr.start_date <= @window_to::date
   AND lr.end_date >= @window_from::date;
+
+-- ── Payslip: the month's violations ─────────────────────────────────────────
+
+-- name: ListViolationSummaryForMonth :many
+-- The KINERJA block of the payslip: violations in [$2, $3] grouped by offense,
+-- in the order they first occurred.
+SELECT COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
+       COUNT(*)::int AS occurrences,
+       SUM(pv.points)::int AS points,
+       MIN(pv.date)::date AS first_date
+FROM performance_violations pv
+LEFT JOIN performance_policies pp ON pp.id = pv.policy_id
+WHERE pv.employee_id = $1
+  AND pv.date >= $2
+  AND pv.date <= $3
+GROUP BY 1
+ORDER BY first_date, label;

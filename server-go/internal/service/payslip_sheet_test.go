@@ -79,6 +79,12 @@ func TestPayslipPanelFitsA5Half(t *testing.T) {
 		d.Deductions = append(d.Deductions, PayslipLineItem{Label: fmt.Sprintf("Potongan Tambahan %d", i+1), Amount: 50000})
 	}
 	d.DailyPaid = append(d.DailyPaid, PayslipLineItem{Label: "Uang Transport Harian (24 hari)", Amount: 240000})
+	// A worst-case KINERJA block: every offense of the late/leave/absence table.
+	d.Performance = &PayslipPerformance{Score: 0, Grade: "C"}
+	for i := 0; i < 7; i++ {
+		d.Performance.Violations = append(d.Performance.Violations,
+			PayslipViolation{Label: fmt.Sprintf("Pelanggaran contoh nomor %d", i+1), Count: 2, Points: 20})
+	}
 
 	pdf := fpdf.New("L", "mm", "A4", "")
 	pdf.SetMargins(panelPadX, panelPadY, panelPadX)

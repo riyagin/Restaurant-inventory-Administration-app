@@ -373,6 +373,62 @@ func (q *Queries) ListLeaveTypeDoctorNoteFlags(ctx context.Context) ([]*ListLeav
 	return items, nil
 }
 
+const listViolationSummaryForMonth = `-- name: ListViolationSummaryForMonth :many
+
+SELECT COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
+       COUNT(*)::int AS occurrences,
+       SUM(pv.points)::int AS points,
+       MIN(pv.date)::date AS first_date
+FROM performance_violations pv
+LEFT JOIN performance_policies pp ON pp.id = pv.policy_id
+WHERE pv.employee_id = $1
+  AND pv.date >= $2
+  AND pv.date <= $3
+GROUP BY 1
+ORDER BY first_date, label
+`
+
+type ListViolationSummaryForMonthParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+type ListViolationSummaryForMonthRow struct {
+	Label       string      `json:"label"`
+	Occurrences int32       `json:"occurrences"`
+	Points      int32       `json:"points"`
+	FirstDate   pgtype.Date `json:"first_date"`
+}
+
+// ── Payslip: the month's violations ─────────────────────────────────────────
+// The KINERJA block of the payslip: violations in [$2, $3] grouped by offense,
+// in the order they first occurred.
+func (q *Queries) ListViolationSummaryForMonth(ctx context.Context, arg *ListViolationSummaryForMonthParams) ([]*ListViolationSummaryForMonthRow, error) {
+	rows, err := q.db.Query(ctx, listViolationSummaryForMonth, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListViolationSummaryForMonthRow
+	for rows.Next() {
+		var i ListViolationSummaryForMonthRow
+		if err := rows.Scan(
+			&i.Label,
+			&i.Occurrences,
+			&i.Points,
+			&i.FirstDate,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setKasbonPolicyCheck = `-- name: SetKasbonPolicyCheck :exec
 UPDATE kasbons SET score_at_request = $2, approval_track = $3 WHERE id = $1
 `

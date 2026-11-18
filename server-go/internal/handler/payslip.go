@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -112,6 +113,17 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		}
 	}
 
+	// Grade-linked components stay on the slip even when the grade pays them
+	// nothing, so a forfeited Service Charge or Uang Kerajinan is visible
+	// rather than silently missing.
+	gradeLinked := map[[16]byte]bool{}
+	if wcs, werr := h.queries.ListWageComponents(ctx); werr == nil {
+		for _, wc := range wcs {
+			gradeLinked[wc.ID.Bytes] = wc.GradeLinked
+		}
+	}
+	anyGradeLinked := false
+
 	// ── Earnings (PENDAPATAN) ──────────────────────────────────────────────────
 	earnings := []service.PayslipLineItem{
 		{Label: "Gaji Pokok", Amount: line.BaseSalary},
@@ -123,9 +135,11 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		switch c.Type {
 		case service.ComponentTypeAllowance:
 			earnings = append(earnings, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
+			anyGradeLinked = anyGradeLinked || gradeLinked[c.WageComponentID.Bytes]
 		case service.ComponentTypeBonus:
-			if c.Amount != 0 {
+			if c.Amount != 0 || gradeLinked[c.WageComponentID.Bytes] {
 				earnings = append(earnings, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
+				anyGradeLinked = anyGradeLinked || gradeLinked[c.WageComponentID.Bytes]
 			}
 		case service.ComponentTypeDailyAllowance:
 			if c.Amount != 0 {
@@ -222,8 +236,41 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		TotalDeduction: totalDeduction,
 		NetPay:         line.NetPay,
 		Note:           note,
+		Performance:    h.payslipPerformance(ctx, lineID, line.EmployeeID, line.PeriodMonth.Time),
+	}
+	if data.Performance != nil {
+		data.Performance.GradeLinked = anyGradeLinked
 	}
 	return data, line, nil
+}
+
+// payslipPerformance assembles the KINERJA block: the score and grade frozen on
+// the line when it was generated, and the calendar month's violations grouped
+// by offense (the score is per calendar month, Kebijakan HRD III.1). A read
+// failure drops the block rather than the slip.
+func (h *PayslipHandler) payslipPerformance(ctx context.Context, lineID, employeeID pgtype.UUID, month time.Time) *service.PayslipPerformance {
+	perf := &service.PayslipPerformance{Score: -1}
+	if pl, err := h.queries.GetPayrollLineByID(ctx, lineID); err == nil && pl.PerformanceScore.Valid {
+		perf.Score = int(pl.PerformanceScore.Int32)
+	}
+	if g, err := h.queries.GetPayrollLineGrade(ctx, lineID); err == nil && g.PerformanceGrade.Valid {
+		perf.Grade = g.PerformanceGrade.String
+	}
+	start := service.FirstOfMonth(month)
+	rows, err := h.queries.ListViolationSummaryForMonth(ctx, &db.ListViolationSummaryForMonthParams{
+		EmployeeID: employeeID,
+		Date:       pgtype.Date{Time: start, Valid: true},
+		Date_2:     pgtype.Date{Time: start.AddDate(0, 1, -1), Valid: true},
+	})
+	if err != nil {
+		return nil
+	}
+	for _, r := range rows {
+		perf.Violations = append(perf.Violations, service.PayslipViolation{
+			Label: r.Label, Count: int(r.Occurrences), Points: int(r.Points),
+		})
+	}
+	return perf
 }
 
 func textValue(t pgtype.Text) string {
@@ -231,6 +278,17 @@ func textValue(t pgtype.Text) string {
 		return t.String
 	}
 	return ""
+}
+
+// RenderPayslipPDF renders one line's slip whatever its period status, through
+// the same assembly as the download endpoints. For tools (cmd/sample-payslips);
+// the HTTP endpoints keep refusing open periods.
+func (h *PayslipHandler) RenderPayslipPDF(r *http.Request, lineID pgtype.UUID) ([]byte, error) {
+	data, _, err := h.buildPayslipData(r, lineID)
+	if err != nil {
+		return nil, err
+	}
+	return service.BuildPayslipPDF(data)
 }
 
 // DownloadPayslip — GET /api/hr/payroll/lines/:id/payslip
