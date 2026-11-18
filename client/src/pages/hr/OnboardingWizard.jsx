@@ -315,10 +315,11 @@ export default function OnboardingWizard() {
             <Field label="Tipe Kepegawaian">
               <select
                 value={emp.employment_type}
-                onChange={(e) => setEmp((s) => ({ ...s, employment_type: e.target.value, contract_end_date: e.target.value === 'permanent' ? '' : s.contract_end_date }))}
+                onChange={(e) => setEmp((s) => ({ ...s, employment_type: e.target.value, contract_end_date: e.target.value === 'contract' ? s.contract_end_date : '' }))}
               >
                 <option value="permanent">Tetap (PKWTT)</option>
                 <option value="contract">Kontrak (PKWT)</option>
+                <option value="probation">Masa Percobaan (1 bulan)</option>
               </select>
             </Field>
             {emp.employment_type === 'contract' && (
@@ -406,7 +407,7 @@ export default function OnboardingWizard() {
               <Summary label="Kode Karyawan" value={emp.employee_code} />
               <Summary label="Jabatan" value={posName} />
               <Summary label="Cabang" value={brName} />
-              <Summary label="Tipe" value={emp.employment_type === 'contract' ? 'Kontrak (PKWT)' : 'Tetap (PKWTT)'} />
+              <Summary label="Tipe" value={emp.employment_type === 'contract' ? 'Kontrak (PKWT)' : emp.employment_type === 'probation' ? 'Masa Percobaan (1 bulan)' : 'Tetap (PKWTT)'} />
               <Summary label="Tgl. Bergabung" value={emp.join_date} />
               <Summary label="Dokumen" value={`${docs.length} berkas`} />
             </dl>

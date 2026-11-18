@@ -133,14 +133,21 @@ func resolveEmployeeDivision(ctx context.Context, q interface {
 
 // normalizeEmployment validates the employment type + contract end date pair.
 // A contract employee must have a contract end date; a permanent employee never
-// carries one (any supplied date is cleared).
-func normalizeEmployment(empType, endDate string) (string, pgtype.Date, error) {
+// carries one (any supplied date is cleared); a probation employee's end date is
+// always join date + 1 month (any supplied date is ignored).
+func normalizeEmployment(empType, endDate string, joinDate pgtype.Date) (string, pgtype.Date, error) {
 	empType = strings.TrimSpace(empType)
 	if empType == "" {
-		empType = "permanent"
+		empType = service.EmploymentTypePermanent
 	}
-	if empType != "permanent" && empType != "contract" {
-		return "", pgtype.Date{}, fmt.Errorf("tipe kepegawaian harus tetap atau kontrak")
+	if empType == service.EmploymentTypeProbation {
+		if !joinDate.Valid {
+			return "", pgtype.Date{}, fmt.Errorf("tanggal bergabung wajib diisi untuk masa percobaan")
+		}
+		return empType, pgtype.Date{Time: service.ProbationEndDate(joinDate.Time), Valid: true}, nil
+	}
+	if empType != service.EmploymentTypePermanent && empType != service.EmploymentTypeContract {
+		return "", pgtype.Date{}, fmt.Errorf("tipe kepegawaian harus tetap, kontrak, atau masa percobaan")
 	}
 	contractEnd, err := dateOrNull(endDate)
 	if err != nil {
@@ -260,7 +267,7 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, status)
 		conds = append(conds, fmt.Sprintf("e.status = $%d", len(args)))
 	}
-	if employmentType == "permanent" || employmentType == "contract" {
+	if employmentType == "permanent" || employmentType == "contract" || employmentType == "probation" {
 		args = append(args, employmentType)
 		conds = append(conds, fmt.Sprintf("e.employment_type = $%d", len(args)))
 	}
@@ -505,7 +512,7 @@ func (h *HREmployeesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate)
+	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate, joinDate)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -654,7 +661,7 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate)
+	employmentType, contractEnd, err := normalizeEmployment(body.EmploymentType, body.ContractEndDate, joinDate)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
@@ -746,8 +753,9 @@ type transitionPermanentBody struct {
 }
 
 // TransitionToPermanent — POST /api/hr/employees/:id/transition-permanent
-// Converts a contract (PKWT) employee to permanent (PKWTT), stamping the permanent
-// status date. That date becomes the THR tenure "day 0" for the employee.
+// Converts a contract (PKWT) or probation employee to permanent (PKWTT). For a
+// contract employee the permanent status date becomes the THR tenure "day 0";
+// a probation employee keeps counting from the join date.
 func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -777,7 +785,7 @@ func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *htt
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
 		return
 	}
-	if emp.EmploymentType != service.EmploymentTypeContract {
+	if emp.EmploymentType != service.EmploymentTypeContract && emp.EmploymentType != service.EmploymentTypeProbation {
 		respondError(w, http.StatusConflict, "karyawan sudah berstatus tetap")
 		return
 	}
@@ -786,9 +794,16 @@ func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Probation is the opening month of a permanent relationship, so its tenure
+	// already counts: permanent_since stays NULL and THR keeps measuring from the
+	// join date. Only a contract (PKWT) employee restarts THR tenure at effDate.
+	permanentSince := pgtype.Date{Time: effDate, Valid: true}
+	if emp.EmploymentType == service.EmploymentTypeProbation {
+		permanentSince = pgtype.Date{}
+	}
 	if err := h.queries.TransitionEmployeeToPermanent(ctx, &db.TransitionEmployeeToPermanentParams{
 		ID:             pgID,
-		PermanentSince: pgtype.Date{Time: effDate, Valid: true},
+		PermanentSince: permanentSince,
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengubah status karyawan")
 		return

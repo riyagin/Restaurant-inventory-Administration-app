@@ -1303,7 +1303,7 @@ export default function EmployeeDetail() {
         <h1>{emp.full_name}</h1>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={() => navigate('/hr/employees')} className="btn btn-secondary">Kembali</button>
-          {editable && emp.employment_type === 'contract' && (
+          {editable && (emp.employment_type === 'contract' || emp.employment_type === 'probation') && (
             <button onClick={() => setShowTransition(true)} className="btn btn-primary" style={{ background: '#1e7e34', borderColor: '#1e7e34' }}>
               Jadikan Karyawan Tetap
             </button>
@@ -1343,7 +1343,36 @@ export default function EmployeeDetail() {
       )}
 
       {(() => {
-        if (emp.employment_type !== 'contract' || !emp.contract_end_date) return null;
+        if (!emp.contract_end_date || emp.status !== 'active') return null;
+        if (emp.employment_type === 'probation') {
+          const days = contractDaysLeft(emp.contract_end_date);
+          if (days == null) return null;
+          const due = days <= 0;
+          const when = fmtDate(emp.contract_end_date);
+          const msg = days < 0
+            ? `Masa percobaan telah berakhir ${Math.abs(days)} hari lalu (${when}) — status kepegawaian belum diputuskan.`
+            : days === 0
+              ? `Masa percobaan berakhir hari ini (${when}).`
+              : `Dalam masa percobaan sampai ${when} (${days} hari lagi).`;
+          return (
+            <div
+              className="card"
+              style={{ marginBottom: '1rem', borderLeft: `4px solid ${due ? '#c5221f' : '#f0a020'}`, background: due ? '#fdece9' : '#fffaf0' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '1.1rem' }}>{due ? '⛔' : '⏳'}</span>
+                <strong style={{ color: due ? '#c5221f' : '#a06800' }}>{msg}</strong>
+                {editable && (
+                  <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.75rem', fontSize: '0.85rem' }}>
+                    <a href="#" onClick={e => { e.preventDefault(); setShowTransition(true); }}>Jadikan Tetap →</a>
+                    <Link to={`/hr/employees/${id}/edit`}>Ubah ke Kontrak →</Link>
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        }
+        if (emp.employment_type !== 'contract') return null;
         const days = contractDaysLeft(emp.contract_end_date);
         if (days == null || days > 30) return null;
         const overdue = days < 0;
@@ -1397,7 +1426,10 @@ export default function EmployeeDetail() {
                 {emp.status === 'resigned' && emp.resign_date && (
                   <Field label="Tanggal Resign" value={fmtDate(emp.resign_date)} />
                 )}
-                <Field label="Tipe Kepegawaian" value={emp.employment_type === 'contract' ? 'Kontrak' : 'Tetap'} />
+                <Field label="Tipe Kepegawaian" value={emp.employment_type === 'contract' ? 'Kontrak' : emp.employment_type === 'probation' ? 'Masa Percobaan' : 'Tetap'} />
+                {emp.employment_type === 'probation' && (
+                  <Field label="Akhir Masa Percobaan" value={fmtDate(emp.contract_end_date)} />
+                )}
                 {emp.employment_type === 'contract' && (
                   <Field label="Berakhir Kontrak" value={fmtDate(emp.contract_end_date)} />
                 )}
@@ -1532,8 +1564,13 @@ function TransitionPermanentModal({ employee, onClose, onDone }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#aaa' }}>✕</button>
         </div>
         <p style={{ color: '#667', fontSize: '0.85rem', marginTop: 0 }}>
-          Mengubah <strong>{employee.full_name}</strong> dari karyawan kontrak (PKWT) menjadi karyawan tetap (PKWTT).
-          Tanggal status tetap menjadi titik awal (hari ke-0) perhitungan masa kerja THR.
+          {employee.employment_type === 'probation' ? (
+            <>Mengubah <strong>{employee.full_name}</strong> dari masa percobaan menjadi karyawan tetap (PKWTT).
+            Masa percobaan ikut dihitung, jadi masa kerja THR tetap dihitung sejak tanggal bergabung.</>
+          ) : (
+            <>Mengubah <strong>{employee.full_name}</strong> dari karyawan kontrak (PKWT) menjadi karyawan tetap (PKWTT).
+            Tanggal status tetap menjadi titik awal (hari ke-0) perhitungan masa kerja THR.</>
+          )}
         </p>
         {error && <div className="error-msg" style={{ marginBottom: '1rem' }}>{error}</div>}
         <form onSubmit={submit}>

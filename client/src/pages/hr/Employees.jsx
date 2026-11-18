@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { getEmployees, getBranches, getDivisions, getPositions, getContractAlerts } from '../../api';
 import PersonAvatar from '../../components/PersonAvatar';
 import { canUseHR } from '../../roles';
@@ -42,6 +42,22 @@ function FaceBadge({ hasFace }) {
 }
 
 function EmploymentBadge({ type, contractEnd }) {
+  if (type === 'probation') {
+    const days = contractDaysLeft(contractEnd);
+    const ending = days != null && days <= 7;
+    return (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
+        <span className="badge" style={{ background: ending ? '#fdece9' : '#fff4e0', color: ending ? '#c5221f' : '#b26a00' }}>
+          Percobaan{ending ? ' ⚠' : ''}
+        </span>
+        {contractEnd && (
+          <span style={{ fontSize: '0.72rem', color: ending ? '#c5221f' : '#8a93a6' }}>
+            s.d. {new Date(contractEnd).toLocaleDateString('id-ID')}
+          </span>
+        )}
+      </span>
+    );
+  }
   if (type !== 'contract') {
     return <span className="badge" style={{ background: '#eef1f6', color: '#445' }}>Tetap</span>;
   }
@@ -63,6 +79,7 @@ function EmploymentBadge({ type, contractEnd }) {
 
 export default function Employees() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [rows, setRows]         = useState([]);
   const [total, setTotal]       = useState(0);
   const [branches, setBranches] = useState([]);
@@ -75,7 +92,7 @@ export default function Employees() {
   const [divisionId, setDivisionId] = useState(''); // '' | 'none' | division id
   const [positionId, setPositionId] = useState('');
   const [status, setStatus]       = useState('');
-  const [employmentType, setEmploymentType] = useState('');
+  const [employmentType, setEmploymentType] = useState(() => searchParams.get('employment_type') || '');
   const [face, setFace]           = useState(''); // '' | enrolled | not
   const [page, setPage]           = useState(1);
   const [sort, setSort]           = useState('name'); // name | join_date | code
@@ -225,6 +242,7 @@ export default function Employees() {
               <option value="">Semua Tipe</option>
               <option value="permanent">Tetap</option>
               <option value="contract">Kontrak</option>
+              <option value="probation">Masa Percobaan</option>
             </select>
           </div>
           <div className="form-group" style={{ margin: 0, flex: '1 1 160px' }}>

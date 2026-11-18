@@ -20,6 +20,15 @@ const empty = {
 
 const toDateInput = (d) => d ? new Date(d).toISOString().slice(0, 10) : '';
 
+// Preview of the probation end the server stores: join date + 1 month, clamped to
+// the last day of that month (31 Jan → 28/29 Feb). Mirrors service.ProbationEndDate.
+function probationEndLabel(joinDate) {
+  if (!joinDate) return 'Isi tanggal bergabung dulu';
+  const [y, m, d] = joinDate.split('-').map(Number);
+  const last = new Date(y, m + 1, 0).getDate();
+  return new Date(y, m, Math.min(d, last)).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 export default function EmployeeForm() {
   const { id } = useParams();
   const isEdit = Boolean(id);
@@ -233,13 +242,20 @@ export default function EmployeeForm() {
                   ...f,
                   employment_type: e.target.value,
                   // Clear the contract date when switching back to permanent.
-                  contract_end_date: e.target.value === 'permanent' ? '' : f.contract_end_date,
+                  contract_end_date: e.target.value === 'contract' ? f.contract_end_date : '',
                 }))}
               >
                 <option value="permanent">Tetap</option>
                 <option value="contract">Kontrak</option>
+                <option value="probation">Masa Percobaan (1 bulan)</option>
               </select>
             </div>
+            {form.employment_type === 'probation' && (
+              <div className="form-group">
+                <label>Akhir Masa Percobaan</label>
+                <input type="text" readOnly value={probationEndLabel(form.join_date)} style={{ background: '#f6f7fa' }} />
+              </div>
+            )}
             {form.employment_type === 'contract' && (
               <div className="form-group">
                 <label>Tanggal Berakhir Kontrak *</label>

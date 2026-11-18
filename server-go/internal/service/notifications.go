@@ -296,6 +296,29 @@ func hrNotifications(ctx context.Context, pool *pgxpool.Pool, today time.Time) (
 		})
 	}
 
+	// Probation ends a month after joining; HR has to decide (tetap / kontrak /
+	// berhenti) before or on that day, so overdue ones keep showing until decided.
+	var probation int
+	err = pool.QueryRow(ctx, `
+		SELECT count(*) FROM employees
+		WHERE status = 'active' AND employment_type = 'probation'
+		  AND contract_end_date IS NOT NULL
+		  AND contract_end_date <= $1 + INTERVAL '7 days'`, today).Scan(&probation)
+	if err != nil {
+		return nil, err
+	}
+	if probation > 0 {
+		out = append(out, Notification{
+			ID:       "hr:probation",
+			Kind:     "probation_end",
+			Severity: SeverityWarn,
+			Title:    "Masa percobaan berakhir",
+			Detail:   fmt.Sprintf("%s perlu diputuskan status kepegawaiannya", plural(probation, "karyawan")),
+			Link:     "/hr/employees?employment_type=probation",
+			Count:    probation,
+		})
+	}
+
 	var unreviewed int
 	err = pool.QueryRow(ctx, `
 		SELECT count(*) FROM payroll_lines l
