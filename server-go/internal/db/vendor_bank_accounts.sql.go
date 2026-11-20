@@ -175,13 +175,13 @@ func (q *Queries) ListVendorBankAccounts(ctx context.Context, vendorID pgtype.UU
 const promoteOldestVendorBankAccount = `-- name: PromoteOldestVendorBankAccount :exec
 UPDATE vendor_bank_accounts SET is_primary = true
 WHERE id = (
-    SELECT id FROM vendor_bank_accounts
-    WHERE vendor_id = $1
-    ORDER BY created_at
+    SELECT oldest.id FROM vendor_bank_accounts oldest
+    WHERE oldest.vendor_id = $1
+    ORDER BY oldest.created_at
     LIMIT 1
 )
 AND NOT EXISTS (
-    SELECT 1 FROM vendor_bank_accounts WHERE vendor_id = $1 AND is_primary
+    SELECT 1 FROM vendor_bank_accounts cur WHERE cur.vendor_id = $1 AND cur.is_primary
 )
 `
 

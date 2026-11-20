@@ -100,16 +100,16 @@ SELECT m.month::date AS month,
        COALESCE(u.used, 0)::int AS used_days,
        q.quota_days
 FROM (
-  SELECT date_trunc('month', date)::date AS month FROM leave_quota_usage
-  WHERE employee_id = $1 AND date >= $2 AND date < $3
+  SELECT date_trunc('month', lu.date)::date AS month FROM leave_quota_usage lu
+  WHERE lu.employee_id = $1 AND lu.date >= $2 AND lu.date < $3
   UNION
-  SELECT month FROM leave_monthly_quotas
-  WHERE employee_id = $1 AND month >= $2 AND month < $3
+  SELECT lq.month FROM leave_monthly_quotas lq
+  WHERE lq.employee_id = $1 AND lq.month >= $2 AND lq.month < $3
 ) m
 LEFT JOIN (
-  SELECT date_trunc('month', date)::date AS month, SUM(cost) AS used
-  FROM leave_quota_usage
-  WHERE employee_id = $1 AND date >= $2 AND date < $3
+  SELECT date_trunc('month', lu2.date)::date AS month, SUM(lu2.cost) AS used
+  FROM leave_quota_usage lu2
+  WHERE lu2.employee_id = $1 AND lu2.date >= $2 AND lu2.date < $3
   GROUP BY 1
 ) u ON u.month = m.month
 LEFT JOIN leave_monthly_quotas q ON q.employee_id = $1 AND q.month = m.month
