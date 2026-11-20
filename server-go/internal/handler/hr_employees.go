@@ -1,14 +1,10 @@
 package handler
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +31,6 @@ func NewHREmployeesHandler(pool *pgxpool.Pool, queries *db.Queries) *HREmployees
 	return &HREmployeesHandler{pool: pool, queries: queries}
 }
 
-// SetUploadsDir injects the uploads directory into the handler.
 func (h *HREmployeesHandler) SetUploadsDir(dir string) {
 	h.uploadsDir = dir
 }
@@ -47,41 +42,6 @@ func (h *HREmployeesHandler) resolveUploadsDir() string {
 	return config.DefaultUploadsDir
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-func textOrNull(s string) pgtype.Text {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return pgtype.Text{}
-	}
-	return pgtype.Text{String: s, Valid: true}
-}
-
-func dateOrNull(s string) (pgtype.Date, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return pgtype.Date{}, nil
-	}
-	t, err := time.Parse("2006-01-02", s)
-	if err != nil {
-		return pgtype.Date{}, err
-	}
-	return pgtype.Date{Time: t, Valid: true}, nil
-}
-
-func uuidOrNull(s string) (pgtype.UUID, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return pgtype.UUID{}, nil
-	}
-	id, err := parseUUID(s)
-	if err != nil {
-		return pgtype.UUID{}, err
-	}
-	return pgtype.UUID{Bytes: id, Valid: true}, nil
-}
-
-// employeeBody is the shared request payload for create/update.
 type employeeBody struct {
 	EmployeeCode      string `json:"employee_code"`
 	FullName          string `json:"full_name"`
@@ -100,70 +60,10 @@ type employeeBody struct {
 	Status            string `json:"status"`
 	EmploymentType    string `json:"employment_type"`
 	ContractEndDate   string `json:"contract_end_date"`
-	// Home division for manpower planning — separate from the position, which
-	// drives the wage structure. Omitted = leave unchanged (callers that do not
-	// know about divisions, e.g. onboarding); null/"" = no division.
+	// DivisionID: omitted leaves it unchanged; null/"" clears it.
 	DivisionID *string `json:"division_id"`
 }
 
-// resolveEmployeeDivision validates a requested home division against the
-// branch the employee will belong to. Divisions are per-branch rows, so a
-// division of another branch would count the person in the wrong roster.
-func resolveEmployeeDivision(ctx context.Context, q interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}, raw *string, branchID pgtype.UUID) (pgtype.UUID, error) {
-	id, err := optUUID(raw)
-	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("divisi tidak valid")
-	}
-	if !id.Valid {
-		return id, nil
-	}
-	var divBranch pgtype.UUID
-	if err := q.QueryRow(ctx, `SELECT branch_id FROM divisions WHERE id = $1`, id).Scan(&divBranch); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return pgtype.UUID{}, fmt.Errorf("divisi tidak ditemukan")
-		}
-		return pgtype.UUID{}, fmt.Errorf("gagal memeriksa divisi")
-	}
-	if divBranch != branchID {
-		return pgtype.UUID{}, fmt.Errorf("divisi bukan milik cabang karyawan ini")
-	}
-	return id, nil
-}
-
-// normalizeEmployment validates the employment type + contract end date pair.
-// A contract employee must have a contract end date; a permanent employee never
-// carries one (any supplied date is cleared); a probation employee's end date is
-// always join date + 1 month (any supplied date is ignored).
-func normalizeEmployment(empType, endDate string, joinDate pgtype.Date) (string, pgtype.Date, error) {
-	empType = strings.TrimSpace(empType)
-	if empType == "" {
-		empType = service.EmploymentTypePermanent
-	}
-	if empType == service.EmploymentTypeProbation {
-		if !joinDate.Valid {
-			return "", pgtype.Date{}, fmt.Errorf("tanggal bergabung wajib diisi untuk masa percobaan")
-		}
-		return empType, pgtype.Date{Time: service.ProbationEndDate(joinDate.Time), Valid: true}, nil
-	}
-	if empType != service.EmploymentTypePermanent && empType != service.EmploymentTypeContract {
-		return "", pgtype.Date{}, fmt.Errorf("tipe kepegawaian harus tetap, kontrak, atau masa percobaan")
-	}
-	contractEnd, err := dateOrNull(endDate)
-	if err != nil {
-		return "", pgtype.Date{}, fmt.Errorf("format tanggal berakhir kontrak tidak valid")
-	}
-	if empType == "contract" && !contractEnd.Valid {
-		return "", pgtype.Date{}, fmt.Errorf("tanggal berakhir kontrak wajib diisi untuk karyawan kontrak")
-	}
-	if empType == "permanent" {
-		contractEnd = pgtype.Date{}
-	}
-	return empType, contractEnd, nil
-}
-
-// employeeListRow is the projection returned by the List endpoint.
 type employeeListRow struct {
 	ID              pgtype.UUID `json:"id"`
 	EmployeeCode    string      `json:"employee_code"`
@@ -180,12 +80,9 @@ type employeeListRow struct {
 	EmploymentType  string      `json:"employment_type"`
 	ContractEndDate pgtype.Date `json:"contract_end_date"`
 	HasFace         bool        `json:"has_face"`
-	// Latest face photo from an attendance device (see service/face_photos.go),
-	// shown as the list avatar ahead of the HR-uploaded photo.
+	// Latest kiosk face photo, preferred over the HR-uploaded photo as the avatar.
 	FacePhotoPath pgtype.Text `json:"face_photo_path"`
 }
-
-// ── Employees ────────────────────────────────────────────────────────────────
 
 // List — GET /api/hr/employees
 func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -195,18 +92,15 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(q.Get("q"))
 	branchID := strings.TrimSpace(q.Get("branch_id"))
 	if b, ok := scopedBranchString(r); ok {
-		// Branch operators pick from their own roster only.
 		branchID = b
 	}
 	positionID := strings.TrimSpace(q.Get("position_id"))
-	// "none" lists employees with no home division yet.
 	divisionFilter := strings.TrimSpace(q.Get("division_id"))
 	status := strings.TrimSpace(q.Get("status"))
 	employmentType := strings.TrimSpace(q.Get("employment_type"))
-	// Face enrollment filter: "enrolled" = has stored face data, "not" = missing it.
 	face := strings.TrimSpace(q.Get("face"))
 
-	// Sorting — whitelist column + direction to keep the ORDER BY injection-safe.
+	// Whitelisted sort columns keep ORDER BY injection-safe.
 	sortColumns := map[string]string{
 		"name":      "e.full_name",
 		"join_date": "e.join_date",
@@ -220,7 +114,6 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(strings.TrimSpace(q.Get("dir")), "desc") {
 		sortDir = "DESC"
 	}
-	// Deterministic tiebreaker so paging stays stable when the sort key ties.
 	orderBy := sortCol + " " + sortDir
 	if sortCol != "e.employee_code" {
 		orderBy += ", e.employee_code ASC"
@@ -272,7 +165,6 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		args = append(args, employmentType)
 		conds = append(conds, fmt.Sprintf("e.employment_type = $%d", len(args)))
 	}
-	// No bind parameter needed: these are constant, injection-safe predicates.
 	if face == "enrolled" {
 		conds = append(conds, "e.face_embedding IS NOT NULL")
 	} else if face == "not" {
@@ -334,7 +226,6 @@ func (h *HREmployeesHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Total count for pagination
 	countSQL := fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM employees e
@@ -373,9 +264,7 @@ func (h *HREmployeesHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Attach the latest face photo sent by an attendance device, so the profile
-	// shows what the employee currently looks like. A lookup failure only hides
-	// the photo; it should not fail the whole profile.
+	// A failed photo lookup only hides the photo.
 	out := employeeDetailResponse{GetEmployeeByIDRow: emp}
 	if path, at, ok, ferr := service.LatestFacePhoto(r.Context(), h.pool, emp.ID); ferr != nil {
 		log.Printf("hr employee get: latest face photo failed: %v", ferr)
@@ -386,74 +275,10 @@ func (h *HREmployeesHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, out)
 }
 
-// employeeDetailResponse is GetEmployeeByIDRow (fields promoted into the same
-// JSON object) plus the latest device face photo.
 type employeeDetailResponse struct {
 	*db.GetEmployeeByIDRow
 	FacePhotoPath *string    `json:"face_photo_path"`
 	FacePhotoAt   *time.Time `json:"face_photo_at"`
-}
-
-// DeleteFaceData — DELETE /api/hr/employees/:id/face
-//
-// Removes an employee's stored face data: the embedding the devices match
-// against and every face photo (rows and files). Resigned employees keep both
-// until HR uses this. Refused for active employees, who need the embedding to
-// check in; re-enrolling on a kiosk replaces it instead.
-func (h *HREmployeesHandler) DeleteFaceData(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-	if emp.Status == "active" {
-		respondError(w, http.StatusConflict, "data wajah karyawan aktif tidak dapat dihapus; tandai resign terlebih dahulu")
-		return
-	}
-
-	if _, err := h.pool.Exec(ctx, `
-		UPDATE employees
-		SET face_embedding = NULL,
-		    face_embedding_version = NULL,
-		    face_enrolled_at = NULL,
-		    updated_at = now()
-		WHERE id = $1`, pgID); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menghapus data wajah")
-		return
-	}
-
-	removed, err := service.DeleteAllFacePhotos(ctx, h.pool, h.resolveUploadsDir(), pgID)
-	if err != nil {
-		log.Printf("hr employee delete face: delete photos (emp=%s) failed: %v", emp.EmployeeCode, err)
-		respondError(w, http.StatusInternalServerError, "data wajah terhapus, tetapi gagal menghapus foto")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "DELETE",
-		EntityType:  "employee_face",
-		EntityID:    id,
-		Description: fmt.Sprintf("Menghapus data wajah & %d foto absensi karyawan %s (%s)", removed, emp.FullName, emp.EmployeeCode),
-	})
-
-	respondJSON(w, http.StatusOK, map[string]any{
-		"message":        "data wajah berhasil dihapus",
-		"photos_removed": removed,
-	})
 }
 
 // Create — POST /api/hr/employees
@@ -685,8 +510,7 @@ func (h *HREmployeesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	// UpdateEmployee itself drops the home division when the branch changes;
-	// an explicit division_id in the body is applied after it.
+	// UpdateEmployee drops the division on a branch change; an explicit one is applied after.
 	_, err = qtx.UpdateEmployee(ctx, &db.UpdateEmployeeParams{
 		EmployeeCode:      body.EmployeeCode,
 		FullName:          body.FullName,
@@ -753,341 +577,11 @@ type transitionPermanentBody struct {
 	EffectiveDate string `json:"effective_date"` // "YYYY-MM-DD" — permanent-status date (THR day 0)
 }
 
-// TransitionToPermanent — POST /api/hr/employees/:id/transition-permanent
-// Converts a contract (PKWT) or probation employee to permanent (PKWTT). For a
-// contract employee the permanent status date becomes the THR tenure "day 0";
-// a probation employee keeps counting from the join date.
-func (h *HREmployeesHandler) TransitionToPermanent(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	var body transitionPermanentBody
-	if err := parseBody(r, &body); err != nil {
-		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
-		return
-	}
-	effDate, err := time.Parse("2006-01-02", strings.TrimSpace(body.EffectiveDate))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "tanggal efektif tidak valid")
-		return
-	}
-
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-	if emp.EmploymentType != service.EmploymentTypeContract && emp.EmploymentType != service.EmploymentTypeProbation {
-		respondError(w, http.StatusConflict, "karyawan sudah berstatus tetap")
-		return
-	}
-	if effDate.Before(emp.JoinDate.Time) {
-		respondError(w, http.StatusBadRequest, "tanggal status tetap tidak boleh sebelum tanggal bergabung")
-		return
-	}
-
-	// Probation is the opening month of a permanent relationship, so its tenure
-	// already counts: permanent_since stays NULL and THR keeps measuring from the
-	// join date. Only a contract (PKWT) employee restarts THR tenure at effDate.
-	permanentSince := pgtype.Date{Time: effDate, Valid: true}
-	if emp.EmploymentType == service.EmploymentTypeProbation {
-		permanentSince = pgtype.Date{}
-	}
-	if err := h.queries.TransitionEmployeeToPermanent(ctx, &db.TransitionEmployeeToPermanentParams{
-		ID:             pgID,
-		PermanentSince: permanentSince,
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengubah status karyawan")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "employee",
-		EntityID:    id,
-		Description: fmt.Sprintf("Mengubah status %s menjadi karyawan tetap (berlaku %s)", emp.FullName, effDate.Format("2006-01-02")),
-	})
-
-	updated, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-	respondJSON(w, http.StatusOK, updated)
-}
-
 type resignBody struct {
 	ResignDate string `json:"resign_date"` // "YYYY-MM-DD" — effective resignation date
 }
 
-// Resign — POST /api/hr/employees/:id/resign
-// Marks an employee as resigned (mengundurkan diri), stamping the effective date.
-// Preserves the row and its HR history (unlike a hard delete).
-func (h *HREmployeesHandler) Resign(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	var body resignBody
-	if err := parseBody(r, &body); err != nil {
-		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
-		return
-	}
-	resignDate, err := time.Parse("2006-01-02", strings.TrimSpace(body.ResignDate))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "tanggal resign tidak valid")
-		return
-	}
-
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-	if emp.Status == "resigned" {
-		respondError(w, http.StatusConflict, "karyawan sudah berstatus resign")
-		return
-	}
-	if resignDate.Before(emp.JoinDate.Time) {
-		respondError(w, http.StatusBadRequest, "tanggal resign tidak boleh sebelum tanggal bergabung")
-		return
-	}
-
-	if err := h.queries.ResignEmployee(ctx, &db.ResignEmployeeParams{
-		ID:         pgID,
-		ResignDate: pgtype.Date{Time: resignDate, Valid: true},
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengubah status karyawan")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "employee",
-		EntityID:    id,
-		Description: fmt.Sprintf("Menandai %s sebagai resign (berlaku %s)", emp.FullName, resignDate.Format("2006-01-02")),
-	})
-
-	updated, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-	respondJSON(w, http.StatusOK, updated)
-}
-
-// Delete — DELETE /api/hr/employees/:id
-func (h *HREmployeesHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-
-	// Face photo rows cascade with the employee; their files have to be removed
-	// by hand, so collect the names before the rows disappear.
-	facePhotos, err := service.ListFacePhotoPaths(ctx, h.pool, pgID)
-	if err != nil {
-		log.Printf("hr employee delete: list face photos failed: %v", err)
-	}
-
-	if err := h.queries.DeleteEmployee(ctx, pgID); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-			respondError(w, http.StatusConflict, "karyawan masih dipakai data HR lain; ubah status menjadi nonaktif")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal menghapus karyawan")
-		return
-	}
-
-	// Remove photo file if present
-	if emp.PhotoPath.Valid && emp.PhotoPath.String != "" {
-		_ = os.Remove(filepath.Join(h.resolveUploadsDir(), emp.PhotoPath.String))
-	}
-	service.RemoveFacePhotoFiles(h.resolveUploadsDir(), facePhotos)
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "DELETE",
-		EntityType:  "hr_employee",
-		EntityID:    id,
-		Description: fmt.Sprintf("Menghapus karyawan %s (%s)", emp.FullName, emp.EmployeeCode),
-	})
-
-	respondJSON(w, http.StatusOK, map[string]string{"message": "karyawan berhasil dihapus"})
-}
-
-// UploadPhoto — POST /api/hr/employees/:id/photo
-func (h *HREmployeesHandler) UploadPhoto(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-
-	if err := r.ParseMultipartForm(20 << 20); err != nil {
-		respondError(w, http.StatusBadRequest, "gagal membaca form upload")
-		return
-	}
-	file, header, err := r.FormFile("photo")
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "field 'photo' tidak ditemukan")
-		return
-	}
-	defer file.Close()
-
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	switch ext {
-	case ".jpg", ".jpeg", ".png":
-	default:
-		respondError(w, http.StatusBadRequest, "format file tidak didukung (jpg, jpeg, png)")
-		return
-	}
-
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-
-	filename := fmt.Sprintf("employee-%s-%d%s", id.String(), time.Now().Unix(), ext)
-	uploadsDir := h.resolveUploadsDir()
-
-	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal membuat direktori upload")
-		return
-	}
-
-	dst, err := os.Create(filepath.Join(uploadsDir, filename))
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan file")
-		return
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menulis file")
-		return
-	}
-
-	// Delete old file if one exists
-	if emp.PhotoPath.Valid && emp.PhotoPath.String != "" {
-		_ = os.Remove(filepath.Join(uploadsDir, emp.PhotoPath.String))
-	}
-
-	if err := h.queries.UpdateEmployeePhotoPath(ctx, &db.UpdateEmployeePhotoPathParams{
-		PhotoPath: pgtype.Text{String: filename, Valid: true},
-		ID:        pgID,
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan path foto")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "hr_employee",
-		EntityID:    id,
-		Description: fmt.Sprintf("Upload foto karyawan %s", emp.FullName),
-	})
-
-	respondJSON(w, http.StatusOK, map[string]string{"photo_path": filename})
-}
-
-// DeletePhoto — DELETE /api/hr/employees/:id/photo
-func (h *HREmployeesHandler) DeletePhoto(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	emp, err := h.queries.GetEmployeeByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "karyawan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data karyawan")
-		return
-	}
-
-	if !emp.PhotoPath.Valid || emp.PhotoPath.String == "" {
-		respondError(w, http.StatusBadRequest, "karyawan tidak memiliki foto")
-		return
-	}
-
-	_ = os.Remove(filepath.Join(h.resolveUploadsDir(), emp.PhotoPath.String))
-
-	if err := h.queries.UpdateEmployeePhotoPath(ctx, &db.UpdateEmployeePhotoPathParams{
-		PhotoPath: pgtype.Text{},
-		ID:        pgID,
-	}); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menghapus path foto")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "hr_employee",
-		EntityID:    id,
-		Description: fmt.Sprintf("Hapus foto karyawan %s", emp.FullName),
-	})
-
-	respondJSON(w, http.StatusOK, map[string]string{"message": "foto berhasil dihapus"})
-}
-
-// ContractAlerts — GET /api/hr/employees/contract-alerts
-// Returns active contract employees whose contract ends within `days` (default
-// 30 — i.e. the final month), including any already past due. Powers the
-// expiring-contract notifier in the HR UI.
+// ContractAlerts — GET /api/hr/employees/contract-alerts?days=30
 func (h *HREmployeesHandler) ContractAlerts(w http.ResponseWriter, r *http.Request) {
 	days := 30
 	if d := strings.TrimSpace(r.URL.Query().Get("days")); d != "" {
@@ -1107,174 +601,7 @@ func (h *HREmployeesHandler) ContractAlerts(w http.ResponseWriter, r *http.Reque
 	respondJSON(w, http.StatusOK, map[string]any{"data": rows, "days": days})
 }
 
-// ── Positions ────────────────────────────────────────────────────────────────
-
-// ListPositions — GET /api/hr/positions
-func (h *HREmployeesHandler) ListPositions(w http.ResponseWriter, r *http.Request) {
-	positions, err := h.queries.ListPositions(r.Context())
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data jabatan")
-		return
-	}
-	if positions == nil {
-		positions = []*db.Position{}
-	}
-	respondJSON(w, http.StatusOK, positions)
-}
-
-// CreatePosition — POST /api/hr/positions
-func (h *HREmployeesHandler) CreatePosition(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name     string `json:"name"`
-		IsActive *bool  `json:"is_active"`
-	}
-	if err := parseBody(r, &body); err != nil {
-		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
-		return
-	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" {
-		respondError(w, http.StatusBadRequest, "nama jabatan wajib diisi")
-		return
-	}
-	isActive := true
-	if body.IsActive != nil {
-		isActive = *body.IsActive
-	}
-
-	pos, err := h.queries.CreatePosition(r.Context(), &db.CreatePositionParams{
-		Name:     body.Name,
-		IsActive: isActive,
-	})
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			respondError(w, http.StatusConflict, "nama jabatan sudah digunakan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal membuat jabatan")
-		return
-	}
-
-	_ = service.LogActivity(r.Context(), h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(r.Context()),
-		Username:    middleware.UsernameFromCtx(r.Context()),
-		Action:      "CREATE",
-		EntityType:  "hr_position",
-		EntityID:    pos.ID.Bytes,
-		Description: fmt.Sprintf("Membuat jabatan %s", pos.Name),
-	})
-
-	respondJSON(w, http.StatusCreated, pos)
-}
-
-// UpdatePosition — PUT /api/hr/positions/:id
-func (h *HREmployeesHandler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-
-	var body struct {
-		Name     string `json:"name"`
-		IsActive *bool  `json:"is_active"`
-	}
-	if err := parseBody(r, &body); err != nil {
-		respondError(w, http.StatusBadRequest, "format permintaan tidak valid")
-		return
-	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" {
-		respondError(w, http.StatusBadRequest, "nama jabatan wajib diisi")
-		return
-	}
-	isActive := true
-	if body.IsActive != nil {
-		isActive = *body.IsActive
-	}
-
-	pos, err := h.queries.UpdatePosition(r.Context(), &db.UpdatePositionParams{
-		Name:     body.Name,
-		IsActive: isActive,
-		ID:       pgtype.UUID{Bytes: id, Valid: true},
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "jabatan tidak ditemukan")
-			return
-		}
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			respondError(w, http.StatusConflict, "nama jabatan sudah digunakan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal memperbarui jabatan")
-		return
-	}
-
-	_ = service.LogActivity(r.Context(), h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(r.Context()),
-		Username:    middleware.UsernameFromCtx(r.Context()),
-		Action:      "UPDATE",
-		EntityType:  "hr_position",
-		EntityID:    id,
-		Description: fmt.Sprintf("Memperbarui jabatan %s", pos.Name),
-	})
-
-	respondJSON(w, http.StatusOK, pos)
-}
-
-// DeletePosition — DELETE /api/hr/positions/:id
-func (h *HREmployeesHandler) DeletePosition(w http.ResponseWriter, r *http.Request) {
-	id, err := parseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "ID tidak valid")
-		return
-	}
-	ctx := r.Context()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
-
-	pos, err := h.queries.GetPositionByID(ctx, pgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusNotFound, "jabatan tidak ditemukan")
-			return
-		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil data jabatan")
-		return
-	}
-
-	count, err := h.queries.CountEmployeesByPosition(ctx, pgID)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal memeriksa karyawan")
-		return
-	}
-	if count > 0 {
-		respondError(w, http.StatusConflict, "jabatan masih dipakai oleh karyawan")
-		return
-	}
-
-	if err := h.queries.DeletePosition(ctx, pgID); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menghapus jabatan")
-		return
-	}
-
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "DELETE",
-		EntityType:  "hr_position",
-		EntityID:    id,
-		Description: fmt.Sprintf("Menghapus jabatan %s", pos.Name),
-	})
-
-	respondJSON(w, http.StatusOK, map[string]string{"message": "jabatan berhasil dihapus"})
-}
-
-// AttendanceHistory — GET /api/hr/employees/:id/attendance-history
-// The employee's last service.HistoryWindowDays days — exactly what the
-// employee sees on the kiosk (same builder).
+// AttendanceHistory — GET /api/hr/employees/:id/attendance-history (same builder as the kiosk)
 func (h *HREmployeesHandler) AttendanceHistory(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
