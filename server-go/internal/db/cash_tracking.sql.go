@@ -24,15 +24,28 @@ type GetCashDayCountParams struct {
 	CountDate pgtype.Date `json:"count_date"`
 }
 
+// ── Counts ─────────────────────────────────────────────────────────────────
 func (q *Queries) GetCashDayCount(ctx context.Context, arg *GetCashDayCountParams) (*CashDayCount, error) {
 	row := q.db.QueryRow(ctx, getCashDayCount, arg.BranchID, arg.CountDate)
 	var i CashDayCount
 	err := row.Scan(
-		&i.ID, &i.BranchID, &i.CountDate,
-		&i.OpeningAmount, &i.OpeningBy, &i.OpeningAt,
-		&i.ClosingAmount, &i.ClosingBy, &i.ClosingAt,
-		&i.ExpectedClosing, &i.Variance, &i.VarianceNote,
-		&i.CashSales, &i.CashIn, &i.CashOut, &i.CashExpenses, &i.CreatedAt,
+		&i.ID,
+		&i.BranchID,
+		&i.CountDate,
+		&i.OpeningAmount,
+		&i.OpeningBy,
+		&i.OpeningAt,
+		&i.ClosingAmount,
+		&i.ClosingBy,
+		&i.ClosingAt,
+		&i.ExpectedClosing,
+		&i.Variance,
+		&i.VarianceNote,
+		&i.CashSales,
+		&i.CashIn,
+		&i.CashOut,
+		&i.CashExpenses,
+		&i.CreatedAt,
 	)
 	return &i, err
 }
@@ -52,6 +65,9 @@ type GetPOSSettlementForDayRow struct {
 	Amount       int64       `json:"amount"`
 }
 
+// The POS settlement layer, one row per payment method. Cash is the one that
+// gets counted; the rest are tracked so a branch's day adds up to its takings
+// and an EDC or platform settlement can be chased when it does not arrive.
 func (q *Queries) GetPOSSettlementForDay(ctx context.Context, date pgtype.Date) ([]*GetPOSSettlementForDayRow, error) {
 	rows, err := q.db.Query(ctx, getPOSSettlementForDay, date)
 	if err != nil {
@@ -61,7 +77,13 @@ func (q *Queries) GetPOSSettlementForDay(ctx context.Context, date pgtype.Date) 
 	var items []*GetPOSSettlementForDayRow
 	for rows.Next() {
 		var i GetPOSSettlementForDayRow
-		if err := rows.Scan(&i.BranchID, &i.AccountID, &i.AccountName, &i.IsCashDrawer, &i.Amount); err != nil {
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.AccountID,
+			&i.AccountName,
+			&i.IsCashDrawer,
+			&i.Amount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -86,25 +108,23 @@ type GetPOSSettlementRangeParams struct {
 	Column3 pgtype.UUID `json:"column_3"`
 }
 
-type GetPOSSettlementRangeRow struct {
-	BranchID     pgtype.UUID `json:"branch_id"`
-	Date         pgtype.Date `json:"date"`
-	AccountID    pgtype.UUID `json:"account_id"`
-	AccountName  string      `json:"account_name"`
-	IsCashDrawer bool        `json:"is_cash_drawer"`
-	Amount       int64       `json:"amount"`
-}
-
-func (q *Queries) GetPOSSettlementRange(ctx context.Context, arg *GetPOSSettlementRangeParams) ([]*GetPOSSettlementRangeRow, error) {
+func (q *Queries) GetPOSSettlementRange(ctx context.Context, arg *GetPOSSettlementRangeParams) ([]*PosSettlementByBranch, error) {
 	rows, err := q.db.Query(ctx, getPOSSettlementRange, arg.Date, arg.Date_2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*GetPOSSettlementRangeRow
+	var items []*PosSettlementByBranch
 	for rows.Next() {
-		var i GetPOSSettlementRangeRow
-		if err := rows.Scan(&i.BranchID, &i.Date, &i.AccountID, &i.AccountName, &i.IsCashDrawer, &i.Amount); err != nil {
+		var i PosSettlementByBranch
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.Date,
+			&i.AccountID,
+			&i.AccountName,
+			&i.IsCashDrawer,
+			&i.Amount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -133,6 +153,8 @@ type GetPreviousCashDayClosingRow struct {
 	ClosingAmount pgtype.Int8 `json:"closing_amount"`
 }
 
+// The previous day's closing, offered as this morning's default so the two ends
+// of consecutive days are linked rather than typed twice.
 func (q *Queries) GetPreviousCashDayClosing(ctx context.Context, arg *GetPreviousCashDayClosingParams) (*GetPreviousCashDayClosingRow, error) {
 	row := q.db.QueryRow(ctx, getPreviousCashDayClosing, arg.BranchID, arg.CountDate)
 	var i GetPreviousCashDayClosingRow
@@ -190,10 +212,21 @@ func (q *Queries) ListCashDayCounts(ctx context.Context, arg *ListCashDayCountsP
 	for rows.Next() {
 		var i ListCashDayCountsRow
 		if err := rows.Scan(
-			&i.ID, &i.BranchID, &i.BranchName, &i.CountDate,
-			&i.OpeningAmount, &i.ClosingAmount, &i.ExpectedClosing, &i.Variance, &i.VarianceNote,
-			&i.CashSales, &i.CashIn, &i.CashOut, &i.CashExpenses,
-			&i.OpeningByName, &i.ClosingByName,
+			&i.ID,
+			&i.BranchID,
+			&i.BranchName,
+			&i.CountDate,
+			&i.OpeningAmount,
+			&i.ClosingAmount,
+			&i.ExpectedClosing,
+			&i.Variance,
+			&i.VarianceNote,
+			&i.CashSales,
+			&i.CashIn,
+			&i.CashOut,
+			&i.CashExpenses,
+			&i.OpeningByName,
+			&i.ClosingByName,
 		); err != nil {
 			return nil, err
 		}
@@ -234,8 +267,13 @@ func (q *Queries) ListCashDayStatus(ctx context.Context, countDate pgtype.Date) 
 	for rows.Next() {
 		var i ListCashDayStatusRow
 		if err := rows.Scan(
-			&i.BranchID, &i.BranchName,
-			&i.OpeningAmount, &i.ClosingAmount, &i.ExpectedClosing, &i.Variance, &i.VarianceNote,
+			&i.BranchID,
+			&i.BranchName,
+			&i.OpeningAmount,
+			&i.ClosingAmount,
+			&i.ExpectedClosing,
+			&i.Variance,
+			&i.VarianceNote,
 		); err != nil {
 			return nil, err
 		}
@@ -270,7 +308,12 @@ func (q *Queries) ListCashDrawerAccounts(ctx context.Context) ([]*ListCashDrawer
 	var items []*ListCashDrawerAccountsRow
 	for rows.Next() {
 		var i ListCashDrawerAccountsRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.AccountNumber, &i.Balance); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.AccountNumber,
+			&i.Balance,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -336,11 +379,23 @@ func (q *Queries) SetCashDayClosing(ctx context.Context, arg *SetCashDayClosingP
 	)
 	var i CashDayCount
 	err := row.Scan(
-		&i.ID, &i.BranchID, &i.CountDate,
-		&i.OpeningAmount, &i.OpeningBy, &i.OpeningAt,
-		&i.ClosingAmount, &i.ClosingBy, &i.ClosingAt,
-		&i.ExpectedClosing, &i.Variance, &i.VarianceNote,
-		&i.CashSales, &i.CashIn, &i.CashOut, &i.CashExpenses, &i.CreatedAt,
+		&i.ID,
+		&i.BranchID,
+		&i.CountDate,
+		&i.OpeningAmount,
+		&i.OpeningBy,
+		&i.OpeningAt,
+		&i.ClosingAmount,
+		&i.ClosingBy,
+		&i.ClosingAt,
+		&i.ExpectedClosing,
+		&i.Variance,
+		&i.VarianceNote,
+		&i.CashSales,
+		&i.CashIn,
+		&i.CashOut,
+		&i.CashExpenses,
+		&i.CreatedAt,
 	)
 	return &i, err
 }
@@ -367,6 +422,7 @@ type SumCashDrawerMovementsForDayRow struct {
 	CashOut int64 `json:"cash_out"`
 }
 
+// Movements through every drawer account on a day, for one branch's setoran.
 func (q *Queries) SumCashDrawerMovementsForDay(ctx context.Context, arg *SumCashDrawerMovementsForDayParams) (*SumCashDrawerMovementsForDayRow, error) {
 	row := q.db.QueryRow(ctx, sumCashDrawerMovementsForDay, arg.BranchID, arg.Date)
 	var i SumCashDrawerMovementsForDayRow
@@ -389,6 +445,14 @@ type SumCashInvoicesForBranchDayParams struct {
 	Date     pgtype.Date `json:"date"`
 }
 
+// Cash paid straight out of a drawer account on a given day: an invoice settled
+// in notes rather than by transfer. Pembelanjaan Harian is deliberately absent —
+// it comes out of Kas Kecil, which is its own reconciliation.
+//
+// Matched on `payment_date`, not on the invoice date: the till was emptied on
+// the day the notes were handed over, and an invoice dated last Friday but
+// settled today belongs to today's count. Falls back to the invoice date for
+// rows predating that column.
 func (q *Queries) SumCashInvoicesForBranchDay(ctx context.Context, arg *SumCashInvoicesForBranchDayParams) (int64, error) {
 	row := q.db.QueryRow(ctx, sumCashInvoicesForBranchDay, arg.BranchID, arg.Date)
 	var total int64
@@ -421,6 +485,9 @@ type UpsertCashDayOpeningParams struct {
 	OpeningBy     pgtype.UUID `json:"opening_by"`
 }
 
+// Re-recording an opening is a correction of a miscount, so it overwrites — and
+// clears the closing with it, because a variance measured against the old
+// opening no longer means anything.
 func (q *Queries) UpsertCashDayOpening(ctx context.Context, arg *UpsertCashDayOpeningParams) (*CashDayCount, error) {
 	row := q.db.QueryRow(ctx, upsertCashDayOpening,
 		arg.BranchID,
@@ -430,11 +497,23 @@ func (q *Queries) UpsertCashDayOpening(ctx context.Context, arg *UpsertCashDayOp
 	)
 	var i CashDayCount
 	err := row.Scan(
-		&i.ID, &i.BranchID, &i.CountDate,
-		&i.OpeningAmount, &i.OpeningBy, &i.OpeningAt,
-		&i.ClosingAmount, &i.ClosingBy, &i.ClosingAt,
-		&i.ExpectedClosing, &i.Variance, &i.VarianceNote,
-		&i.CashSales, &i.CashIn, &i.CashOut, &i.CashExpenses, &i.CreatedAt,
+		&i.ID,
+		&i.BranchID,
+		&i.CountDate,
+		&i.OpeningAmount,
+		&i.OpeningBy,
+		&i.OpeningAt,
+		&i.ClosingAmount,
+		&i.ClosingBy,
+		&i.ClosingAt,
+		&i.ExpectedClosing,
+		&i.Variance,
+		&i.VarianceNote,
+		&i.CashSales,
+		&i.CashIn,
+		&i.CashOut,
+		&i.CashExpenses,
+		&i.CreatedAt,
 	)
 	return &i, err
 }

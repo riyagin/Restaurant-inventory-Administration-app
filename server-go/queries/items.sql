@@ -46,7 +46,7 @@ LIMIT 1;
 -- name: GetItemPurchaseHistory :many
 SELECT
     ii.id, ii.quantity, ii.unit_index, ii.price,
-    (ii.quantity * ii.price) AS line_total,
+    (ii.quantity * ii.price)::numeric AS line_total,
     ii.description,
     inv.id AS invoice_id, inv.invoice_number, inv.date,
     inv.invoice_type, inv.payment_status,
@@ -54,7 +54,7 @@ SELECT
     b.name AS branch_name,
     dv.name AS division_name,
     wh.name AS warehouse_name,
-    it.units->ii.unit_index->>'name' AS unit_name
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name
 FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
 JOIN items it ON it.id = ii.item_id
@@ -74,8 +74,8 @@ ORDER BY inv.date DESC, inv.created_at DESC;
 -- data?", not "at what price?".
 -- name: GetItemPriceRange :one
 SELECT
-    MIN(inv.date) AS first_purchase_date,
-    MAX(inv.date) AS last_purchase_date,
+    MIN(inv.date)::date AS first_purchase_date,
+    MAX(inv.date)::date AS last_purchase_date,
     COUNT(*)::int AS purchase_count
 FROM invoice_items ii
 JOIN invoices inv ON inv.id = ii.invoice_id
@@ -125,15 +125,15 @@ ORDER BY d.dispatched_at DESC;
 -- name: GetItemPriceByUnit :many
 SELECT
     ii.unit_index,
-    it.units->ii.unit_index->>'name' AS unit_name,
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name,
     SUM(ii.quantity)::numeric           AS total_quantity,
     SUM(ii.quantity * ii.price)::bigint AS total_spend,
     COUNT(*)::int                       AS purchase_count,
     COUNT(DISTINCT COALESCE(ii.vendor_id, inv.vendor_id))::int AS vendor_count,
     MIN(ii.price)::bigint               AS min_price,
     MAX(ii.price)::bigint               AS max_price,
-    MIN(inv.date)                       AS first_purchase_date,
-    MAX(inv.date)                       AS last_purchase_date,
+    MIN(inv.date)::date                       AS first_purchase_date,
+    MAX(inv.date)::date                       AS last_purchase_date,
     (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
     (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
 FROM invoice_items ii
@@ -151,14 +151,14 @@ SELECT
     v.id   AS vendor_id,
     v.name AS vendor_name,
     ii.unit_index,
-    it.units->ii.unit_index->>'name' AS unit_name,
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name,
     SUM(ii.quantity)::numeric           AS total_quantity,
     SUM(ii.quantity * ii.price)::bigint AS total_spend,
     COUNT(*)::int                       AS purchase_count,
     MIN(ii.price)::bigint               AS min_price,
     MAX(ii.price)::bigint               AS max_price,
-    MIN(inv.date)                       AS first_purchase_date,
-    MAX(inv.date)                       AS last_purchase_date,
+    MIN(inv.date)::date                       AS first_purchase_date,
+    MAX(inv.date)::date                       AS last_purchase_date,
     (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
     (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
 FROM invoice_items ii
@@ -176,7 +176,7 @@ ORDER BY MAX(inv.date) DESC;
 SELECT
     to_char(date_trunc('month', inv.date), 'YYYY-MM') AS month,
     ii.unit_index,
-    it.units->ii.unit_index->>'name' AS unit_name,
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name,
     SUM(ii.quantity)::numeric           AS total_quantity,
     SUM(ii.quantity * ii.price)::bigint AS total_spend,
     COUNT(*)::int                       AS purchase_count,
@@ -200,7 +200,7 @@ SELECT
     SUM(inv.quantity)::numeric AS quantity,
     SUM(inv.value)::bigint     AS value,
     COUNT(*)::int              AS lot_count,
-    MIN(inv.date)              AS oldest_lot_date
+    MIN(inv.date)::date              AS oldest_lot_date
 FROM inventory inv
 JOIN warehouses w ON w.id = inv.warehouse_id
 WHERE inv.item_id = $1
@@ -214,7 +214,7 @@ SELECT
     di.unit_name,
     SUM(di.quantity)::numeric      AS quantity,
     COUNT(DISTINCT d.id)::int      AS dispatch_count,
-    MAX(d.dispatched_at)           AS last_dispatched_at
+    MAX(d.dispatched_at)::timestamptz           AS last_dispatched_at
 FROM dispatch_items di
 JOIN dispatches d ON d.id = di.dispatch_id
 LEFT JOIN branches b   ON b.id  = d.branch_id

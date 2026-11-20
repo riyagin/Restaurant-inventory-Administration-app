@@ -46,4 +46,4 @@ RETURNING id, dispatched_at;
 
 -- name: InsertDispatchItem :exec
 INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name, conversion_factor)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, COALESCE($6, 1));
+VALUES (gen_random_uuid(), sqlc.arg(dispatch_id), sqlc.arg(item_id), sqlc.arg(quantity), sqlc.arg(unit_index), sqlc.arg(unit_name), COALESCE(sqlc.narg(conversion_factor)::numeric, 1));

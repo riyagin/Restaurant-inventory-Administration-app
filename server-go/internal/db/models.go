@@ -16,8 +16,7 @@ type Account struct {
 	AccountType   string      `json:"account_type"`
 	ParentID      pgtype.UUID `json:"parent_id"`
 	IsSystem      bool        `json:"is_system"`
-	// Physical cash that can be counted at the end of a day. Drives which POS
-	// payment methods Pelacakan Kas reconciles against a drawer count.
+	// Physical cash that can be counted at the end of a day. Drives Pelacakan Kas.
 	IsCashDrawer bool `json:"is_cash_drawer"`
 }
 
@@ -69,14 +68,17 @@ type AttendancePermission struct {
 }
 
 type AttendancePunch struct {
-	ID            pgtype.UUID        `json:"id"`
-	EmployeeID    pgtype.UUID        `json:"employee_id"`
-	PunchedAt     pgtype.Timestamptz `json:"punched_at"`
-	WorkDate      pgtype.Date        `json:"work_date"`
-	Source        string             `json:"source"`
-	DirectionHint pgtype.Text        `json:"direction_hint"`
-	DeviceID      pgtype.UUID        `json:"device_id"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID               pgtype.UUID        `json:"id"`
+	EmployeeID       pgtype.UUID        `json:"employee_id"`
+	PunchedAt        pgtype.Timestamptz `json:"punched_at"`
+	WorkDate         pgtype.Date        `json:"work_date"`
+	Source           string             `json:"source"`
+	DirectionHint    pgtype.Text        `json:"direction_hint"`
+	DeviceID         pgtype.UUID        `json:"device_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	TimeSource       string             `json:"time_source"`
+	DeviceReportedAt pgtype.Timestamptz `json:"device_reported_at"`
+	ClientEventID    pgtype.UUID        `json:"client_event_id"`
 }
 
 type AttendanceRecord struct {
@@ -106,13 +108,54 @@ type AttendanceRecord struct {
 	ReviewResolved     bool               `json:"review_resolved"`
 }
 
+type BenefitClaim struct {
+	ID                  pgtype.UUID        `json:"id"`
+	ClaimNumber         string             `json:"claim_number"`
+	EmployeeID          pgtype.UUID        `json:"employee_id"`
+	ClaimDate           pgtype.Date        `json:"claim_date"`
+	PeriodMonth         pgtype.Date        `json:"period_month"`
+	TotalAmount         int64              `json:"total_amount"`
+	CoveredAmount       int64              `json:"covered_amount"`
+	ExcessAmount        int64              `json:"excess_amount"`
+	MonthlyAmount       int64              `json:"monthly_amount"`
+	AvailableBefore     int64              `json:"available_before"`
+	FundSourceAccountID pgtype.UUID        `json:"fund_source_account_id"`
+	KasbonID            pgtype.UUID        `json:"kasbon_id"`
+	LeaveRequestID      pgtype.UUID        `json:"leave_request_id"`
+	Description         string             `json:"description"`
+	Status              string             `json:"status"`
+	JournalEntryID      pgtype.UUID        `json:"journal_entry_id"`
+	CancelledBy         pgtype.UUID        `json:"cancelled_by"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CancelNote          pgtype.Text        `json:"cancel_note"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type BenefitFundMovement struct {
+	ID              pgtype.UUID        `json:"id"`
+	EmployeeID      pgtype.UUID        `json:"employee_id"`
+	Fund            string             `json:"fund"`
+	MovementType    string             `json:"movement_type"`
+	Amount          int64              `json:"amount"`
+	PeriodMonth     pgtype.Date        `json:"period_month"`
+	MovementDate    pgtype.Date        `json:"movement_date"`
+	PayrollPeriodID pgtype.UUID        `json:"payroll_period_id"`
+	ClaimID         pgtype.UUID        `json:"claim_id"`
+	JournalEntryID  pgtype.UUID        `json:"journal_entry_id"`
+	Note            string             `json:"note"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type Branch struct {
-	ID                 pgtype.UUID        `json:"id"`
-	Name               string             `json:"name"`
-	RevenueAccountID   pgtype.UUID        `json:"revenue_account_id"`
-	ExpenseAccountID   pgtype.UUID        `json:"expense_account_id"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	PettyCashAccountID pgtype.UUID        `json:"petty_cash_account_id"`
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	RevenueAccountID     pgtype.UUID        `json:"revenue_account_id"`
+	ExpenseAccountID     pgtype.UUID        `json:"expense_account_id"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	PettyCashAccountID   pgtype.UUID        `json:"petty_cash_account_id"`
+	PrepaidRentAccountID pgtype.UUID        `json:"prepaid_rent_account_id"`
 }
 
 type CashDayCount struct {
@@ -154,6 +197,15 @@ type CashDeposit struct {
 	CancelledBy   pgtype.UUID        `json:"cancelled_by"`
 	CancelledAt   pgtype.Timestamptz `json:"cancelled_at"`
 	CancelReason  string             `json:"cancel_reason"`
+}
+
+// Per cash account: balance vs what recorded transactions explain. A positive "unexplained" is money that entered outside any transaction — typically an opening balance carried over from the previous system.
+type CashReconciliation struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Balance     int64       `json:"balance"`
+	Explained   int64       `json:"explained"`
+	Unexplained int64       `json:"unexplained"`
 }
 
 type DailyPurchase struct {
@@ -210,20 +262,30 @@ type DailyPurchaseTemplateItem struct {
 	SortOrder   int32       `json:"sort_order"`
 }
 
-type PettyCashCount struct {
-	ID              pgtype.UUID        `json:"id"`
-	BranchID        pgtype.UUID        `json:"branch_id"`
-	CountDate       pgtype.Date        `json:"count_date"`
-	OpeningAmount   int64              `json:"opening_amount"`
-	OpeningBy       pgtype.UUID        `json:"opening_by"`
-	OpeningAt       pgtype.Timestamptz `json:"opening_at"`
-	ClosingAmount   pgtype.Int8        `json:"closing_amount"`
-	ClosingBy       pgtype.UUID        `json:"closing_by"`
-	ClosingAt       pgtype.Timestamptz `json:"closing_at"`
-	ExpectedClosing pgtype.Int8        `json:"expected_closing"`
-	Variance        pgtype.Int8        `json:"variance"`
-	VarianceNote    string             `json:"variance_note"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+type DailyTaskCompletion struct {
+	ID           pgtype.UUID        `json:"id"`
+	DefinitionID pgtype.UUID        `json:"definition_id"`
+	BranchID     pgtype.UUID        `json:"branch_id"`
+	TaskDate     pgtype.Date        `json:"task_date"`
+	CompletedBy  pgtype.UUID        `json:"completed_by"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	Note         string             `json:"note"`
+}
+
+type DailyTaskDefinition struct {
+	ID            pgtype.UUID        `json:"id"`
+	Name          string             `json:"name"`
+	Description   string             `json:"description"`
+	TaskType      string             `json:"task_type"`
+	Scope         string             `json:"scope"`
+	TargetRole    string             `json:"target_role"`
+	LinkPath      string             `json:"link_path"`
+	StartsOn      pgtype.Date        `json:"starts_on"`
+	GraceDays     int32              `json:"grace_days"`
+	IsActive      bool               `json:"is_active"`
+	SortOrder     int32              `json:"sort_order"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	DueOffsetDays int32              `json:"due_offset_days"`
 }
 
 type Dispatch struct {
@@ -234,6 +296,8 @@ type Dispatch struct {
 	Notes        pgtype.Text        `json:"notes"`
 	DispatchedBy pgtype.UUID        `json:"dispatched_by"`
 	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
+	Status       string             `json:"status"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type DispatchItem struct {
@@ -272,6 +336,7 @@ type Division struct {
 	ExpenseAccountID  pgtype.UUID        `json:"expense_account_id"`
 	DiscountAccountID pgtype.UUID        `json:"discount_account_id"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	IsSystem          bool               `json:"is_system"`
 }
 
 type DivisionCategory struct {
@@ -280,38 +345,59 @@ type DivisionCategory struct {
 	Name       string      `json:"name"`
 }
 
-type ExpenseCategory struct {
-	ID         pgtype.UUID        `json:"id"`
-	DivisionID pgtype.UUID        `json:"division_id"`
-	Name       string             `json:"name"`
-	AccountID  pgtype.UUID        `json:"account_id"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+type Employee struct {
+	ID                   pgtype.UUID        `json:"id"`
+	EmployeeCode         string             `json:"employee_code"`
+	FullName             string             `json:"full_name"`
+	Dob                  pgtype.Date        `json:"dob"`
+	JoinDate             pgtype.Date        `json:"join_date"`
+	PositionID           pgtype.UUID        `json:"position_id"`
+	BranchID             pgtype.UUID        `json:"branch_id"`
+	Phone                pgtype.Text        `json:"phone"`
+	Email                pgtype.Text        `json:"email"`
+	Address              pgtype.Text        `json:"address"`
+	NationalID           pgtype.Text        `json:"national_id"`
+	BankName             pgtype.Text        `json:"bank_name"`
+	BankAccountNumber    pgtype.Text        `json:"bank_account_number"`
+	BankAccountHolder    pgtype.Text        `json:"bank_account_holder"`
+	PhotoPath            pgtype.Text        `json:"photo_path"`
+	UserID               pgtype.UUID        `json:"user_id"`
+	Status               string             `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	EmploymentType       string             `json:"employment_type"`
+	ContractEndDate      pgtype.Date        `json:"contract_end_date"`
+	PermanentSince       pgtype.Date        `json:"permanent_since"`
+	ResignDate           pgtype.Date        `json:"resign_date"`
+	FaceEmbedding        []byte             `json:"face_embedding"`
+	FaceEmbeddingVersion pgtype.Text        `json:"face_embedding_version"`
+	FaceEnrolledAt       pgtype.Timestamptz `json:"face_enrolled_at"`
+	DivisionID           pgtype.UUID        `json:"division_id"`
+	IsDeliveryStaff      bool               `json:"is_delivery_staff"`
 }
 
-type Employee struct {
-	ID                pgtype.UUID        `json:"id"`
-	EmployeeCode      string             `json:"employee_code"`
-	FullName          string             `json:"full_name"`
-	Dob               pgtype.Date        `json:"dob"`
-	JoinDate          pgtype.Date        `json:"join_date"`
-	PositionID        pgtype.UUID        `json:"position_id"`
-	BranchID          pgtype.UUID        `json:"branch_id"`
-	Phone             pgtype.Text        `json:"phone"`
-	Email             pgtype.Text        `json:"email"`
-	Address           pgtype.Text        `json:"address"`
-	NationalID        pgtype.Text        `json:"national_id"`
-	BankName          pgtype.Text        `json:"bank_name"`
-	BankAccountNumber pgtype.Text        `json:"bank_account_number"`
-	BankAccountHolder pgtype.Text        `json:"bank_account_holder"`
-	PhotoPath         pgtype.Text        `json:"photo_path"`
-	UserID            pgtype.UUID        `json:"user_id"`
-	Status            string             `json:"status"`
-	EmploymentType    string             `json:"employment_type"`
-	ContractEndDate   pgtype.Date        `json:"contract_end_date"`
-	PermanentSince    pgtype.Date        `json:"permanent_since"`
-	ResignDate        pgtype.Date        `json:"resign_date"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+type EmployeeDocument struct {
+	ID           pgtype.UUID        `json:"id"`
+	EmployeeID   pgtype.UUID        `json:"employee_id"`
+	DocType      string             `json:"doc_type"`
+	Title        string             `json:"title"`
+	FilePath     string             `json:"file_path"`
+	OriginalName pgtype.Text        `json:"original_name"`
+	MimeType     pgtype.Text        `json:"mime_type"`
+	SizeBytes    pgtype.Int8        `json:"size_bytes"`
+	IsSigned     bool               `json:"is_signed"`
+	Notes        pgtype.Text        `json:"notes"`
+	UploadedBy   pgtype.UUID        `json:"uploaded_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type EmployeeFacePhoto struct {
+	ID         pgtype.UUID        `json:"id"`
+	EmployeeID pgtype.UUID        `json:"employee_id"`
+	PhotoPath  string             `json:"photo_path"`
+	Source     string             `json:"source"`
+	CapturedAt pgtype.Timestamptz `json:"captured_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type EmployeeWageComponent struct {
@@ -337,6 +423,14 @@ type Enumeration struct {
 	Date             pgtype.Date        `json:"date"`
 }
 
+type ExpenseCategory struct {
+	ID         pgtype.UUID        `json:"id"`
+	DivisionID pgtype.UUID        `json:"division_id"`
+	Name       string             `json:"name"`
+	AccountID  pgtype.UUID        `json:"account_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type FingerprintImport struct {
 	ID           pgtype.UUID        `json:"id"`
 	Filename     pgtype.Text        `json:"filename"`
@@ -344,6 +438,22 @@ type FingerprintImport struct {
 	RowCount     pgtype.Int4        `json:"row_count"`
 	MatchedCount pgtype.Int4        `json:"matched_count"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type HrContractTemplate struct {
+	ID             pgtype.UUID        `json:"id"`
+	Name           string             `json:"name"`
+	DocType        string             `json:"doc_type"`
+	PositionName   string             `json:"position_name"`
+	DivisionName   string             `json:"division_name"`
+	PlaceOfWork    string             `json:"place_of_work"`
+	Salary         int64              `json:"salary"`
+	SalaryPeriod   string             `json:"salary_period"`
+	JobDescription string             `json:"job_description"`
+	ContractMonths int32              `json:"contract_months"`
+	Notes          string             `json:"notes"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type HrImportBatch struct {
@@ -356,28 +466,42 @@ type HrImportBatch struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type HrPolicySetting struct {
+	ID                    int32              `json:"id"`
+	PayrollCutoffDay      int32              `json:"payroll_cutoff_day"`
+	KasbonWindowStartDay  int32              `json:"kasbon_window_start_day"`
+	KasbonWindowEndDay    int32              `json:"kasbon_window_end_day"`
+	KasbonMaxAmount       int64              `json:"kasbon_max_amount"`
+	KasbonMaxInstallments int32              `json:"kasbon_max_installments"`
+	KasbonPermanentOnly   bool               `json:"kasbon_permanent_only"`
+	KasbonMinScore        int32              `json:"kasbon_min_score"`
+	KasbonPriorityScore   int32              `json:"kasbon_priority_score"`
+	UpdatedBy             pgtype.UUID        `json:"updated_by"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type HrSetting struct {
-	ID               int32              `json:"id"`
-	CompanyName      string             `json:"company_name"`
-	Address          string             `json:"address"`
-	LogoPath         pgtype.Text        `json:"logo_path"`
-	PayslipFooter    string             `json:"payslip_footer"`
-	AbsenceGraceDays int32              `json:"absence_grace_days"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	// Company-level defaults for generated HR documents (PKWT/PKWTT/SP/
-	// Paklaring). Configured once in HR settings instead of being retyped on
-	// every letter — see migration 056.
-	CompanyPhone        string `json:"company_phone"`
-	CompanyEmail        string `json:"company_email"`
-	CompanyCity         string `json:"company_city"`
-	SignatoryName       string `json:"signatory_name"`
-	SignatoryPosition   string `json:"signatory_position"`
-	SignatoryNationalID string `json:"signatory_national_id"`
-	DocNumberFormat     string `json:"doc_number_format"`
-	DocNumberCounter    int32  `json:"doc_number_counter"`
-	DocWorkingHours     string `json:"doc_working_hours"`
-	DocPaymentInfo      string `json:"doc_payment_info"`
-	DocProbationMonths  int32  `json:"doc_probation_months"`
+	ID                       int32              `json:"id"`
+	CompanyName              string             `json:"company_name"`
+	Address                  string             `json:"address"`
+	LogoPath                 pgtype.Text        `json:"logo_path"`
+	PayslipFooter            string             `json:"payslip_footer"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+	AbsenceGraceDays         int32              `json:"absence_grace_days"`
+	CompanyPhone             string             `json:"company_phone"`
+	CompanyEmail             string             `json:"company_email"`
+	CompanyCity              string             `json:"company_city"`
+	SignatoryName            string             `json:"signatory_name"`
+	SignatoryPosition        string             `json:"signatory_position"`
+	SignatoryNationalID      string             `json:"signatory_national_id"`
+	DocNumberFormat          string             `json:"doc_number_format"`
+	DocNumberCounter         int32              `json:"doc_number_counter"`
+	DocWorkingHours          string             `json:"doc_working_hours"`
+	DocPaymentInfo           string             `json:"doc_payment_info"`
+	DocProbationMonths       int32              `json:"doc_probation_months"`
+	ReviewLateMinutes        int32              `json:"review_late_minutes"`
+	ReviewEarlyMinutes       int32              `json:"review_early_minutes"`
+	AllowBackdatedPermission bool               `json:"allow_backdated_permission"`
 }
 
 type Inventory struct {
@@ -388,6 +512,7 @@ type Inventory struct {
 	UnitIndex   int32              `json:"unit_index"`
 	Value       int64              `json:"value"`
 	Date        pgtype.Date        `json:"date"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	DepletedAt  pgtype.Timestamptz `json:"depleted_at"`
 }
 
@@ -414,17 +539,19 @@ type Invoice struct {
 	PaymentMethod     pgtype.Text        `json:"payment_method"`
 	PaymentStatus     string             `json:"payment_status"`
 	AmountPaid        int64              `json:"amount_paid"`
-	PaymentDate       pgtype.Date        `json:"payment_date"`
 	AccountID         pgtype.UUID        `json:"account_id"`
 	WarehouseID       pgtype.UUID        `json:"warehouse_id"`
 	BranchID          pgtype.UUID        `json:"branch_id"`
 	DivisionID        pgtype.UUID        `json:"division_id"`
-	ExpenseCategoryID pgtype.UUID        `json:"expense_category_id"`
 	DispatchID        pgtype.UUID        `json:"dispatch_id"`
 	VendorID          pgtype.UUID        `json:"vendor_id"`
 	ReferenceNumber   pgtype.Text        `json:"reference_number"`
 	PhotoPath         pgtype.Text        `json:"photo_path"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ExpenseCategoryID pgtype.UUID        `json:"expense_category_id"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	PaymentDate       pgtype.Date        `json:"payment_date"`
+	IsDistributed     bool               `json:"is_distributed"`
 }
 
 type InvoiceItem struct {
@@ -437,6 +564,20 @@ type InvoiceItem struct {
 	Price            int64          `json:"price"`
 	Description      pgtype.Text    `json:"description"`
 	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
+}
+
+type InvoiceItemAllocation struct {
+	ID             pgtype.UUID    `json:"id"`
+	InvoiceID      pgtype.UUID    `json:"invoice_id"`
+	InvoiceItemID  pgtype.UUID    `json:"invoice_item_id"`
+	WarehouseID    pgtype.UUID    `json:"warehouse_id"`
+	BranchID       pgtype.UUID    `json:"branch_id"`
+	DivisionID     pgtype.UUID    `json:"division_id"`
+	Quantity       pgtype.Numeric `json:"quantity"`
+	BaseQuantity   pgtype.Numeric `json:"base_quantity"`
+	Value          int64          `json:"value"`
+	DebitAccountID pgtype.UUID    `json:"debit_account_id"`
+	SortOrder      int32          `json:"sort_order"`
 }
 
 type InvoiceTemplate struct {
@@ -466,6 +607,25 @@ type Item struct {
 	MinStock pgtype.Numeric `json:"min_stock"`
 }
 
+type JournalEntry struct {
+	ID          pgtype.UUID        `json:"id"`
+	EntryDate   pgtype.Date        `json:"entry_date"`
+	SourceType  string             `json:"source_type"`
+	SourceID    pgtype.UUID        `json:"source_id"`
+	Description string             `json:"description"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	ReversesID  pgtype.UUID        `json:"reverses_id"`
+}
+
+type JournalLine struct {
+	ID        pgtype.UUID `json:"id"`
+	EntryID   pgtype.UUID `json:"entry_id"`
+	AccountID pgtype.UUID `json:"account_id"`
+	Amount    int64       `json:"amount"`
+	Memo      string      `json:"memo"`
+}
+
 type Kasbon struct {
 	ID                  pgtype.UUID        `json:"id"`
 	KasbonNumber        string             `json:"kasbon_number"`
@@ -485,6 +645,8 @@ type Kasbon struct {
 	EvidencePhotoPath   pgtype.Text        `json:"evidence_photo_path"`
 	CreatedBy           pgtype.UUID        `json:"created_by"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	ScoreAtRequest      pgtype.Int4        `json:"score_at_request"`
+	ApprovalTrack       pgtype.Text        `json:"approval_track"`
 }
 
 type KasbonInstallment struct {
@@ -504,29 +666,109 @@ type LeaveBalance struct {
 	UsedDays   int32       `json:"used_days"`
 }
 
+type LeaveMonthlyQuota struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Month      pgtype.Date `json:"month"`
+	QuotaDays  int32       `json:"quota_days"`
+}
+
+type LeaveQuotaUsage struct {
+	ID             pgtype.UUID `json:"id"`
+	LeaveRequestID pgtype.UUID `json:"leave_request_id"`
+	EmployeeID     pgtype.UUID `json:"employee_id"`
+	Date           pgtype.Date `json:"date"`
+	Cost           int32       `json:"cost"`
+}
+
 type LeaveRequest struct {
+	ID            pgtype.UUID        `json:"id"`
+	EmployeeID    pgtype.UUID        `json:"employee_id"`
+	LeaveTypeID   pgtype.UUID        `json:"leave_type_id"`
+	StartDate     pgtype.Date        `json:"start_date"`
+	EndDate       pgtype.Date        `json:"end_date"`
+	DayCount      int32              `json:"day_count"`
+	Reason        pgtype.Text        `json:"reason"`
+	Status        string             `json:"status"`
+	DecidedBy     pgtype.UUID        `json:"decided_by"`
+	DecidedAt     pgtype.Timestamptz `json:"decided_at"`
+	DecisionNote  pgtype.Text        `json:"decision_note"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	IsBackdated   bool               `json:"is_backdated"`
+	HasDoctorNote bool               `json:"has_doctor_note"`
+}
+
+type LeaveType struct {
+	ID                 pgtype.UUID `json:"id"`
+	Name               string      `json:"name"`
+	IsPaid             bool        `json:"is_paid"`
+	UsesQuota          bool        `json:"uses_quota"`
+	IsActive           bool        `json:"is_active"`
+	RequiresDoctorNote bool        `json:"requires_doctor_note"`
+}
+
+type OperationalExpense struct {
+	ID              pgtype.UUID        `json:"id"`
+	Number          string             `json:"number"`
+	Date            pgtype.Date        `json:"date"`
+	BranchID        pgtype.UUID        `json:"branch_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+	DebitAccountID  pgtype.UUID        `json:"debit_account_id"`
+	CreditAccountID pgtype.UUID        `json:"credit_account_id"`
+	Amount          int64              `json:"amount"`
+	VendorID        pgtype.UUID        `json:"vendor_id"`
+	Reference       string             `json:"reference"`
+	Notes           string             `json:"notes"`
+	PhotoPath       pgtype.Text        `json:"photo_path"`
+	Status          string             `json:"status"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	CancelledBy     pgtype.UUID        `json:"cancelled_by"`
+	CancelledAt     pgtype.Timestamptz `json:"cancelled_at"`
+	CancelReason    string             `json:"cancel_reason"`
+	PeriodMonth     pgtype.Date        `json:"period_month"`
+	Billing         string             `json:"billing"`
+	DueDate         pgtype.Date        `json:"due_date"`
+	TermMonths      int32              `json:"term_months"`
+}
+
+type OperationalExpenseAmortization struct {
+	ID               pgtype.UUID        `json:"id"`
+	ExpenseID        pgtype.UUID        `json:"expense_id"`
+	Seq              int32              `json:"seq"`
+	PeriodMonth      pgtype.Date        `json:"period_month"`
+	Amount           int64              `json:"amount"`
+	ExpenseAccountID pgtype.UUID        `json:"expense_account_id"`
+	PrepaidAccountID pgtype.UUID        `json:"prepaid_account_id"`
+	Status           string             `json:"status"`
+	JournalEntryID   pgtype.UUID        `json:"journal_entry_id"`
+	PostedAt         pgtype.Timestamptz `json:"posted_at"`
+	Attempts         int32              `json:"attempts"`
+	LastError        string             `json:"last_error"`
+}
+
+type OperationalExpenseCategory struct {
+	ID         pgtype.UUID        `json:"id"`
+	DivisionID pgtype.UUID        `json:"division_id"`
+	Name       string             `json:"name"`
+	AccountID  pgtype.UUID        `json:"account_id"`
+	IsSystem   bool               `json:"is_system"`
+	SortOrder  int32              `json:"sort_order"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type OvertimeRequest struct {
 	ID           pgtype.UUID        `json:"id"`
 	EmployeeID   pgtype.UUID        `json:"employee_id"`
-	LeaveTypeID  pgtype.UUID        `json:"leave_type_id"`
-	StartDate    pgtype.Date        `json:"start_date"`
-	EndDate      pgtype.Date        `json:"end_date"`
-	DayCount     int32              `json:"day_count"`
+	Date         pgtype.Date        `json:"date"`
+	Hours        pgtype.Numeric     `json:"hours"`
 	Reason       pgtype.Text        `json:"reason"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	Status       string             `json:"status"`
 	DecidedBy    pgtype.UUID        `json:"decided_by"`
 	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
 	DecisionNote pgtype.Text        `json:"decision_note"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	IsBackdated  bool               `json:"is_backdated"`
-}
-
-type LeaveType struct {
-	ID        pgtype.UUID `json:"id"`
-	Name      string      `json:"name"`
-	IsPaid    bool        `json:"is_paid"`
-	UsesQuota bool        `json:"uses_quota"`
-	IsActive  bool        `json:"is_active"`
 }
 
 type PayrollLine struct {
@@ -560,6 +802,11 @@ type PayrollLine struct {
 	HalfDayDeduction        int64              `json:"half_day_deduction"`
 	AttendanceCutMinutes    int32              `json:"attendance_cut_minutes"`
 	AttendanceCutDeduction  int64              `json:"attendance_cut_deduction"`
+	PerformanceGrade        pgtype.Text        `json:"performance_grade"`
+	GradePayPercent         pgtype.Int4        `json:"grade_pay_percent"`
+	PublicHolidayRate       int64              `json:"public_holiday_rate"`
+	AlphaUnpaidDays         int32              `json:"alpha_unpaid_days"`
+	AlphaDeduction          int64              `json:"alpha_deduction"`
 }
 
 type PayrollLineComponent struct {
@@ -583,38 +830,34 @@ type PayrollPeriod struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type PayrollPosting struct {
+	PeriodID       pgtype.UUID        `json:"period_id"`
+	Status         string             `json:"status"`
+	Attempts       int32              `json:"attempts"`
+	LastError      string             `json:"last_error"`
+	JournalEntryID pgtype.UUID        `json:"journal_entry_id"`
+	QueuedAt       pgtype.Timestamptz `json:"queued_at"`
+	PostedAt       pgtype.Timestamptz `json:"posted_at"`
+}
+
 type PayrollSetting struct {
 	ID                 int32          `json:"id"`
 	OvertimeMultiplier pgtype.Numeric `json:"overtime_multiplier"`
 	HolidayMultiplier  pgtype.Numeric `json:"holiday_multiplier"`
 }
 
-type ThrRun struct {
-	ID          pgtype.UUID        `json:"id"`
-	Name        string             `json:"name"`
-	PaymentDate pgtype.Date        `json:"payment_date"`
-	Status      string             `json:"status"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	ClosedAt    pgtype.Timestamptz `json:"closed_at"`
-	PaidAt      pgtype.Timestamptz `json:"paid_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+type PerformanceGrade struct {
+	ID         pgtype.UUID        `json:"id"`
+	Label      string             `json:"label"`
+	MinScore   int32              `json:"min_score"`
+	PayPercent int32              `json:"pay_percent"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
-type ThrLine struct {
-	ID              pgtype.UUID        `json:"id"`
-	ThrRunID        pgtype.UUID        `json:"thr_run_id"`
-	EmployeeID      pgtype.UUID        `json:"employee_id"`
-	WageStructureID pgtype.UUID        `json:"wage_structure_id"`
-	BaseSalary      int64              `json:"base_salary"`
-	JoinDate        pgtype.Date        `json:"join_date"`
-	MonthsWorked    int32              `json:"months_worked"`
-	ThrRatio        pgtype.Numeric     `json:"thr_ratio"`
-	ComputedAmount  int64              `json:"computed_amount"`
-	ThrAmount       int64              `json:"thr_amount"`
-	Reviewed        bool               `json:"reviewed"`
-	ReviewedBy      pgtype.UUID        `json:"reviewed_by"`
-	ReviewedAt      pgtype.Timestamptz `json:"reviewed_at"`
-	ReviewNote      pgtype.Text        `json:"review_note"`
+type PerformanceGradeComponentPercent struct {
+	GradeID         pgtype.UUID `json:"grade_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+	PayPercent      int32       `json:"pay_percent"`
 }
 
 type PerformancePolicy struct {
@@ -648,6 +891,22 @@ type PerformanceViolation struct {
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 }
 
+type PettyCashCount struct {
+	ID              pgtype.UUID        `json:"id"`
+	BranchID        pgtype.UUID        `json:"branch_id"`
+	CountDate       pgtype.Date        `json:"count_date"`
+	OpeningAmount   int64              `json:"opening_amount"`
+	OpeningBy       pgtype.UUID        `json:"opening_by"`
+	OpeningAt       pgtype.Timestamptz `json:"opening_at"`
+	ClosingAmount   pgtype.Int8        `json:"closing_amount"`
+	ClosingBy       pgtype.UUID        `json:"closing_by"`
+	ClosingAt       pgtype.Timestamptz `json:"closing_at"`
+	ExpectedClosing pgtype.Int8        `json:"expected_closing"`
+	Variance        pgtype.Int8        `json:"variance"`
+	VarianceNote    string             `json:"variance_note"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
 type PosImport struct {
 	ID          pgtype.UUID        `json:"id"`
 	Description pgtype.Text        `json:"description"`
@@ -667,11 +926,34 @@ type PosImportLine struct {
 	LineType  string      `json:"line_type"`
 }
 
+type PosSettlementByBranch struct {
+	BranchID     pgtype.UUID `json:"branch_id"`
+	Date         pgtype.Date `json:"date"`
+	AccountID    pgtype.UUID `json:"account_id"`
+	AccountName  string      `json:"account_name"`
+	IsCashDrawer bool        `json:"is_cash_drawer"`
+	Amount       int64       `json:"amount"`
+}
+
 type Position struct {
 	ID        pgtype.UUID        `json:"id"`
 	Name      string             `json:"name"`
 	IsActive  bool               `json:"is_active"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type PositionWageTemplate struct {
+	PositionID          pgtype.UUID        `json:"position_id"`
+	BaseSalary          int64              `json:"base_salary"`
+	WorkingDaysPerMonth int32              `json:"working_days_per_month"`
+	UpdatedBy           pgtype.UUID        `json:"updated_by"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type PositionWageTemplateComponent struct {
+	PositionID      pgtype.UUID `json:"position_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+	Amount          int64       `json:"amount"`
 }
 
 type Production struct {
@@ -721,6 +1003,80 @@ type Sale struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type ServiceChargePool struct {
+	ID            pgtype.UUID        `json:"id"`
+	BranchID      pgtype.UUID        `json:"branch_id"`
+	PeriodMonth   pgtype.Date        `json:"period_month"`
+	RevenueAmount int64              `json:"revenue_amount"`
+	InputMode     string             `json:"input_mode"`
+	PercentBp     pgtype.Int4        `json:"percent_bp"`
+	PoolAmount    int64              `json:"pool_amount"`
+	Note          pgtype.Text        `json:"note"`
+	UpdatedBy     pgtype.UUID        `json:"updated_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ServiceChargeSetting struct {
+	ID              int32              `json:"id"`
+	WageComponentID pgtype.UUID        `json:"wage_component_id"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ShiftAssignment struct {
+	ID         pgtype.UUID        `json:"id"`
+	EmployeeID pgtype.UUID        `json:"employee_id"`
+	Date       pgtype.Date        `json:"date"`
+	ShiftID    pgtype.UUID        `json:"shift_id"`
+	DivisionID pgtype.UUID        `json:"division_id"`
+	UpdatedBy  pgtype.UUID        `json:"updated_by"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ShiftChangeRequest struct {
+	ID           pgtype.UUID        `json:"id"`
+	EmployeeID   pgtype.UUID        `json:"employee_id"`
+	Date         pgtype.Date        `json:"date"`
+	ShiftID      pgtype.UUID        `json:"shift_id"`
+	DivisionID   pgtype.UUID        `json:"division_id"`
+	PrevShiftID  pgtype.UUID        `json:"prev_shift_id"`
+	Reason       pgtype.Text        `json:"reason"`
+	Status       string             `json:"status"`
+	DecisionNote pgtype.Text        `json:"decision_note"`
+	RequestedBy  pgtype.UUID        `json:"requested_by"`
+	RequestedAt  pgtype.Timestamptz `json:"requested_at"`
+	DecidedBy    pgtype.UUID        `json:"decided_by"`
+	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
+}
+
+type ShiftDefinition struct {
+	ID           pgtype.UUID        `json:"id"`
+	BranchID     pgtype.UUID        `json:"branch_id"`
+	Code         string             `json:"code"`
+	Name         string             `json:"name"`
+	Start1       pgtype.Time        `json:"start1"`
+	End1         pgtype.Time        `json:"end1"`
+	Start2       pgtype.Time        `json:"start2"`
+	End2         pgtype.Time        `json:"end2"`
+	BreakMinutes int32              `json:"break_minutes"`
+	DeliveryOnly bool               `json:"delivery_only"`
+	Color        string             `json:"color"`
+	SortOrder    int32              `json:"sort_order"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type StaffKpi struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	DefinitionID pgtype.UUID        `json:"definition_id"`
+	Metric       string             `json:"metric"`
+	TargetValue  pgtype.Numeric     `json:"target_value"`
+	Weight       int32              `json:"weight"`
+	IsActive     bool               `json:"is_active"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type StockHistory struct {
 	ID             pgtype.UUID        `json:"id"`
 	ItemID         pgtype.UUID        `json:"item_id"`
@@ -745,6 +1101,7 @@ type StockOpname struct {
 	PerformedAt  pgtype.Timestamptz `json:"performed_at"`
 	OperatorName pgtype.Text        `json:"operator_name"`
 	PicName      pgtype.Text        `json:"pic_name"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type StockOpnameDraft struct {
@@ -760,15 +1117,17 @@ type StockOpnameDraft struct {
 }
 
 type StockOpnameItem struct {
-	ID               pgtype.UUID    `json:"id"`
-	OpnameID         pgtype.UUID    `json:"opname_id"`
-	ItemID           pgtype.UUID    `json:"item_id"`
-	UnitIndex        int32          `json:"unit_index"`
-	UnitName         string         `json:"unit_name"`
-	RecordedQuantity pgtype.Numeric `json:"recorded_quantity"`
-	ActualQuantity   pgtype.Numeric `json:"actual_quantity"`
-	Difference       pgtype.Numeric `json:"difference"`
-	WasteValue       int64          `json:"waste_value"`
+	ID               pgtype.UUID        `json:"id"`
+	OpnameID         pgtype.UUID        `json:"opname_id"`
+	ItemID           pgtype.UUID        `json:"item_id"`
+	UnitIndex        int32              `json:"unit_index"`
+	UnitName         string             `json:"unit_name"`
+	RecordedQuantity pgtype.Numeric     `json:"recorded_quantity"`
+	ActualQuantity   pgtype.Numeric     `json:"actual_quantity"`
+	Difference       pgtype.Numeric     `json:"difference"`
+	WasteValue       int64              `json:"waste_value"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	IsCorrection     bool               `json:"is_correction"`
 }
 
 type StockTransfer struct {
@@ -783,6 +1142,36 @@ type StockTransfer struct {
 	TransferredBy   pgtype.UUID        `json:"transferred_by"`
 	TransferredAt   pgtype.Timestamptz `json:"transferred_at"`
 	GroupID         pgtype.UUID        `json:"group_id"`
+	Status          string             `json:"status"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ThrLine struct {
+	ID              pgtype.UUID        `json:"id"`
+	ThrRunID        pgtype.UUID        `json:"thr_run_id"`
+	EmployeeID      pgtype.UUID        `json:"employee_id"`
+	WageStructureID pgtype.UUID        `json:"wage_structure_id"`
+	BaseSalary      int64              `json:"base_salary"`
+	JoinDate        pgtype.Date        `json:"join_date"`
+	MonthsWorked    int32              `json:"months_worked"`
+	ThrRatio        pgtype.Numeric     `json:"thr_ratio"`
+	ComputedAmount  int64              `json:"computed_amount"`
+	ThrAmount       int64              `json:"thr_amount"`
+	Reviewed        bool               `json:"reviewed"`
+	ReviewedBy      pgtype.UUID        `json:"reviewed_by"`
+	ReviewedAt      pgtype.Timestamptz `json:"reviewed_at"`
+	ReviewNote      pgtype.Text        `json:"review_note"`
+}
+
+type ThrRun struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	PaymentDate pgtype.Date        `json:"payment_date"`
+	Status      string             `json:"status"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	ClosedAt    pgtype.Timestamptz `json:"closed_at"`
+	PaidAt      pgtype.Timestamptz `json:"paid_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type TokenBlocklist struct {
@@ -845,6 +1234,20 @@ type Warehouse struct {
 	ID                 pgtype.UUID `json:"id"`
 	Name               string      `json:"name"`
 	InventoryAccountID pgtype.UUID `json:"inventory_account_id"`
+}
+
+type WelfareFundMovement struct {
+	ID              pgtype.UUID        `json:"id"`
+	EmployeeID      pgtype.UUID        `json:"employee_id"`
+	MovementType    string             `json:"movement_type"`
+	Amount          int64              `json:"amount"`
+	PeriodMonth     pgtype.Date        `json:"period_month"`
+	MovementDate    pgtype.Date        `json:"movement_date"`
+	PayrollPeriodID pgtype.UUID        `json:"payroll_period_id"`
+	JournalEntryID  pgtype.UUID        `json:"journal_entry_id"`
+	Note            string             `json:"note"`
+	CreatedBy       pgtype.UUID        `json:"created_by"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type WorkSchedule struct {

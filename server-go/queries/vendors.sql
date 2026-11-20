@@ -35,7 +35,7 @@ SELECT
     i.amount_paid,
     a.name AS account_name,
     w.name AS warehouse_name,
-    COALESCE(i.vendor_id = $1, FALSE) AS is_primary,
+    COALESCE(i.vendor_id = $1, FALSE)::bool AS is_primary,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount,
     COALESCE(SUM(ii.price * ii.quantity)
         FILTER (WHERE COALESCE(ii.vendor_id, i.vendor_id) = $1), 0)::BIGINT AS vendor_amount,
@@ -58,14 +58,14 @@ SELECT
     it.code    AS item_code,
     it.is_stock,
     ii.unit_index,
-    it.units->ii.unit_index->>'name' AS unit_name,
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name,
     SUM(ii.quantity)::numeric              AS total_quantity,
     SUM(ii.quantity * ii.price)::bigint    AS total_spend,
     COUNT(*)::int                          AS purchase_count,
     MIN(ii.price)::bigint                  AS min_price,
     MAX(ii.price)::bigint                  AS max_price,
-    MIN(inv.date)                          AS first_purchase_date,
-    MAX(inv.date)                          AS last_purchase_date,
+    MIN(inv.date)::date                          AS first_purchase_date,
+    MAX(inv.date)::date                          AS last_purchase_date,
     (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
     (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
 FROM invoice_items ii

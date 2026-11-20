@@ -113,8 +113,8 @@ func AttendanceCutsForPeriod(ctx context.Context, qtx *db.Queries, employeeID pg
 			PaidMinutes: branchPaid,
 			HalfDay:     r.IsHalfDay,
 		}
-		if r.ShiftPaidMinutes.Valid && r.ShiftPaidMinutes.Int32 > 0 {
-			day.PaidMinutes = int(r.ShiftPaidMinutes.Int32)
+		if r.ShiftPaidMinutes > 0 {
+			day.PaidMinutes = int(r.ShiftPaidMinutes)
 		}
 		if r.CheckIn.Valid {
 			t := r.CheckIn.Time

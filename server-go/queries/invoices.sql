@@ -81,7 +81,7 @@ RETURNING id, invoice_number, date, due_date, invoice_type, payment_status, crea
 
 -- name: CreateInvoiceItem :one
 INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description, conversion_factor)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, COALESCE($8, 1))
+VALUES (gen_random_uuid(), sqlc.arg(invoice_id), sqlc.arg(item_id), sqlc.arg(vendor_id), sqlc.arg(quantity), sqlc.arg(unit_index), sqlc.arg(price), sqlc.arg(description), COALESCE(sqlc.narg(conversion_factor)::numeric, 1))
 RETURNING id;
 
 -- name: UpdateInvoice :one

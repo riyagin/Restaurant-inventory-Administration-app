@@ -1,5 +1,5 @@
 -- name: NextDailyPurchaseNumber :one
-SELECT 'PH-' || LPAD(nextval('daily_purchase_number_seq')::text, 6, '0') AS number;
+SELECT ('PH-' || LPAD(nextval('daily_purchase_number_seq')::text, 6, '0'))::text AS number;
 
 -- name: CreateDailyPurchase :one
 INSERT INTO daily_purchases (
@@ -47,10 +47,10 @@ LEFT JOIN warehouses w     ON w.id = dp.warehouse_id
 LEFT JOIN vendors v        ON v.id = dp.vendor_id
 LEFT JOIN accounts pa      ON pa.id = dp.petty_cash_account_id
 LEFT JOIN users u          ON u.id = dp.created_by
-WHERE ($1::uuid IS NULL OR dp.branch_id = $1)
-  AND ($2::date IS NULL OR dp.date >= $2)
-  AND ($3::date IS NULL OR dp.date <= $3)
-  AND ($4::text IS NULL OR dp.status = $4)
+WHERE (sqlc.narg(branch_id)::uuid IS NULL OR dp.branch_id = sqlc.narg(branch_id))
+  AND (sqlc.narg(from_date)::date IS NULL OR dp.date >= sqlc.narg(from_date))
+  AND (sqlc.narg(to_date)::date IS NULL OR dp.date <= sqlc.narg(to_date))
+  AND (sqlc.narg(status)::text IS NULL OR dp.status = sqlc.narg(status))
 ORDER BY dp.date DESC, dp.created_at DESC;
 
 -- name: GetDailyPurchaseByID :one

@@ -215,8 +215,8 @@ func monthlyLeaveUsed(ctx context.Context, qtx *db.Queries, employeeID pgtype.UU
 	m := MonthStart(month)
 	used, err := qtx.SumLeaveQuotaUsage(ctx, &db.SumLeaveQuotaUsageParams{
 		EmployeeID: employeeID,
-		From:       pgtype.Date{Time: m, Valid: true},
-		To:         pgtype.Date{Time: m.AddDate(0, 1, 0), Valid: true},
+		FromDate:   pgtype.Date{Time: m, Valid: true},
+		ToDate:     pgtype.Date{Time: m.AddDate(0, 1, 0), Valid: true},
 	})
 	return int(used), err
 }
@@ -293,8 +293,8 @@ func MonthlyLeaveBalances(ctx context.Context, qtx *db.Queries, employeeID pgtyp
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	rows, err := qtx.ListLeaveQuotaMonths(ctx, &db.ListLeaveQuotaMonthsParams{
 		EmployeeID: employeeID,
-		From:       pgtype.Date{Time: from, Valid: true},
-		To:         pgtype.Date{Time: from.AddDate(1, 0, 0), Valid: true},
+		FromDate:   pgtype.Date{Time: from, Valid: true},
+		ToDate:     pgtype.Date{Time: from.AddDate(1, 0, 0), Valid: true},
 	})
 	if err != nil {
 		return nil, err

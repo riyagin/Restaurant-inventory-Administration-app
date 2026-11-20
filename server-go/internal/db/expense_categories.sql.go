@@ -108,7 +108,7 @@ JOIN branches b ON b.id = d.branch_id
 WHERE ec.id = $1
 `
 
-type ExpenseCategoryRow struct {
+type GetExpenseCategoryByIDRow struct {
 	ID             pgtype.UUID        `json:"id"`
 	DivisionID     pgtype.UUID        `json:"division_id"`
 	Name           string             `json:"name"`
@@ -120,9 +120,9 @@ type ExpenseCategoryRow struct {
 	BranchName     string             `json:"branch_name"`
 }
 
-func (q *Queries) GetExpenseCategoryByID(ctx context.Context, id pgtype.UUID) (*ExpenseCategoryRow, error) {
+func (q *Queries) GetExpenseCategoryByID(ctx context.Context, id pgtype.UUID) (*GetExpenseCategoryByIDRow, error) {
 	row := q.db.QueryRow(ctx, getExpenseCategoryByID, id)
-	var i ExpenseCategoryRow
+	var i GetExpenseCategoryByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.DivisionID,
@@ -151,15 +151,27 @@ WHERE ($1::uuid IS NULL OR ec.division_id = $1)
 ORDER BY b.name, d.name, ec.name
 `
 
-func (q *Queries) ListExpenseCategories(ctx context.Context, divisionID pgtype.UUID) ([]*ExpenseCategoryRow, error) {
+type ListExpenseCategoriesRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	DivisionID     pgtype.UUID        `json:"division_id"`
+	Name           string             `json:"name"`
+	AccountID      pgtype.UUID        `json:"account_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	AccountNumber  pgtype.Int4        `json:"account_number"`
+	AccountBalance int64              `json:"account_balance"`
+	DivisionName   string             `json:"division_name"`
+	BranchName     string             `json:"branch_name"`
+}
+
+func (q *Queries) ListExpenseCategories(ctx context.Context, divisionID pgtype.UUID) ([]*ListExpenseCategoriesRow, error) {
 	rows, err := q.db.Query(ctx, listExpenseCategories, divisionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*ExpenseCategoryRow
+	var items []*ListExpenseCategoriesRow
 	for rows.Next() {
-		var i ExpenseCategoryRow
+		var i ListExpenseCategoriesRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DivisionID,

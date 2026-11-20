@@ -28,11 +28,11 @@ SELECT jl.id, jl.amount, jl.memo,
        je.id AS entry_id, je.entry_date, je.source_type, je.source_id, je.description
 FROM journal_lines jl
 JOIN journal_entries je ON je.id = jl.entry_id
-WHERE jl.account_id = $1
-  AND ($2::date IS NULL OR je.entry_date >= $2)
-  AND ($3::date IS NULL OR je.entry_date <= $3)
+WHERE jl.account_id = sqlc.arg(account_id)
+  AND (sqlc.narg(date_from)::date IS NULL OR je.entry_date >= sqlc.narg(date_from))
+  AND (sqlc.narg(date_to)::date IS NULL OR je.entry_date <= sqlc.narg(date_to))
 ORDER BY je.entry_date DESC, je.created_at DESC
-LIMIT $4 OFFSET $5;
+LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: TrialBalance :many
 -- Cached balance vs the balance implied by the journal, per account. `drift` is
@@ -42,9 +42,9 @@ SELECT a.id, a.account_number, a.name, a.account_type, a.balance AS cached_balan
        COALESCE(SUM(
          CASE WHEN a.account_type IN ('asset', 'expense') THEN jl.amount ELSE -jl.amount END
        ), 0)::BIGINT AS journal_balance,
-       a.balance - COALESCE(SUM(
+       (a.balance - COALESCE(SUM(
          CASE WHEN a.account_type IN ('asset', 'expense') THEN jl.amount ELSE -jl.amount END
-       ), 0)::BIGINT AS drift
+       ), 0))::BIGINT AS drift
 FROM accounts a
 LEFT JOIN journal_lines jl ON jl.account_id = a.id
 GROUP BY a.id, a.account_number, a.name, a.account_type, a.balance

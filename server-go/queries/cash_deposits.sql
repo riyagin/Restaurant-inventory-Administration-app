@@ -1,5 +1,5 @@
 -- name: NextCashDepositNumber :one
-SELECT 'ST-' || LPAD(nextval('cash_deposit_number_seq')::text, 6, '0') AS number;
+SELECT ('ST-' || LPAD(nextval('cash_deposit_number_seq')::text, 6, '0'))::text AS number;
 
 -- name: CreateCashDeposit :one
 INSERT INTO cash_deposits (
@@ -39,11 +39,11 @@ LEFT JOIN branches b ON b.id = cd.branch_id
 JOIN accounts fa     ON fa.id = cd.from_account_id
 JOIN accounts ta     ON ta.id = cd.to_account_id
 LEFT JOIN users u    ON u.id = cd.created_by
-WHERE ($1::uuid IS NULL OR cd.branch_id = $1)
-  AND ($2::date IS NULL OR cd.date >= $2)
-  AND ($3::date IS NULL OR cd.date <= $3)
-  AND ($4::text IS NULL OR cd.movement_type = $4)
-  AND ($5::text IS NULL OR cd.status = $5)
+WHERE (sqlc.narg(branch_id)::uuid IS NULL OR cd.branch_id = sqlc.narg(branch_id))
+  AND (sqlc.narg(from_date)::date IS NULL OR cd.date >= sqlc.narg(from_date))
+  AND (sqlc.narg(to_date)::date IS NULL OR cd.date <= sqlc.narg(to_date))
+  AND (sqlc.narg(movement_type)::text IS NULL OR cd.movement_type = sqlc.narg(movement_type))
+  AND (sqlc.narg(status)::text IS NULL OR cd.status = sqlc.narg(status))
 ORDER BY cd.date DESC, cd.created_at DESC;
 
 -- Movement through one account on one day, split by direction. This is the

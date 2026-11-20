@@ -77,7 +77,7 @@ type GetDispatchItemsRow struct {
 	UnitName         string         `json:"unit_name"`
 	ConversionFactor pgtype.Numeric `json:"conversion_factor"`
 	ItemName         string         `json:"item_name"`
-	ItemCode         pgtype.Text    `json:"item_code"`
+	ItemCode         string         `json:"item_code"`
 	ItemUnits        []byte         `json:"item_units"`
 }
 
@@ -146,7 +146,7 @@ func (q *Queries) InsertDispatch(ctx context.Context, arg *InsertDispatchParams)
 
 const insertDispatchItem = `-- name: InsertDispatchItem :exec
 INSERT INTO dispatch_items (id, dispatch_id, item_id, quantity, unit_index, unit_name, conversion_factor)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, COALESCE($6, 1))
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, COALESCE($6::numeric, 1))
 `
 
 type InsertDispatchItemParams struct {

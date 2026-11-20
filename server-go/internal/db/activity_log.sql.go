@@ -41,13 +41,16 @@ func (q *Queries) CountActivityLog(ctx context.Context, arg *CountActivityLogPar
 	return count, err
 }
 
-const deleteOldActivityLog = `-- name: DeleteOldActivityLog :exec
+const deleteOldActivityLog = `-- name: DeleteOldActivityLog :execrows
 DELETE FROM activity_log WHERE created_at < $1
 `
 
 func (q *Queries) DeleteOldActivityLog(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteOldActivityLog, createdAt)
-	return result.RowsAffected(), err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertActivityLog = `-- name: InsertActivityLog :exec
@@ -83,6 +86,9 @@ SELECT
 FROM activity_log al
 WHERE ($1 = '' OR al.entity_type = $1)
   AND ($2 = '' OR al.action = $2)
+  -- Search covers the description too, not just the user: the descriptions name
+  -- the item / vendor / employee that changed, which is how the log is actually
+  -- searched (the UI placeholder has always promised "pengguna / deskripsi").
   AND ($3 = '' OR al.username ILIKE '%' || $3 || '%' OR al.description ILIKE '%' || $3 || '%')
   AND ($4::date IS NULL OR al.created_at::date >= $4)
   AND ($5::date IS NULL OR al.created_at::date <= $5)

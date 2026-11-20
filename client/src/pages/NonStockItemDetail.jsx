@@ -33,7 +33,7 @@ export default function NonStockItemDetail() {
   const totalSpend    = history.reduce((s, r) => s + Number(r.line_total), 0);
   const totalQtyMap   = {};
   for (const r of history) {
-    const key = r.unit_name ?? '—';
+    const key = r.unit_name || '—';
     totalQtyMap[key] = (totalQtyMap[key] ?? 0) + Number(r.quantity);
   }
 
@@ -115,7 +115,7 @@ export default function NonStockItemDetail() {
                   <td style={{ color: '#555' }}>{row.branch_name ?? <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>}</td>
                   <td style={{ color: '#555' }}>{row.division_name ?? <span style={{ color: '#bbb', fontStyle: 'italic' }}>—</span>}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{Number(row.quantity).toLocaleString('id-ID')}</td>
-                  <td style={{ color: '#666' }}>{row.unit_name ?? '—'}</td>
+                  <td style={{ color: '#666' }}>{row.unit_name || '—'}</td>
                   <td style={{ textAlign: 'right', color: '#555' }}>{idr(row.price)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(row.line_total)}</td>
                   <td>

@@ -169,6 +169,13 @@ server-go/
   go.mod
 ```
 
+### sqlc conventions
+- `internal/db` is **generated** — `sqlc generate` must reproduce it byte for byte, and `verify-hr.bat` stops on `sqlc diff`. Change the `.sql` file, never the `.go`. The only hand-written file there is `pool.go`
+- Name parameters with `sqlc.arg(name)` / `sqlc.narg(name)` (nullable) instead of leaving `$n` to become `Column1`. SQL keywords cannot be names: use `from_date`/`to_date`, `page_limit`/`page_offset`
+- An optional filter written `($1::text IS NULL OR …)` needs `sqlc.narg` — a plain `string` param is never NULL, so an unset filter matches nothing
+- sqlc cannot infer a nullable output from an expression (`CASE` without `ELSE`, `->>` lookups, `NULL::text` in a `UNION`); it types them as non-null and the scan fails at runtime on the first NULL. Wrap them in `COALESCE(…, '')::text` and treat `''` as "none" in the client (`||`, not `??`). Cast aggregates (`MIN(date)::date`) and computed totals (`(a - b)::bigint`) explicitly, or they come out as `interface{}` / `int32`
+- To get the table model back from a single-table query, use `RETURNING *` / `SELECT *`; an explicit column list produces a separate `…Row` type
+
 ### Request Flow
 ```
 React page → api.js (Axios + JWT) → Chi router (auth middleware) → handler → sqlc query → pgx → PostgreSQL

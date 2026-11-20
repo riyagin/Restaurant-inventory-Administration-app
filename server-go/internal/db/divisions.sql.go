@@ -14,7 +14,7 @@ import (
 const createDivision = `-- name: CreateDivision :one
 INSERT INTO divisions (id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at
+RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at, is_system
 `
 
 type CreateDivisionParams struct {
@@ -42,6 +42,7 @@ func (q *Queries) CreateDivision(ctx context.Context, arg *CreateDivisionParams)
 		&i.ExpenseAccountID,
 		&i.DiscountAccountID,
 		&i.CreatedAt,
+		&i.IsSystem,
 	)
 	return &i, err
 }
@@ -189,7 +190,7 @@ func (q *Queries) ListDivisions(ctx context.Context, dollar_1 pgtype.UUID) ([]*L
 
 const updateDivision = `-- name: UpdateDivision :one
 UPDATE divisions SET name = $1 WHERE id = $2
-RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at
+RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at, is_system
 `
 
 type UpdateDivisionParams struct {
@@ -208,6 +209,7 @@ func (q *Queries) UpdateDivision(ctx context.Context, arg *UpdateDivisionParams)
 		&i.ExpenseAccountID,
 		&i.DiscountAccountID,
 		&i.CreatedAt,
+		&i.IsSystem,
 	)
 	return &i, err
 }

@@ -8,7 +8,7 @@ FROM expense_categories ec
 JOIN accounts a ON a.id = ec.account_id
 JOIN divisions d ON d.id = ec.division_id
 JOIN branches b ON b.id = d.branch_id
-WHERE ($1::uuid IS NULL OR ec.division_id = $1)
+WHERE (sqlc.arg(division_id)::uuid IS NULL OR ec.division_id = sqlc.arg(division_id))
 ORDER BY b.name, d.name, ec.name;
 
 -- name: GetExpenseCategoryByID :one

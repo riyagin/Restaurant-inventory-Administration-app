@@ -25,10 +25,10 @@ SELECT
     -- Where the stock went, for the movements that have a destination beyond
     -- the warehouse column: a dispatch names a branch/division, a transfer
     -- names the receiving warehouse.
-    CASE
+    COALESCE(CASE
         WHEN h.source_type = 'dispatch' THEN NULLIF(CONCAT_WS(' / ', b.name, dv.name), '')
         WHEN h.source_type = 'transfer' AND h.quantity_change < 0 THEN tw.name
-    END AS destination
+    END, '')::text AS destination
 FROM h
 LEFT JOIN warehouses w ON w.id = h.warehouse_id
 LEFT JOIN dispatches d ON h.source_type = 'dispatch' AND d.id = h.source_id

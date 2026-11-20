@@ -90,10 +90,13 @@ SELECT
     h.source_id, h.source_type,
     w.name AS warehouse_name,
     h.balance_after::numeric AS balance_after,
-    CASE
+    -- Where the stock went, for the movements that have a destination beyond
+    -- the warehouse column: a dispatch names a branch/division, a transfer
+    -- names the receiving warehouse.
+    COALESCE(CASE
         WHEN h.source_type = 'dispatch' THEN NULLIF(CONCAT_WS(' / ', b.name, dv.name), '')
         WHEN h.source_type = 'transfer' AND h.quantity_change < 0 THEN tw.name
-    END AS destination
+    END, '')::text AS destination
 FROM h
 LEFT JOIN warehouses w ON w.id = h.warehouse_id
 LEFT JOIN dispatches d ON h.source_type = 'dispatch' AND d.id = h.source_id
@@ -135,9 +138,12 @@ type ListStockHistoryByItemRow struct {
 	SourceType     pgtype.Text        `json:"source_type"`
 	WarehouseName  pgtype.Text        `json:"warehouse_name"`
 	BalanceAfter   pgtype.Numeric     `json:"balance_after"`
-	Destination    pgtype.Text        `json:"destination"`
+	Destination    string             `json:"destination"`
 }
 
+// The running balance is computed over the item's *whole* history before the
+// date filter is applied, so a bounded window still reports the true on-hand
+// figure after each movement rather than one that restarts at zero.
 func (q *Queries) ListStockHistoryByItem(ctx context.Context, arg *ListStockHistoryByItemParams) ([]*ListStockHistoryByItemRow, error) {
 	rows, err := q.db.Query(ctx, listStockHistoryByItem, arg.ItemID, arg.Column2, arg.Column3)
 	if err != nil {

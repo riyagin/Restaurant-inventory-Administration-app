@@ -57,20 +57,19 @@ ORDER BY d.created_at DESC;
 UPDATE attendance_devices SET last_seen_at = now() WHERE id = $1;
 
 -- name: GetActiveDeviceByKeyHash :one
-SELECT id, name, branch_id, api_key_hash, is_active, created_at
-FROM attendance_devices
+SELECT * FROM attendance_devices
 WHERE api_key_hash = $1 AND is_active = true;
 
 -- name: CreateAttendanceDevice :one
 INSERT INTO attendance_devices (id, name, branch_id, api_key_hash, is_active)
 VALUES (gen_random_uuid(), $1, $2, $3, true)
-RETURNING id, name, branch_id, api_key_hash, is_active, created_at;
+RETURNING *;
 
 -- name: SetAttendanceDeviceActive :one
 UPDATE attendance_devices
 SET is_active = $1
 WHERE id = $2
-RETURNING id, name, branch_id, api_key_hash, is_active, created_at;
+RETURNING *;
 
 -- name: DeleteAttendanceDevice :exec
 DELETE FROM attendance_devices WHERE id = $1;

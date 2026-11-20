@@ -42,7 +42,7 @@ SELECT
     e.photo_path, e.user_id, e.status,
     e.employment_type, e.contract_end_date, e.permanent_since, e.resign_date,
     e.created_at, e.updated_at,
-    (e.face_embedding IS NOT NULL) AS has_face, e.face_enrolled_at
+    (e.face_embedding IS NOT NULL)::bool AS has_face, e.face_enrolled_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
@@ -80,7 +80,7 @@ JOIN branches  b ON b.id = e.branch_id
 WHERE e.status = 'active'
   AND e.employment_type = 'contract'
   AND e.contract_end_date IS NOT NULL
-  AND e.contract_end_date <= (CURRENT_DATE + $1::int)
+  AND e.contract_end_date <= (CURRENT_DATE + sqlc.arg(within_days)::int)
 ORDER BY e.contract_end_date;
 
 -- name: GetEmployeePhotoPath :one

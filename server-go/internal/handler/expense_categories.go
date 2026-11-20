@@ -50,7 +50,7 @@ func (h *ExpenseCategoriesHandler) List(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if categories == nil {
-		categories = []*db.ExpenseCategoryRow{}
+		categories = []*db.ListExpenseCategoriesRow{}
 	}
 	respondJSON(w, http.StatusOK, categories)
 }

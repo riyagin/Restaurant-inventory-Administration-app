@@ -35,30 +35,6 @@ func (q *Queries) ClosePayrollPeriod(ctx context.Context, id pgtype.UUID) (*Payr
 	return &i, err
 }
 
-const countPresentOnHolidays = `-- name: CountPresentOnHolidays :one
-
-SELECT COUNT(*)::int AS cnt
-FROM attendance_records ar
-JOIN public_holidays ph ON ph.date = ar.date
-WHERE ar.employee_id = $1
-  AND ar.date >= $2 AND ar.date <= $3
-  AND ar.status = 'present'
-`
-
-type CountPresentOnHolidaysParams struct {
-	EmployeeID pgtype.UUID `json:"employee_id"`
-	Date       pgtype.Date `json:"date"`
-	Date_2     pgtype.Date `json:"date_2"`
-}
-
-// ── Attendance helper: present-on-holiday prefill ────────────────────────────
-func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentOnHolidaysParams) (int32, error) {
-	row := q.db.QueryRow(ctx, countPresentOnHolidays, arg.EmployeeID, arg.Date, arg.Date_2)
-	var cnt int32
-	err := row.Scan(&cnt)
-	return cnt, err
-}
-
 const countPresentDays = `-- name: CountPresentDays :one
 SELECT COUNT(*)::int AS cnt
 FROM attendance_records
@@ -82,40 +58,28 @@ func (q *Queries) CountPresentDays(ctx context.Context, arg *CountPresentDaysPar
 	return cnt, err
 }
 
-const listHolidaysWorked = `-- name: ListHolidaysWorked :many
-SELECT ph.id, ph.date, ph.name
+const countPresentOnHolidays = `-- name: CountPresentOnHolidays :one
+
+SELECT COUNT(*)::int AS cnt
 FROM attendance_records ar
 JOIN public_holidays ph ON ph.date = ar.date
 WHERE ar.employee_id = $1
   AND ar.date >= $2 AND ar.date <= $3
   AND ar.status = 'present'
-ORDER BY ph.date
 `
 
-type ListHolidaysWorkedParams struct {
+type CountPresentOnHolidaysParams struct {
 	EmployeeID pgtype.UUID `json:"employee_id"`
 	Date       pgtype.Date `json:"date"`
 	Date_2     pgtype.Date `json:"date_2"`
 }
 
-func (q *Queries) ListHolidaysWorked(ctx context.Context, arg *ListHolidaysWorkedParams) ([]*PublicHoliday, error) {
-	rows, err := q.db.Query(ctx, listHolidaysWorked, arg.EmployeeID, arg.Date, arg.Date_2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*PublicHoliday
-	for rows.Next() {
-		var i PublicHoliday
-		if err := rows.Scan(&i.ID, &i.Date, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+// ── Attendance helper: present-on-holiday prefill ────────────────────────────
+func (q *Queries) CountPresentOnHolidays(ctx context.Context, arg *CountPresentOnHolidaysParams) (int32, error) {
+	row := q.db.QueryRow(ctx, countPresentOnHolidays, arg.EmployeeID, arg.Date, arg.Date_2)
+	var cnt int32
+	err := row.Scan(&cnt)
+	return cnt, err
 }
 
 const countUnreviewedLines = `-- name: CountUnreviewedLines :one
@@ -152,13 +116,7 @@ VALUES (
     $22, $23,
     $24, $25
 )
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
+RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate, overtime_days, public_holiday_days, overtime_amount, public_holiday_amount, allowance_total, bonus_total, component_deduction_total, kasbon_deduction, unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay, performance_score, reviewed, reviewed_by, reviewed_at, review_note, overtime_hours, overtime_hourly_rate, overtime_hourly_amount, half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction, performance_grade, grade_pay_percent, public_holiday_rate, alpha_unpaid_days, alpha_deduction
 `
 
 type CreatePayrollLineParams struct {
@@ -250,6 +208,11 @@ func (q *Queries) CreatePayrollLine(ctx context.Context, arg *CreatePayrollLineP
 		&i.HalfDayDeduction,
 		&i.AttendanceCutMinutes,
 		&i.AttendanceCutDeduction,
+		&i.PerformanceGrade,
+		&i.GradePayPercent,
+		&i.PublicHolidayRate,
+		&i.AlphaUnpaidDays,
+		&i.AlphaDeduction,
 	)
 	return &i, err
 }
@@ -327,15 +290,6 @@ func (q *Queries) CreatePayrollPeriod(ctx context.Context, arg *CreatePayrollPer
 	return &i, err
 }
 
-const deletePayrollPeriod = `-- name: DeletePayrollPeriod :exec
-DELETE FROM payroll_periods WHERE id = $1
-`
-
-func (q *Queries) DeletePayrollPeriod(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePayrollPeriod, id)
-	return err
-}
-
 const deletePayrollLine = `-- name: DeletePayrollLine :exec
 DELETE FROM payroll_lines WHERE id = $1
 `
@@ -351,6 +305,15 @@ DELETE FROM payroll_line_components WHERE payroll_line_id = $1
 
 func (q *Queries) DeletePayrollLineComponents(ctx context.Context, payrollLineID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deletePayrollLineComponents, payrollLineID)
+	return err
+}
+
+const deletePayrollPeriod = `-- name: DeletePayrollPeriod :exec
+DELETE FROM payroll_periods WHERE id = $1
+`
+
+func (q *Queries) DeletePayrollPeriod(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deletePayrollPeriod, id)
 	return err
 }
 
@@ -390,15 +353,77 @@ func (q *Queries) GetAttendanceSummaryForMonth(ctx context.Context, arg *GetAtte
 	return &i, err
 }
 
+const getBonusEligibleLines = `-- name: GetBonusEligibleLines :many
+SELECT
+    l.id              AS line_id,
+    plc.id            AS line_component_id,
+    plc.name          AS component_name,
+    plc.amount        AS current_amount,
+    l.employee_id,
+    e.full_name       AS employee_name,
+    e.employee_code,
+    l.performance_score,
+    l.reviewed
+FROM payroll_line_components plc
+JOIN payroll_lines l  ON l.id  = plc.payroll_line_id
+JOIN employees     e  ON e.id  = l.employee_id
+WHERE l.payroll_period_id = $1
+  AND plc.wage_component_id = $2
+  AND plc.type = 'bonus'
+ORDER BY e.full_name
+`
+
+type GetBonusEligibleLinesParams struct {
+	PayrollPeriodID pgtype.UUID `json:"payroll_period_id"`
+	WageComponentID pgtype.UUID `json:"wage_component_id"`
+}
+
+type GetBonusEligibleLinesRow struct {
+	LineID           pgtype.UUID `json:"line_id"`
+	LineComponentID  pgtype.UUID `json:"line_component_id"`
+	ComponentName    string      `json:"component_name"`
+	CurrentAmount    int64       `json:"current_amount"`
+	EmployeeID       pgtype.UUID `json:"employee_id"`
+	EmployeeName     string      `json:"employee_name"`
+	EmployeeCode     string      `json:"employee_code"`
+	PerformanceScore pgtype.Int4 `json:"performance_score"`
+	Reviewed         bool        `json:"reviewed"`
+}
+
+// Returns payroll lines for this period where the employee's wage structure
+// has the given bonus wage component, ordered by employee name.
+func (q *Queries) GetBonusEligibleLines(ctx context.Context, arg *GetBonusEligibleLinesParams) ([]*GetBonusEligibleLinesRow, error) {
+	rows, err := q.db.Query(ctx, getBonusEligibleLines, arg.PayrollPeriodID, arg.WageComponentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetBonusEligibleLinesRow
+	for rows.Next() {
+		var i GetBonusEligibleLinesRow
+		if err := rows.Scan(
+			&i.LineID,
+			&i.LineComponentID,
+			&i.ComponentName,
+			&i.CurrentAmount,
+			&i.EmployeeID,
+			&i.EmployeeName,
+			&i.EmployeeCode,
+			&i.PerformanceScore,
+			&i.Reviewed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPayrollLineByID = `-- name: GetPayrollLineByID :one
-SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-       overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-       allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-       unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-       overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-       half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
-FROM payroll_lines
+SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate, overtime_days, public_holiday_days, overtime_amount, public_holiday_amount, allowance_total, bonus_total, component_deduction_total, kasbon_deduction, unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay, performance_score, reviewed, reviewed_by, reviewed_at, review_note, overtime_hours, overtime_hourly_rate, overtime_hourly_amount, half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction, performance_grade, grade_pay_percent, public_holiday_rate, alpha_unpaid_days, alpha_deduction FROM payroll_lines
 WHERE id = $1
 `
 
@@ -436,18 +461,17 @@ func (q *Queries) GetPayrollLineByID(ctx context.Context, id pgtype.UUID) (*Payr
 		&i.HalfDayDeduction,
 		&i.AttendanceCutMinutes,
 		&i.AttendanceCutDeduction,
+		&i.PerformanceGrade,
+		&i.GradePayPercent,
+		&i.PublicHolidayRate,
+		&i.AlphaUnpaidDays,
+		&i.AlphaDeduction,
 	)
 	return &i, err
 }
 
 const getPayrollLineByPeriodEmployee = `-- name: GetPayrollLineByPeriodEmployee :one
-SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-       overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-       allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-       unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
-FROM payroll_lines
+SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate, overtime_days, public_holiday_days, overtime_amount, public_holiday_amount, allowance_total, bonus_total, component_deduction_total, kasbon_deduction, unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay, performance_score, reviewed, reviewed_by, reviewed_at, review_note, overtime_hours, overtime_hourly_rate, overtime_hourly_amount, half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction, performance_grade, grade_pay_percent, public_holiday_rate, alpha_unpaid_days, alpha_deduction FROM payroll_lines
 WHERE payroll_period_id = $1 AND employee_id = $2
 `
 
@@ -486,6 +510,15 @@ func (q *Queries) GetPayrollLineByPeriodEmployee(ctx context.Context, arg *GetPa
 		&i.OvertimeHours,
 		&i.OvertimeHourlyRate,
 		&i.OvertimeHourlyAmount,
+		&i.HalfDayHours,
+		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
+		&i.PerformanceGrade,
+		&i.GradePayPercent,
+		&i.PublicHolidayRate,
+		&i.AlphaUnpaidDays,
+		&i.AlphaDeduction,
 	)
 	return &i, err
 }
@@ -670,6 +703,26 @@ func (q *Queries) GetPayrollPeriodSummary(ctx context.Context, payrollPeriodID p
 	return &i, err
 }
 
+const getPayrollPosting = `-- name: GetPayrollPosting :one
+SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, posted_at
+FROM payroll_postings WHERE period_id = $1
+`
+
+func (q *Queries) GetPayrollPosting(ctx context.Context, periodID pgtype.UUID) (*PayrollPosting, error) {
+	row := q.db.QueryRow(ctx, getPayrollPosting, periodID)
+	var i PayrollPosting
+	err := row.Scan(
+		&i.PeriodID,
+		&i.Status,
+		&i.Attempts,
+		&i.LastError,
+		&i.JournalEntryID,
+		&i.QueuedAt,
+		&i.PostedAt,
+	)
+	return &i, err
+}
+
 const getPayrollSettings = `-- name: GetPayrollSettings :one
 
 SELECT id, overtime_multiplier, holiday_multiplier
@@ -726,6 +779,113 @@ func (q *Queries) ListActiveEmployeesForPayroll(ctx context.Context) ([]*ListAct
 	return items, nil
 }
 
+const listAttendanceCutDays = `-- name: ListAttendanceCutDays :many
+SELECT ar.date, ar.check_in, ar.check_out,
+       ar.is_late, ar.late_minutes, ar.is_early_leave, ar.early_leave_minutes, ar.is_half_day,
+       sd.code AS shift_code,
+       COALESCE((EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
+          + COALESCE(EXTRACT(EPOCH FROM (sd.end2 - sd.start2)) / 60, 0)
+          - sd.break_minutes)::int, 0)::int AS shift_paid_minutes
+FROM attendance_records ar
+LEFT JOIN shift_assignments sa ON sa.employee_id = ar.employee_id AND sa.date = ar.date
+LEFT JOIN shift_definitions sd ON sd.id = sa.shift_id
+WHERE ar.employee_id = $1 AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+  AND (ar.is_late OR ar.is_early_leave OR ar.is_half_day)
+ORDER BY ar.date
+`
+
+type ListAttendanceCutDaysParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+type ListAttendanceCutDaysRow struct {
+	Date              pgtype.Date        `json:"date"`
+	CheckIn           pgtype.Timestamptz `json:"check_in"`
+	CheckOut          pgtype.Timestamptz `json:"check_out"`
+	IsLate            bool               `json:"is_late"`
+	LateMinutes       int32              `json:"late_minutes"`
+	IsEarlyLeave      bool               `json:"is_early_leave"`
+	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
+	IsHalfDay         bool               `json:"is_half_day"`
+	ShiftCode         pgtype.Text        `json:"shift_code"`
+	ShiftPaidMinutes  int32              `json:"shift_paid_minutes"`
+}
+
+// Present days in [from, to] that carry a late / early-leave / half-day flag, with
+// the paid length of the shift rostered that day (segments minus the unpaid break;
+// 0 when no shift was rostered, so the caller falls back to branch hours). The
+// late / early minutes are the ones frozen at punch time, so the cut agrees with
+// what the attendance page shows.
+func (q *Queries) ListAttendanceCutDays(ctx context.Context, arg *ListAttendanceCutDaysParams) ([]*ListAttendanceCutDaysRow, error) {
+	rows, err := q.db.Query(ctx, listAttendanceCutDays, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListAttendanceCutDaysRow
+	for rows.Next() {
+		var i ListAttendanceCutDaysRow
+		if err := rows.Scan(
+			&i.Date,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.IsLate,
+			&i.LateMinutes,
+			&i.IsEarlyLeave,
+			&i.EarlyLeaveMinutes,
+			&i.IsHalfDay,
+			&i.ShiftCode,
+			&i.ShiftPaidMinutes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHolidaysWorked = `-- name: ListHolidaysWorked :many
+SELECT ph.id, ph.date, ph.name
+FROM attendance_records ar
+JOIN public_holidays ph ON ph.date = ar.date
+WHERE ar.employee_id = $1
+  AND ar.date >= $2 AND ar.date <= $3
+  AND ar.status = 'present'
+ORDER BY ph.date
+`
+
+type ListHolidaysWorkedParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+func (q *Queries) ListHolidaysWorked(ctx context.Context, arg *ListHolidaysWorkedParams) ([]*PublicHoliday, error) {
+	rows, err := q.db.Query(ctx, listHolidaysWorked, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*PublicHoliday
+	for rows.Next() {
+		var i PublicHoliday
+		if err := rows.Scan(&i.ID, &i.Date, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLineKasbonNumbers = `-- name: ListLineKasbonNumbers :many
 SELECT DISTINCT k.kasbon_number
 FROM kasbon_installments ki
@@ -750,6 +910,56 @@ func (q *Queries) ListLineKasbonNumbers(ctx context.Context, payrollLineID pgtyp
 			return nil, err
 		}
 		items = append(items, kasbon_number)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPayrollBranchPostingTotals = `-- name: ListPayrollBranchPostingTotals :many
+SELECT e.branch_id, b.name AS branch_name,
+       COALESCE(SUM(l.gross_pay), 0)::bigint         AS total_gross,
+       COALESCE(SUM(l.net_pay), 0)::bigint           AS total_net,
+       COALESCE(SUM(l.kasbon_deduction), 0)::bigint  AS total_kasbon
+FROM payroll_lines l
+JOIN employees e ON e.id = l.employee_id
+LEFT JOIN branches b ON b.id = e.branch_id
+WHERE l.payroll_period_id = $1
+GROUP BY e.branch_id, b.name
+ORDER BY b.name NULLS LAST
+`
+
+type ListPayrollBranchPostingTotalsRow struct {
+	BranchID    pgtype.UUID `json:"branch_id"`
+	BranchName  pgtype.Text `json:"branch_name"`
+	TotalGross  int64       `json:"total_gross"`
+	TotalNet    int64       `json:"total_net"`
+	TotalKasbon int64       `json:"total_kasbon"`
+}
+
+// Per-branch figures the ledger posting needs. kasbon is split out because it is
+// not an expense: it clears the employee receivable created when the advance was
+// disbursed. Employees with no branch fall into a single NULL group.
+func (q *Queries) ListPayrollBranchPostingTotals(ctx context.Context, payrollPeriodID pgtype.UUID) ([]*ListPayrollBranchPostingTotalsRow, error) {
+	rows, err := q.db.Query(ctx, listPayrollBranchPostingTotals, payrollPeriodID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListPayrollBranchPostingTotalsRow
+	for rows.Next() {
+		var i ListPayrollBranchPostingTotalsRow
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.BranchName,
+			&i.TotalGross,
+			&i.TotalNet,
+			&i.TotalKasbon,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -783,7 +993,12 @@ func (q *Queries) ListPayrollLineBranchTotals(ctx context.Context, payrollPeriod
 	var items []*ListPayrollLineBranchTotalsRow
 	for rows.Next() {
 		var i ListPayrollLineBranchTotalsRow
-		if err := rows.Scan(&i.BranchID, &i.TotalGross, &i.TotalNet, &i.TotalKasbon); err != nil {
+		if err := rows.Scan(
+			&i.BranchID,
+			&i.TotalGross,
+			&i.TotalNet,
+			&i.TotalKasbon,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -1033,6 +1248,43 @@ func (q *Queries) ListPayrollPeriods(ctx context.Context) ([]*ListPayrollPeriods
 	return items, nil
 }
 
+const listUnpostedPayrollPostings = `-- name: ListUnpostedPayrollPostings :many
+SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, posted_at
+FROM payroll_postings
+WHERE status <> 'posted' AND attempts < $1
+ORDER BY queued_at
+`
+
+// The sweep's working set. attempts is capped by the caller so a permanently
+// broken period (e.g. a deleted account) stops burning retries.
+func (q *Queries) ListUnpostedPayrollPostings(ctx context.Context, maxAttempts int32) ([]*PayrollPosting, error) {
+	rows, err := q.db.Query(ctx, listUnpostedPayrollPostings, maxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*PayrollPosting
+	for rows.Next() {
+		var i PayrollPosting
+		if err := rows.Scan(
+			&i.PeriodID,
+			&i.Status,
+			&i.Attempts,
+			&i.LastError,
+			&i.JournalEntryID,
+			&i.QueuedAt,
+			&i.PostedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markPayrollPeriodPaid = `-- name: MarkPayrollPeriodPaid :one
 UPDATE payroll_periods
 SET status = 'paid', paid_at = now()
@@ -1057,16 +1309,71 @@ func (q *Queries) MarkPayrollPeriodPaid(ctx context.Context, id pgtype.UUID) (*P
 	return &i, err
 }
 
+const markPayrollPostingAttempt = `-- name: MarkPayrollPostingAttempt :exec
+UPDATE payroll_postings SET attempts = attempts + 1 WHERE period_id = $1
+`
+
+func (q *Queries) MarkPayrollPostingAttempt(ctx context.Context, periodID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markPayrollPostingAttempt, periodID)
+	return err
+}
+
+const markPayrollPostingFailed = `-- name: MarkPayrollPostingFailed :exec
+UPDATE payroll_postings SET status = 'failed', last_error = $2 WHERE period_id = $1
+`
+
+type MarkPayrollPostingFailedParams struct {
+	PeriodID  pgtype.UUID `json:"period_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) MarkPayrollPostingFailed(ctx context.Context, arg *MarkPayrollPostingFailedParams) error {
+	_, err := q.db.Exec(ctx, markPayrollPostingFailed, arg.PeriodID, arg.LastError)
+	return err
+}
+
+const markPayrollPostingPosted = `-- name: MarkPayrollPostingPosted :exec
+UPDATE payroll_postings
+SET status = 'posted', last_error = '', journal_entry_id = $2, posted_at = now()
+WHERE period_id = $1
+`
+
+type MarkPayrollPostingPostedParams struct {
+	PeriodID       pgtype.UUID `json:"period_id"`
+	JournalEntryID pgtype.UUID `json:"journal_entry_id"`
+}
+
+func (q *Queries) MarkPayrollPostingPosted(ctx context.Context, arg *MarkPayrollPostingPostedParams) error {
+	_, err := q.db.Exec(ctx, markPayrollPostingPosted, arg.PeriodID, arg.JournalEntryID)
+	return err
+}
+
+const sumHalfDayLostMinutes = `-- name: SumHalfDayLostMinutes :one
+SELECT COALESCE(SUM(half_day_lost_minutes), 0)::bigint AS total
+FROM attendance_records
+WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND is_half_day = true
+`
+
+type SumHalfDayLostMinutesParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+// Total lost minutes across an employee's half-day corrections in a date range,
+// used to derive the payroll half-day wage deduction (lost hours × hourly rate).
+func (q *Queries) SumHalfDayLostMinutes(ctx context.Context, arg *SumHalfDayLostMinutesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, sumHalfDayLostMinutes, arg.EmployeeID, arg.Date, arg.Date_2)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const unreviewPayrollLine = `-- name: UnreviewPayrollLine :one
 UPDATE payroll_lines
 SET reviewed = false, reviewed_by = NULL, reviewed_at = NULL
 WHERE id = $1
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount
+RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate, overtime_days, public_holiday_days, overtime_amount, public_holiday_amount, allowance_total, bonus_total, component_deduction_total, kasbon_deduction, unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay, performance_score, reviewed, reviewed_by, reviewed_at, review_note, overtime_hours, overtime_hourly_rate, overtime_hourly_amount, half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction, performance_grade, grade_pay_percent, public_holiday_rate, alpha_unpaid_days, alpha_deduction
 `
 
 func (q *Queries) UnreviewPayrollLine(ctx context.Context, id pgtype.UUID) (*PayrollLine, error) {
@@ -1099,95 +1406,17 @@ func (q *Queries) UnreviewPayrollLine(ctx context.Context, id pgtype.UUID) (*Pay
 		&i.OvertimeHours,
 		&i.OvertimeHourlyRate,
 		&i.OvertimeHourlyAmount,
+		&i.HalfDayHours,
+		&i.HalfDayDeduction,
+		&i.AttendanceCutMinutes,
+		&i.AttendanceCutDeduction,
+		&i.PerformanceGrade,
+		&i.GradePayPercent,
+		&i.PublicHolidayRate,
+		&i.AlphaUnpaidDays,
+		&i.AlphaDeduction,
 	)
 	return &i, err
-}
-
-const getBonusEligibleLines = `-- name: GetBonusEligibleLines :many
-SELECT
-    l.id              AS line_id,
-    plc.id            AS line_component_id,
-    plc.name          AS component_name,
-    plc.amount        AS current_amount,
-    l.employee_id,
-    e.full_name       AS employee_name,
-    e.employee_code,
-    l.performance_score,
-    l.reviewed
-FROM payroll_line_components plc
-JOIN payroll_lines l  ON l.id  = plc.payroll_line_id
-JOIN employees     e  ON e.id  = l.employee_id
-WHERE l.payroll_period_id = $1
-  AND plc.wage_component_id = $2
-  AND plc.type = 'bonus'
-ORDER BY e.full_name
-`
-
-type GetBonusEligibleLinesParams struct {
-	PayrollPeriodID pgtype.UUID `json:"payroll_period_id"`
-	WageComponentID pgtype.UUID `json:"wage_component_id"`
-}
-
-type GetBonusEligibleLinesRow struct {
-	LineID           pgtype.UUID `json:"line_id"`
-	LineComponentID  pgtype.UUID `json:"line_component_id"`
-	ComponentName    string      `json:"component_name"`
-	CurrentAmount    int64       `json:"current_amount"`
-	EmployeeID       pgtype.UUID `json:"employee_id"`
-	EmployeeName     string      `json:"employee_name"`
-	EmployeeCode     string      `json:"employee_code"`
-	PerformanceScore pgtype.Int4 `json:"performance_score"`
-	Reviewed         bool        `json:"reviewed"`
-}
-
-func (q *Queries) GetBonusEligibleLines(ctx context.Context, arg *GetBonusEligibleLinesParams) ([]*GetBonusEligibleLinesRow, error) {
-	rows, err := q.db.Query(ctx, getBonusEligibleLines, arg.PayrollPeriodID, arg.WageComponentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*GetBonusEligibleLinesRow
-	for rows.Next() {
-		var i GetBonusEligibleLinesRow
-		if err := rows.Scan(
-			&i.LineID,
-			&i.LineComponentID,
-			&i.ComponentName,
-			&i.CurrentAmount,
-			&i.EmployeeID,
-			&i.EmployeeName,
-			&i.EmployeeCode,
-			&i.PerformanceScore,
-			&i.Reviewed,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updatePayrollLineTotals = `-- name: UpdatePayrollLineTotals :exec
-UPDATE payroll_lines
-SET bonus_total = $1,
-    gross_pay   = $2,
-    net_pay     = $3
-WHERE id = $4
-`
-
-type UpdatePayrollLineTotalsParams struct {
-	BonusTotal int64       `json:"bonus_total"`
-	GrossPay   int64       `json:"gross_pay"`
-	NetPay     int64       `json:"net_pay"`
-	ID         pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) UpdatePayrollLineTotals(ctx context.Context, arg *UpdatePayrollLineTotalsParams) error {
-	_, err := q.db.Exec(ctx, updatePayrollLineTotals, arg.BonusTotal, arg.GrossPay, arg.NetPay, arg.ID)
-	return err
 }
 
 const updatePayrollLineComponentAmount = `-- name: UpdatePayrollLineComponentAmount :exec
@@ -1214,13 +1443,7 @@ SET overtime_days = $1, public_holiday_days = $2,
     reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9,
     overtime_hours = $10, overtime_hourly_amount = $11, allowance_total = $12
 WHERE id = $13
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
+RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate, overtime_days, public_holiday_days, overtime_amount, public_holiday_amount, allowance_total, bonus_total, component_deduction_total, kasbon_deduction, unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay, performance_score, reviewed, reviewed_by, reviewed_at, review_note, overtime_hours, overtime_hourly_rate, overtime_hourly_amount, half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction, performance_grade, grade_pay_percent, public_holiday_rate, alpha_unpaid_days, alpha_deduction
 `
 
 type UpdatePayrollLineReviewParams struct {
@@ -1287,100 +1510,51 @@ func (q *Queries) UpdatePayrollLineReview(ctx context.Context, arg *UpdatePayrol
 		&i.HalfDayDeduction,
 		&i.AttendanceCutMinutes,
 		&i.AttendanceCutDeduction,
+		&i.PerformanceGrade,
+		&i.GradePayPercent,
+		&i.PublicHolidayRate,
+		&i.AlphaUnpaidDays,
+		&i.AlphaDeduction,
 	)
 	return &i, err
 }
 
-const sumHalfDayLostMinutes = `-- name: SumHalfDayLostMinutes :one
-SELECT COALESCE(SUM(half_day_lost_minutes), 0)::bigint AS total
-FROM attendance_records
-WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND is_half_day = true
+const updatePayrollLineTotals = `-- name: UpdatePayrollLineTotals :exec
+UPDATE payroll_lines
+SET bonus_total = $1,
+    gross_pay   = $2,
+    net_pay     = $3
+WHERE id = $4
 `
 
-type SumHalfDayLostMinutesParams struct {
-	EmployeeID pgtype.UUID `json:"employee_id"`
-	Date       pgtype.Date `json:"date"`
-	Date_2     pgtype.Date `json:"date_2"`
+type UpdatePayrollLineTotalsParams struct {
+	BonusTotal int64       `json:"bonus_total"`
+	GrossPay   int64       `json:"gross_pay"`
+	NetPay     int64       `json:"net_pay"`
+	ID         pgtype.UUID `json:"id"`
 }
 
-// Total lost minutes across an employee's half-day corrections in a date range,
-// used to derive the payroll half-day wage deduction (lost hours × hourly rate).
-func (q *Queries) SumHalfDayLostMinutes(ctx context.Context, arg *SumHalfDayLostMinutesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, sumHalfDayLostMinutes, arg.EmployeeID, arg.Date, arg.Date_2)
-	var total int64
-	err := row.Scan(&total)
-	return total, err
+// Updates bonus_total, gross_pay, and net_pay on a line without touching
+// the reviewed flag — used after a bulk bonus distribution.
+func (q *Queries) UpdatePayrollLineTotals(ctx context.Context, arg *UpdatePayrollLineTotalsParams) error {
+	_, err := q.db.Exec(ctx, updatePayrollLineTotals,
+		arg.BonusTotal,
+		arg.GrossPay,
+		arg.NetPay,
+		arg.ID,
+	)
+	return err
 }
 
-const listAttendanceCutDays = `-- name: ListAttendanceCutDays :many
-SELECT ar.date, ar.check_in, ar.check_out,
-       ar.is_late, ar.late_minutes, ar.is_early_leave, ar.early_leave_minutes, ar.is_half_day,
-       sd.code AS shift_code,
-       (CASE WHEN sd.id IS NULL THEN NULL ELSE
-          EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
-          + COALESCE(EXTRACT(EPOCH FROM (sd.end2 - sd.start2)) / 60, 0)
-          - sd.break_minutes
-        END)::int AS shift_paid_minutes
-FROM attendance_records ar
-LEFT JOIN shift_assignments sa ON sa.employee_id = ar.employee_id AND sa.date = ar.date
-LEFT JOIN shift_definitions sd ON sd.id = sa.shift_id
-WHERE ar.employee_id = $1 AND ar.date >= $2 AND ar.date <= $3
-  AND ar.status = 'present'
-  AND (ar.is_late OR ar.is_early_leave OR ar.is_half_day)
-ORDER BY ar.date
+const upsertPayrollPosting = `-- name: UpsertPayrollPosting :exec
+INSERT INTO payroll_postings (period_id, status, queued_at)
+VALUES ($1, 'pending', now())
+ON CONFLICT (period_id) DO UPDATE
+SET status = 'pending', last_error = '', queued_at = now()
+WHERE payroll_postings.status <> 'posted'
 `
 
-type ListAttendanceCutDaysParams struct {
-	EmployeeID pgtype.UUID `json:"employee_id"`
-	Date       pgtype.Date `json:"date"`
-	Date_2     pgtype.Date `json:"date_2"`
-}
-
-type ListAttendanceCutDaysRow struct {
-	Date              pgtype.Date        `json:"date"`
-	CheckIn           pgtype.Timestamptz `json:"check_in"`
-	CheckOut          pgtype.Timestamptz `json:"check_out"`
-	IsLate            bool               `json:"is_late"`
-	LateMinutes       int32              `json:"late_minutes"`
-	IsEarlyLeave      bool               `json:"is_early_leave"`
-	EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
-	IsHalfDay         bool               `json:"is_half_day"`
-	ShiftCode         pgtype.Text        `json:"shift_code"`
-	ShiftPaidMinutes  pgtype.Int4        `json:"shift_paid_minutes"`
-}
-
-// Present days in [from, to] that carry a late / early-leave / half-day flag, with
-// the paid length of the shift rostered that day (segments minus the unpaid break;
-// NULL when no shift was rostered, so the caller falls back to branch hours). The
-// late / early minutes are the ones frozen at punch time, so the cut agrees with
-// what the attendance page shows.
-func (q *Queries) ListAttendanceCutDays(ctx context.Context, arg *ListAttendanceCutDaysParams) ([]*ListAttendanceCutDaysRow, error) {
-	rows, err := q.db.Query(ctx, listAttendanceCutDays, arg.EmployeeID, arg.Date, arg.Date_2)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*ListAttendanceCutDaysRow
-	for rows.Next() {
-		var i ListAttendanceCutDaysRow
-		if err := rows.Scan(
-			&i.Date,
-			&i.CheckIn,
-			&i.CheckOut,
-			&i.IsLate,
-			&i.LateMinutes,
-			&i.IsEarlyLeave,
-			&i.EarlyLeaveMinutes,
-			&i.IsHalfDay,
-			&i.ShiftCode,
-			&i.ShiftPaidMinutes,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+func (q *Queries) UpsertPayrollPosting(ctx context.Context, periodID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, upsertPayrollPosting, periodID)
+	return err
 }

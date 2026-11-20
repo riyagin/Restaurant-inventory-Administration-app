@@ -227,6 +227,8 @@ type GetDailyPurchaseItemsRow struct {
 	ItemUnits        []byte         `json:"item_units"`
 }
 
+// Lines carry the item's unit list so a reversal can unwind at the *stored*
+// conversion factor without a second round trip per line.
 func (q *Queries) GetDailyPurchaseItems(ctx context.Context, purchaseID pgtype.UUID) ([]*GetDailyPurchaseItemsRow, error) {
 	rows, err := q.db.Query(ctx, getDailyPurchaseItems, purchaseID)
 	if err != nil {
@@ -318,10 +320,10 @@ ORDER BY dp.date DESC, dp.created_at DESC
 `
 
 type ListDailyPurchasesParams struct {
-	Column1 pgtype.UUID `json:"column_1"`
-	Column2 pgtype.Date `json:"column_2"`
-	Column3 pgtype.Date `json:"column_3"`
-	Column4 pgtype.Text `json:"column_4"`
+	BranchID pgtype.UUID `json:"branch_id"`
+	FromDate pgtype.Date `json:"from_date"`
+	ToDate   pgtype.Date `json:"to_date"`
+	Status   pgtype.Text `json:"status"`
 }
 
 type ListDailyPurchasesRow struct {
@@ -347,12 +349,14 @@ type ListDailyPurchasesRow struct {
 	LineCount            int32              `json:"line_count"`
 }
 
+// The list the office works from. Every filter is optional so one query serves
+// the branch view, the date view and the "everything today" view.
 func (q *Queries) ListDailyPurchases(ctx context.Context, arg *ListDailyPurchasesParams) ([]*ListDailyPurchasesRow, error) {
 	rows, err := q.db.Query(ctx, listDailyPurchases,
-		arg.Column1,
-		arg.Column2,
-		arg.Column3,
-		arg.Column4,
+		arg.BranchID,
+		arg.FromDate,
+		arg.ToDate,
+		arg.Status,
 	)
 	if err != nil {
 		return nil, err
@@ -440,7 +444,7 @@ func (q *Queries) ListDailyPurchasesForDay(ctx context.Context, arg *ListDailyPu
 }
 
 const nextDailyPurchaseNumber = `-- name: NextDailyPurchaseNumber :one
-SELECT 'PH-' || LPAD(nextval('daily_purchase_number_seq')::text, 6, '0') AS number
+SELECT ('PH-' || LPAD(nextval('daily_purchase_number_seq')::text, 6, '0'))::text AS number
 `
 
 func (q *Queries) NextDailyPurchaseNumber(ctx context.Context) (string, error) {
@@ -495,6 +499,8 @@ type SumDailyPurchasesForDayRow struct {
 	Count int32 `json:"count"`
 }
 
+// The spending side of the day's reconciliation: what left this branch's box.
+// Cancelled rows are excluded — their money went back in.
 func (q *Queries) SumDailyPurchasesForDay(ctx context.Context, arg *SumDailyPurchasesForDayParams) (*SumDailyPurchasesForDayRow, error) {
 	row := q.db.QueryRow(ctx, sumDailyPurchasesForDay, arg.BranchID, arg.Date)
 	var i SumDailyPurchasesForDayRow

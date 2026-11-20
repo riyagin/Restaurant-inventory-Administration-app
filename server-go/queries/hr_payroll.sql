@@ -83,33 +83,14 @@ VALUES (
     $22, $23,
     $24, $25
 )
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction;
+RETURNING *;
 
 -- name: GetPayrollLineByID :one
-SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-       overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-       allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-       unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-       overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-       half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction
-FROM payroll_lines
+SELECT * FROM payroll_lines
 WHERE id = $1;
 
 -- name: GetPayrollLineByPeriodEmployee :one
-SELECT id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-       overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-       allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-       unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-       performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-       overtime_hours, overtime_hourly_rate, overtime_hourly_amount
-FROM payroll_lines
+SELECT * FROM payroll_lines
 WHERE payroll_period_id = $1 AND employee_id = $2;
 
 -- name: ListPayrollLinesForPeriod :many
@@ -146,7 +127,8 @@ WHERE payroll_period_id = $1 AND reviewed = false;
 
 -- name: ListPayrollLineBranchTotals :many
 SELECT e.branch_id, COALESCE(SUM(l.gross_pay), 0)::bigint AS total_gross,
-       COALESCE(SUM(l.net_pay), 0)::bigint AS total_net
+       COALESCE(SUM(l.net_pay), 0)::bigint AS total_net,
+       COALESCE(SUM(l.kasbon_deduction), 0)::bigint AS total_kasbon
 FROM payroll_lines l
 JOIN employees e ON e.id = l.employee_id
 WHERE l.payroll_period_id = $1
@@ -160,24 +142,13 @@ SET overtime_days = $1, public_holiday_days = $2,
     reviewed = true, reviewed_by = $8, reviewed_at = now(), review_note = $9,
     overtime_hours = $10, overtime_hourly_amount = $11, allowance_total = $12
 WHERE id = $13
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount,
-          half_day_hours, half_day_deduction, attendance_cut_minutes, attendance_cut_deduction;
+RETURNING *;
 
 -- name: UnreviewPayrollLine :one
 UPDATE payroll_lines
 SET reviewed = false, reviewed_by = NULL, reviewed_at = NULL
 WHERE id = $1
-RETURNING id, payroll_period_id, employee_id, wage_structure_id, base_salary, daily_rate,
-          overtime_days, public_holiday_days, overtime_amount, public_holiday_amount,
-          allowance_total, bonus_total, component_deduction_total, kasbon_deduction,
-          unpaid_leave_days, unpaid_leave_deduction, gross_pay, net_pay,
-          performance_score, reviewed, reviewed_by, reviewed_at, review_note,
-          overtime_hours, overtime_hourly_rate, overtime_hourly_amount;
+RETURNING *;
 
 -- name: DeletePayrollLine :exec
 DELETE FROM payroll_lines WHERE id = $1;
@@ -362,23 +333,21 @@ UPDATE payroll_postings SET status = 'failed', last_error = $2 WHERE period_id =
 -- broken period (e.g. a deleted account) stops burning retries.
 SELECT period_id, status, attempts, last_error, journal_entry_id, queued_at, posted_at
 FROM payroll_postings
-WHERE status <> 'posted' AND attempts < $1
+WHERE status <> 'posted' AND attempts < sqlc.arg(max_attempts)
 ORDER BY queued_at;
 
 -- name: ListAttendanceCutDays :many
 -- Present days in [from, to] that carry a late / early-leave / half-day flag, with
 -- the paid length of the shift rostered that day (segments minus the unpaid break;
--- NULL when no shift was rostered, so the caller falls back to branch hours). The
+-- 0 when no shift was rostered, so the caller falls back to branch hours). The
 -- late / early minutes are the ones frozen at punch time, so the cut agrees with
 -- what the attendance page shows.
 SELECT ar.date, ar.check_in, ar.check_out,
        ar.is_late, ar.late_minutes, ar.is_early_leave, ar.early_leave_minutes, ar.is_half_day,
        sd.code AS shift_code,
-       (CASE WHEN sd.id IS NULL THEN NULL ELSE
-          EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
+       COALESCE((EXTRACT(EPOCH FROM (sd.end1 - sd.start1)) / 60
           + COALESCE(EXTRACT(EPOCH FROM (sd.end2 - sd.start2)) / 60, 0)
-          - sd.break_minutes
-        END)::int AS shift_paid_minutes
+          - sd.break_minutes)::int, 0)::int AS shift_paid_minutes
 FROM attendance_records ar
 LEFT JOIN shift_assignments sa ON sa.employee_id = ar.employee_id AND sa.date = ar.date
 LEFT JOIN shift_definitions sd ON sd.id = sa.shift_id

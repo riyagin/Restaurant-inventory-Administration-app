@@ -116,6 +116,19 @@ func (q *Queries) DeleteInventoryLot(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const depleteInventoryLot = `-- name: DepleteInventoryLot :exec
+UPDATE inventory
+SET quantity = 0, value = 0, depleted_at = COALESCE(depleted_at, now())
+WHERE id = $1
+`
+
+// A used-up lot is stamped and zeroed, never deleted: the row is the only
+// surviving record that the delivery existed, and its usage log hangs off it.
+func (q *Queries) DepleteInventoryLot(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, depleteInventoryLot, id)
+	return err
+}
+
 const getInventoryByID = `-- name: GetInventoryByID :one
 SELECT
     inv.id, inv.item_id, inv.warehouse_id, inv.quantity,
@@ -157,6 +170,79 @@ func (q *Queries) GetInventoryByID(ctx context.Context, id pgtype.UUID) (*GetInv
 		&i.ItemCode,
 		&i.ItemUnits,
 		&i.WarehouseName,
+	)
+	return &i, err
+}
+
+const getInventoryLotDetail = `-- name: GetInventoryLotDetail :one
+SELECT
+    inv.id, inv.item_id, inv.warehouse_id, inv.quantity, inv.unit_index,
+    inv.value, inv.date, inv.created_at, inv.depleted_at,
+    i.name AS item_name, i.code AS item_code, i.units AS item_units, i.is_stock,
+    w.name AS warehouse_name,
+    -- The purchase that opened the lot, matched through the stock_history row
+    -- written alongside it. Absent for a manually created lot, which is the
+    -- honest answer rather than a fabricated origin.
+    (SELECT sh.reference FROM stock_history sh
+      WHERE sh.item_id = inv.item_id AND sh.warehouse_id = inv.warehouse_id
+        AND sh.quantity_change > 0 AND sh.date = inv.date
+      ORDER BY sh.created_at LIMIT 1)::text AS opening_reference,
+    (SELECT sh.vendor FROM stock_history sh
+      WHERE sh.item_id = inv.item_id AND sh.warehouse_id = inv.warehouse_id
+        AND sh.quantity_change > 0 AND sh.date = inv.date
+      ORDER BY sh.created_at LIMIT 1)::text AS opening_vendor,
+    COALESCE((SELECT SUM(c.quantity) FROM inventory_lot_consumptions c WHERE c.lot_id = inv.id), 0)::numeric AS consumed_quantity,
+    COALESCE((SELECT SUM(c.value)    FROM inventory_lot_consumptions c WHERE c.lot_id = inv.id), 0)::bigint  AS consumed_value
+FROM inventory inv
+JOIN items i ON i.id = inv.item_id
+JOIN warehouses w ON w.id = inv.warehouse_id
+WHERE inv.id = $1
+`
+
+type GetInventoryLotDetailRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	ItemID           pgtype.UUID        `json:"item_id"`
+	WarehouseID      pgtype.UUID        `json:"warehouse_id"`
+	Quantity         pgtype.Numeric     `json:"quantity"`
+	UnitIndex        int32              `json:"unit_index"`
+	Value            int64              `json:"value"`
+	Date             pgtype.Date        `json:"date"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	DepletedAt       pgtype.Timestamptz `json:"depleted_at"`
+	ItemName         string             `json:"item_name"`
+	ItemCode         string             `json:"item_code"`
+	ItemUnits        []byte             `json:"item_units"`
+	IsStock          bool               `json:"is_stock"`
+	WarehouseName    string             `json:"warehouse_name"`
+	OpeningReference string             `json:"opening_reference"`
+	OpeningVendor    string             `json:"opening_vendor"`
+	ConsumedQuantity pgtype.Numeric     `json:"consumed_quantity"`
+	ConsumedValue    int64              `json:"consumed_value"`
+}
+
+// The lot itself: what arrived, when, from whom, and what is left of it.
+func (q *Queries) GetInventoryLotDetail(ctx context.Context, id pgtype.UUID) (*GetInventoryLotDetailRow, error) {
+	row := q.db.QueryRow(ctx, getInventoryLotDetail, id)
+	var i GetInventoryLotDetailRow
+	err := row.Scan(
+		&i.ID,
+		&i.ItemID,
+		&i.WarehouseID,
+		&i.Quantity,
+		&i.UnitIndex,
+		&i.Value,
+		&i.Date,
+		&i.CreatedAt,
+		&i.DepletedAt,
+		&i.ItemName,
+		&i.ItemCode,
+		&i.ItemUnits,
+		&i.IsStock,
+		&i.WarehouseName,
+		&i.OpeningReference,
+		&i.OpeningVendor,
+		&i.ConsumedQuantity,
+		&i.ConsumedValue,
 	)
 	return &i, err
 }
@@ -260,6 +346,100 @@ func (q *Queries) GetItemInventorySummary(ctx context.Context, itemID pgtype.UUI
 	return items, nil
 }
 
+const getLotConsumptions = `-- name: GetLotConsumptions :many
+SELECT
+    c.id, c.quantity, c.value, c.source_type, c.source_id, c.reference, c.date, c.created_at,
+    COALESCE(b.name, dv.name, w.name, '')::text AS destination
+FROM inventory_lot_consumptions c
+LEFT JOIN dispatches d   ON c.source_type = 'dispatch' AND d.id = c.source_id
+LEFT JOIN branches b     ON b.id = d.branch_id
+LEFT JOIN divisions dv   ON dv.id = d.division_id
+LEFT JOIN stock_transfers st ON c.source_type = 'stock_transfer' AND st.id = c.source_id
+LEFT JOIN warehouses w   ON w.id = st.to_warehouse_id
+WHERE c.lot_id = $1
+ORDER BY c.date, c.created_at
+`
+
+type GetLotConsumptionsRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Quantity    pgtype.Numeric     `json:"quantity"`
+	Value       int64              `json:"value"`
+	SourceType  pgtype.Text        `json:"source_type"`
+	SourceID    pgtype.UUID        `json:"source_id"`
+	Reference   string             `json:"reference"`
+	Date        pgtype.Date        `json:"date"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	Destination string             `json:"destination"`
+}
+
+// Everything that came out of one lot, oldest first — the body of a lot's
+// history page. Joined out to a human label per source so the page can say
+// "Pengiriman ke Cimanggu" rather than a bare UUID.
+func (q *Queries) GetLotConsumptions(ctx context.Context, lotID pgtype.UUID) ([]*GetLotConsumptionsRow, error) {
+	rows, err := q.db.Query(ctx, getLotConsumptions, lotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*GetLotConsumptionsRow
+	for rows.Next() {
+		var i GetLotConsumptionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Quantity,
+			&i.Value,
+			&i.SourceType,
+			&i.SourceID,
+			&i.Reference,
+			&i.Date,
+			&i.CreatedAt,
+			&i.Destination,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const insertLotConsumption = `-- name: InsertLotConsumption :exec
+INSERT INTO inventory_lot_consumptions (
+    id, lot_id, item_id, warehouse_id, quantity, value,
+    source_type, source_id, reference, date
+)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertLotConsumptionParams struct {
+	LotID       pgtype.UUID    `json:"lot_id"`
+	ItemID      pgtype.UUID    `json:"item_id"`
+	WarehouseID pgtype.UUID    `json:"warehouse_id"`
+	Quantity    pgtype.Numeric `json:"quantity"`
+	Value       int64          `json:"value"`
+	SourceType  pgtype.Text    `json:"source_type"`
+	SourceID    pgtype.UUID    `json:"source_id"`
+	Reference   string         `json:"reference"`
+	Date        pgtype.Date    `json:"date"`
+}
+
+func (q *Queries) InsertLotConsumption(ctx context.Context, arg *InsertLotConsumptionParams) error {
+	_, err := q.db.Exec(ctx, insertLotConsumption,
+		arg.LotID,
+		arg.ItemID,
+		arg.WarehouseID,
+		arg.Quantity,
+		arg.Value,
+		arg.SourceType,
+		arg.SourceID,
+		arg.Reference,
+		arg.Date,
+	)
+	return err
+}
+
 const listInventory = `-- name: ListInventory :many
 SELECT
     inv.id, inv.item_id, inv.warehouse_id, inv.quantity,
@@ -335,61 +515,62 @@ WITH lots AS (
     FROM inventory inv
     JOIN items i ON i.id = inv.item_id
     JOIN warehouses w ON w.id = inv.warehouse_id
-    WHERE ($1::uuid IS NULL OR inv.warehouse_id = $1)
-      AND ($2::uuid IS NULL OR inv.item_id = $2)
-      AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
-      AND ($4::date IS NULL OR inv.date >= $4)
-      AND ($5::date IS NULL OR inv.date <= $5)
-      AND ($6::bool OR inv.quantity > 0)
+    WHERE ($5::uuid IS NULL OR inv.warehouse_id = $5)
+      AND ($6::uuid IS NULL OR inv.item_id = $6)
+      AND ($7::text IS NULL OR i.name ILIKE '%' || $7 || '%' OR i.code ILIKE '%' || $7 || '%')
+      AND ($8::date IS NULL OR inv.date >= $8)
+      AND ($9::date IS NULL OR inv.date <= $9)
+      AND ($10::bool OR inv.quantity > 0)
 ),
 empty_items AS (
     SELECT
         NULL::uuid AS id, i.id AS item_id, NULL::uuid AS warehouse_id, 0::numeric AS quantity,
         0::int AS unit_index, NULL::date AS date, NULL::timestamptz AS depleted_at,
         i.name AS item_name, i.code AS item_code, i.units AS item_units,
-        NULL::text AS warehouse_name
+        ''::text AS warehouse_name
     FROM items i
-    WHERE $6::bool
+    WHERE $10::bool
       AND i.is_stock
-      AND ($2::uuid IS NULL OR i.id = $2)
-      AND ($3::text IS NULL OR i.name ILIKE '%' || $3 || '%' OR i.code ILIKE '%' || $3 || '%')
-      AND $4::date IS NULL
-      AND $5::date IS NULL
+      AND ($6::uuid IS NULL OR i.id = $6)
+      AND ($7::text IS NULL OR i.name ILIKE '%' || $7 || '%' OR i.code ILIKE '%' || $7 || '%')
+      AND $8::date IS NULL
+      AND $9::date IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM inventory x
         WHERE x.item_id = i.id
-          AND ($1::uuid IS NULL OR x.warehouse_id = $1)
+          AND ($5::uuid IS NULL OR x.warehouse_id = $5)
       )
 )
 SELECT id, item_id, warehouse_id, quantity, unit_index, date, depleted_at,
        item_name, item_code, item_units, warehouse_name
-FROM (SELECT * FROM lots UNION ALL SELECT * FROM empty_items) rows
+FROM (SELECT id, item_id, warehouse_id, quantity, unit_index, date, depleted_at, item_name, item_code, item_units, warehouse_name FROM lots UNION ALL SELECT id, item_id, warehouse_id, quantity, unit_index, date, depleted_at, item_name, item_code, item_units, warehouse_name FROM empty_items) rows
 ORDER BY
-    CASE WHEN $7::text = 'item'      AND $8::text = 'asc'  THEN item_name END ASC,
-    CASE WHEN $7::text = 'item'      AND $8::text = 'desc' THEN item_name END DESC,
-    CASE WHEN $7::text = 'code'      AND $8::text = 'asc'  THEN item_code END ASC,
-    CASE WHEN $7::text = 'code'      AND $8::text = 'desc' THEN item_code END DESC,
-    CASE WHEN $7::text = 'quantity'  AND $8::text = 'asc'  THEN quantity END ASC,
-    CASE WHEN $7::text = 'quantity'  AND $8::text = 'desc' THEN quantity END DESC,
-    CASE WHEN $7::text = 'warehouse' AND $8::text = 'asc'  THEN warehouse_name END ASC,
-    CASE WHEN $7::text = 'warehouse' AND $8::text = 'desc' THEN warehouse_name END DESC,
-    CASE WHEN $7::text = 'date'      AND $8::text = 'asc'  THEN date END ASC,
-    CASE WHEN $7::text = 'date'      AND $8::text = 'desc' THEN date END DESC,
+    CASE WHEN $1::text = 'item'      AND $2::text = 'asc'  THEN item_name END ASC,
+    CASE WHEN $1::text = 'item'      AND $2::text = 'desc' THEN item_name END DESC,
+    CASE WHEN $1::text = 'code'      AND $2::text = 'asc'  THEN item_code END ASC,
+    CASE WHEN $1::text = 'code'      AND $2::text = 'desc' THEN item_code END DESC,
+    CASE WHEN $1::text = 'quantity'  AND $2::text = 'asc'  THEN quantity END ASC,
+    CASE WHEN $1::text = 'quantity'  AND $2::text = 'desc' THEN quantity END DESC,
+    CASE WHEN $1::text = 'warehouse' AND $2::text = 'asc'  THEN warehouse_name END ASC,
+    CASE WHEN $1::text = 'warehouse' AND $2::text = 'desc' THEN warehouse_name END DESC,
+    CASE WHEN $1::text = 'date'      AND $2::text = 'asc'  THEN date END ASC,
+    CASE WHEN $1::text = 'date'      AND $2::text = 'desc' THEN date END DESC,
+    -- Stable tail so equal keys never shuffle between pages.
     item_name, warehouse_name NULLS LAST, date
-LIMIT $10 OFFSET $9
+LIMIT $4 OFFSET $3
 `
 
 type ListInventoryPageParams struct {
+	Sort         string      `json:"sort"`
+	Dir          string      `json:"dir"`
+	Offset       int32       `json:"offset"`
+	Limit        int32       `json:"limit"`
 	WarehouseID  pgtype.UUID `json:"warehouse_id"`
 	ItemID       pgtype.UUID `json:"item_id"`
 	Search       pgtype.Text `json:"search"`
 	DateFrom     pgtype.Date `json:"date_from"`
 	DateTo       pgtype.Date `json:"date_to"`
 	IncludeEmpty bool        `json:"include_empty"`
-	Sort         string      `json:"sort"`
-	Dir          string      `json:"dir"`
-	Offset       int32       `json:"offset"`
-	Limit        int32       `json:"limit"`
 }
 
 type ListInventoryPageRow struct {
@@ -403,21 +584,37 @@ type ListInventoryPageRow struct {
 	ItemName      string             `json:"item_name"`
 	ItemCode      string             `json:"item_code"`
 	ItemUnits     []byte             `json:"item_units"`
-	WarehouseName pgtype.Text        `json:"warehouse_name"`
+	WarehouseName string             `json:"warehouse_name"`
 }
 
+// The inventory list.
+//
+// Two things beyond the obvious. First, `include_empty` widens the list from
+// "lots with stock" to everything: depleted lots (which now survive their own
+// consumption) and items that have no lot at all. An item at zero is exactly the
+// one you need to see before a shopping run, so hiding it was the wrong default
+// to have had.
+//
+// Second, ordering is chosen by the caller through `sort`/`dir` rather than
+// fixed. It has to happen here rather than in the client because the list is
+// paginated — sorting one page of 25 sorts nothing. The CASE ladder is verbose
+// but keeps the column list closed, so a sort key can never become an injection
+// point.
+// Stock items with no lot at all in the selected warehouse. They carry a NULL
+// lot id, which is what tells the UI there is nothing to edit, delete or trace —
+// the row exists to say "we stock this and have none".
 func (q *Queries) ListInventoryPage(ctx context.Context, arg *ListInventoryPageParams) ([]*ListInventoryPageRow, error) {
 	rows, err := q.db.Query(ctx, listInventoryPage,
+		arg.Sort,
+		arg.Dir,
+		arg.Offset,
+		arg.Limit,
 		arg.WarehouseID,
 		arg.ItemID,
 		arg.Search,
 		arg.DateFrom,
 		arg.DateTo,
 		arg.IncludeEmpty,
-		arg.Sort,
-		arg.Dir,
-		arg.Offset,
-		arg.Limit,
 	)
 	if err != nil {
 		return nil, err

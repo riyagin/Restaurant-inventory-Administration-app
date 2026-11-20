@@ -295,7 +295,7 @@ func (s *sim) backfill(from, to time.Time) error {
 	}
 	defer tx.Rollback(s.ctx)
 	qtx := s.q.WithTx(tx)
-	if err := qtx.DeleteAutoViolationsForRange(s.ctx, &db.DeleteAutoViolationsForRangeParams{From: pgD(from), To: pgD(to)}); err != nil {
+	if err := qtx.DeleteAutoViolationsForRange(s.ctx, &db.DeleteAutoViolationsForRangeParams{FromDate: pgD(from), ToDate: pgD(to)}); err != nil {
 		return err
 	}
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {

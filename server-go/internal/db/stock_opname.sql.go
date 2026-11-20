@@ -29,6 +29,23 @@ func (q *Queries) GetCurrentInventoryQuantity(ctx context.Context, arg *GetCurre
 	return total_quantity, err
 }
 
+const getInventoryVarianceAccountID = `-- name: GetInventoryVarianceAccountID :one
+SELECT id FROM accounts
+WHERE name IN ('Selisih Persediaan', 'Stock Waste')
+ORDER BY (name = 'Selisih Persediaan') DESC
+LIMIT 1
+`
+
+// Matches the pre-044 name too, so a binary running against a database that has
+// not been migrated yet finds the existing account instead of creating a second
+// one under the new name.
+func (q *Queries) GetInventoryVarianceAccountID(ctx context.Context) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getInventoryVarianceAccountID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getStockOpnameByID = `-- name: GetStockOpnameByID :one
 SELECT
     so.id, so.warehouse_id, so.notes, so.performed_at,
@@ -121,20 +138,6 @@ func (q *Queries) GetStockOpnameItems(ctx context.Context, opnameID pgtype.UUID)
 		return nil, err
 	}
 	return items, nil
-}
-
-const getInventoryVarianceAccountID = `-- name: GetInventoryVarianceAccountID :one
-SELECT id FROM accounts
-WHERE name IN ('Selisih Persediaan', 'Stock Waste')
-ORDER BY (name = 'Selisih Persediaan') DESC
-LIMIT 1
-`
-
-func (q *Queries) GetInventoryVarianceAccountID(ctx context.Context) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getInventoryVarianceAccountID)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
 }
 
 const insertStockOpname = `-- name: InsertStockOpname :one

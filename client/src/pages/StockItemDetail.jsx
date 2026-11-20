@@ -339,7 +339,7 @@ export default function StockItemDetail() {
                   <td style={{ color: '#555' }}>{r.vendor_name ?? dash}</td>
                   <td style={{ color: '#555' }}>{r.warehouse_name ?? dash}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{num(r.quantity)}</td>
-                  <td style={{ color: '#666' }}>{r.unit_name ?? dash}</td>
+                  <td style={{ color: '#666' }}>{r.unit_name || dash}</td>
                   <td style={{ textAlign: 'right', color: '#555' }}>{idr(r.price)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>{idr(r.line_total)}</td>
                   <td>
@@ -518,7 +518,7 @@ export default function StockItemDetail() {
                       {val == null ? '—' : (val >= 0 ? '+' : '-') + idr(Math.abs(val))}
                     </td>
                     <td><span className="badge">{m.warehouse_name}</span></td>
-                    <td style={{ color: '#555', fontSize: '0.85rem' }}>{m.destination ?? dash}</td>
+                    <td style={{ color: '#555', fontSize: '0.85rem' }}>{m.destination || dash}</td>
                     <td style={{ color: '#555' }}>{m.vendor ?? dash}</td>
                     <td style={{ fontSize: '0.85rem' }}>
                       {path

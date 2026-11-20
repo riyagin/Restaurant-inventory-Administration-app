@@ -96,6 +96,8 @@ const deleteDailyPurchaseTemplateItems = `-- name: DeleteDailyPurchaseTemplateIt
 DELETE FROM daily_purchase_template_items WHERE template_id = $1
 `
 
+// Lines are replaced wholesale on save rather than diffed: a template is small,
+// and reconciling adds/moves/removes buys nothing but a chance to get it wrong.
 func (q *Queries) DeleteDailyPurchaseTemplateItems(ctx context.Context, templateID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteDailyPurchaseTemplateItems, templateID)
 	return err

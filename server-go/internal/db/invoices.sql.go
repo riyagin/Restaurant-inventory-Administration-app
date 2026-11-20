@@ -80,7 +80,7 @@ func (q *Queries) CreateInvoice(ctx context.Context, arg *CreateInvoiceParams) (
 
 const createInvoiceItem = `-- name: CreateInvoiceItem :one
 INSERT INTO invoice_items (id, invoice_id, item_id, vendor_id, quantity, unit_index, price, description, conversion_factor)
-VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, COALESCE($8, 1))
+VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, COALESCE($8::numeric, 1))
 RETURNING id
 `
 

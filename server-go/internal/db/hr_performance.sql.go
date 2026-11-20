@@ -11,28 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countPolicyOccurrencesInMonth = `-- name: CountPolicyOccurrencesInMonth :one
-SELECT COUNT(*)
-FROM performance_violations
-WHERE policy_id = $1
-  AND employee_id = $2
-  AND date >= $3
-  AND date < ($3::date + INTERVAL '1 month')
-`
-
-type CountPolicyOccurrencesInMonthParams struct {
-	PolicyID   pgtype.UUID `json:"policy_id"`
-	EmployeeID pgtype.UUID `json:"employee_id"`
-	Date       pgtype.Date `json:"date"`
-}
-
-func (q *Queries) CountPolicyOccurrencesInMonth(ctx context.Context, arg *CountPolicyOccurrencesInMonthParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countPolicyOccurrencesInMonth, arg.PolicyID, arg.EmployeeID, arg.Date)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countAbsentDaysBeforeInMonth = `-- name: CountAbsentDaysBeforeInMonth :one
 SELECT COUNT(*)
 FROM attendance_records
@@ -49,7 +27,7 @@ type CountAbsentDaysBeforeInMonthParams struct {
 }
 
 // Number of 'absent' attendance days the employee already has in the month,
-// strictly before before_date. Used to apply the monthly absence grace: the
+// strictly before `before_date`. Used to apply the monthly absence grace: the
 // first N absent days each month carry no performance violation.
 func (q *Queries) CountAbsentDaysBeforeInMonth(ctx context.Context, arg *CountAbsentDaysBeforeInMonthParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countAbsentDaysBeforeInMonth, arg.EmployeeID, arg.MonthStart, arg.BeforeDate)
@@ -80,6 +58,28 @@ type CountConsecutiveAbsentDaysParams struct {
 // on $2 is not 'absent'.
 func (q *Queries) CountConsecutiveAbsentDays(ctx context.Context, arg *CountConsecutiveAbsentDaysParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countConsecutiveAbsentDays, arg.EmployeeID, arg.Date)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPolicyOccurrencesInMonth = `-- name: CountPolicyOccurrencesInMonth :one
+SELECT COUNT(*)
+FROM performance_violations
+WHERE policy_id = $1
+  AND employee_id = $2
+  AND date >= $3
+  AND date < ($3::date + INTERVAL '1 month')
+`
+
+type CountPolicyOccurrencesInMonthParams struct {
+	PolicyID   pgtype.UUID `json:"policy_id"`
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+}
+
+func (q *Queries) CountPolicyOccurrencesInMonth(ctx context.Context, arg *CountPolicyOccurrencesInMonthParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPolicyOccurrencesInMonth, arg.PolicyID, arg.EmployeeID, arg.Date)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -152,12 +152,12 @@ WHERE source = 'auto'
 `
 
 type DeleteAutoViolationsForRangeParams struct {
-	From pgtype.Date `json:"from"`
-	To   pgtype.Date `json:"to"`
+	FromDate pgtype.Date `json:"from_date"`
+	ToDate   pgtype.Date `json:"to_date"`
 }
 
 func (q *Queries) DeleteAutoViolationsForRange(ctx context.Context, arg *DeleteAutoViolationsForRangeParams) error {
-	_, err := q.db.Exec(ctx, deleteAutoViolationsForRange, arg.From, arg.To)
+	_, err := q.db.Exec(ctx, deleteAutoViolationsForRange, arg.FromDate, arg.ToDate)
 	return err
 }
 
@@ -249,6 +249,7 @@ func (q *Queries) GetViolationByID(ctx context.Context, id pgtype.UUID) (*Perfor
 }
 
 const insertAutoViolation = `-- name: InsertAutoViolation :exec
+
 INSERT INTO performance_violations (id, employee_id, policy_id, attendance_record_id, date, points, source, note)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'auto', $6)
 ON CONFLICT (policy_id, attendance_record_id) DO NOTHING
@@ -263,6 +264,7 @@ type InsertAutoViolationParams struct {
 	Note               pgtype.Text `json:"note"`
 }
 
+// ── Performance violations ──────────────────────────────────────────────────
 func (q *Queries) InsertAutoViolation(ctx context.Context, arg *InsertAutoViolationParams) error {
 	_, err := q.db.Exec(ctx, insertAutoViolation,
 		arg.EmployeeID,
@@ -352,14 +354,12 @@ func (q *Queries) ListActivePerformancePoliciesByRule(ctx context.Context, ruleT
 }
 
 const listAttendanceRecordsForDate = `-- name: ListAttendanceRecordsForDate :many
-SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
-       check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
-FROM attendance_records
+
+SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source, check_in_photo_path, device_id, status, is_late, late_minutes, is_early_leave, early_leave_minutes, is_missing_checkout, note, is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch, is_leave_punch, excused_by, review_resolved FROM attendance_records
 WHERE date = $1
 `
 
+// ── Finalized attendance records for a date (engine input) ──────────────────
 func (q *Queries) ListAttendanceRecordsForDate(ctx context.Context, date pgtype.Date) ([]*AttendanceRecord, error) {
 	rows, err := q.db.Query(ctx, listAttendanceRecordsForDate, date)
 	if err != nil {
@@ -391,6 +391,9 @@ func (q *Queries) ListAttendanceRecordsForDate(ctx context.Context, date pgtype.
 			&i.HalfDayType,
 			&i.IsMissingCheckin,
 			&i.IsNoPunch,
+			&i.IsLeavePunch,
+			&i.ExcusedBy,
+			&i.ReviewResolved,
 		); err != nil {
 			return nil, err
 		}
@@ -403,11 +406,13 @@ func (q *Queries) ListAttendanceRecordsForDate(ctx context.Context, date pgtype.
 }
 
 const listPerformancePolicies = `-- name: ListPerformancePolicies :many
+
 SELECT id, name, rule_type, threshold_minutes, points, max_occurrences_per_month, is_active, created_at
 FROM performance_policies
 ORDER BY rule_type, threshold_minutes NULLS FIRST, name
 `
 
+// ── Performance policies ────────────────────────────────────────────────────
 func (q *Queries) ListPerformancePolicies(ctx context.Context) ([]*PerformancePolicy, error) {
 	rows, err := q.db.Query(ctx, listPerformancePolicies)
 	if err != nil {
@@ -593,6 +598,7 @@ func (q *Queries) UpdatePerformancePolicy(ctx context.Context, arg *UpdatePerfor
 }
 
 const upsertPerformanceScore = `-- name: UpsertPerformanceScore :one
+
 INSERT INTO performance_scores (id, employee_id, period_month, score)
 VALUES (gen_random_uuid(), $1, $2, $3)
 ON CONFLICT (employee_id, period_month) DO UPDATE SET score = EXCLUDED.score
@@ -605,6 +611,7 @@ type UpsertPerformanceScoreParams struct {
 	Score       int32       `json:"score"`
 }
 
+// ── Performance scores ──────────────────────────────────────────────────────
 func (q *Queries) UpsertPerformanceScore(ctx context.Context, arg *UpsertPerformanceScoreParams) (*PerformanceScore, error) {
 	row := q.db.QueryRow(ctx, upsertPerformanceScore, arg.EmployeeID, arg.PeriodMonth, arg.Score)
 	var i PerformanceScore

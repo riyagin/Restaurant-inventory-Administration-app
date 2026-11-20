@@ -44,7 +44,7 @@ func (q *Queries) CreateAccountForBranch(ctx context.Context, arg *CreateAccount
 const createBranch = `-- name: CreateBranch :one
 INSERT INTO branches (id, name, revenue_account_id, expense_account_id, petty_cash_account_id)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id
+RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id, prepaid_rent_account_id
 `
 
 type CreateBranchParams struct {
@@ -69,6 +69,7 @@ func (q *Queries) CreateBranch(ctx context.Context, arg *CreateBranchParams) (*B
 		&i.ExpenseAccountID,
 		&i.CreatedAt,
 		&i.PettyCashAccountID,
+		&i.PrepaidRentAccountID,
 	)
 	return &i, err
 }
@@ -85,6 +86,9 @@ type CreatePettyCashAccountForBranchParams struct {
 	ParentID      pgtype.UUID `json:"parent_id"`
 }
 
+// The petty cash box hangs under "Kas dan Setara Kas" (11000) rather than
+// standing alone, so the cash total on the balance sheet includes it without
+// anyone maintaining a list.
 func (q *Queries) CreatePettyCashAccountForBranch(ctx context.Context, arg *CreatePettyCashAccountForBranchParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, createPettyCashAccountForBranch, arg.Name, arg.AccountNumber, arg.ParentID)
 	var id pgtype.UUID
@@ -146,17 +150,6 @@ func (q *Queries) GetBranchByID(ctx context.Context, id pgtype.UUID) (*GetBranch
 	return &i, err
 }
 
-const getBranchPettyCashAccountID = `-- name: GetBranchPettyCashAccountID :one
-SELECT petty_cash_account_id FROM branches WHERE id = $1
-`
-
-func (q *Queries) GetBranchPettyCashAccountID(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getBranchPettyCashAccountID, id)
-	var petty_cash_account_id pgtype.UUID
-	err := row.Scan(&petty_cash_account_id)
-	return petty_cash_account_id, err
-}
-
 const getBranchExpenseAccountID = `-- name: GetBranchExpenseAccountID :one
 SELECT expense_account_id FROM branches WHERE id = $1
 `
@@ -166,6 +159,17 @@ func (q *Queries) GetBranchExpenseAccountID(ctx context.Context, id pgtype.UUID)
 	var expense_account_id pgtype.UUID
 	err := row.Scan(&expense_account_id)
 	return expense_account_id, err
+}
+
+const getBranchPettyCashAccountID = `-- name: GetBranchPettyCashAccountID :one
+SELECT petty_cash_account_id FROM branches WHERE id = $1
+`
+
+func (q *Queries) GetBranchPettyCashAccountID(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getBranchPettyCashAccountID, id)
+	var petty_cash_account_id pgtype.UUID
+	err := row.Scan(&petty_cash_account_id)
+	return petty_cash_account_id, err
 }
 
 const getBranchRevenueAccountID = `-- name: GetBranchRevenueAccountID :one
@@ -196,6 +200,8 @@ SELECT COALESCE(MAX(account_number), 11099) + 1 AS next_number
 FROM accounts WHERE account_number BETWEEN 11100 AND 11199
 `
 
+// 11100-11199 sits below the 12001+ inventory accounts, so allocating here
+// leaves GetNextInventoryAccountNumber (MAX over 11000-19999) untouched.
 func (q *Queries) GetNextPettyCashAccountNumber(ctx context.Context) (int32, error) {
 	row := q.db.QueryRow(ctx, getNextPettyCashAccountNumber)
 	var next_number int32
@@ -234,6 +240,9 @@ type ListBranchPettyCashRow struct {
 	Balance            int64       `json:"balance"`
 }
 
+// Branch + petty cash account + live balance, the trio every petty cash screen
+// needs. Branches whose account is somehow missing are still returned so the UI
+// can say so rather than silently dropping the branch.
 func (q *Queries) ListBranchPettyCash(ctx context.Context) ([]*ListBranchPettyCashRow, error) {
 	rows, err := q.db.Query(ctx, listBranchPettyCash)
 	if err != nil {
@@ -334,7 +343,7 @@ func (q *Queries) SetBranchPettyCashAccountID(ctx context.Context, arg *SetBranc
 
 const updateBranch = `-- name: UpdateBranch :one
 UPDATE branches SET name = $1 WHERE id = $2
-RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id
+RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id, prepaid_rent_account_id
 `
 
 type UpdateBranchParams struct {
@@ -352,6 +361,7 @@ func (q *Queries) UpdateBranch(ctx context.Context, arg *UpdateBranchParams) (*B
 		&i.ExpenseAccountID,
 		&i.CreatedAt,
 		&i.PettyCashAccountID,
+		&i.PrepaidRentAccountID,
 	)
 	return &i, err
 }

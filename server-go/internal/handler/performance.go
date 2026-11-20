@@ -610,8 +610,8 @@ func (h *PerformanceHandler) ResetAutoViolations(w http.ResponseWriter, r *http.
 	}
 
 	if err := h.queries.DeleteAutoViolationsForRange(ctx, &db.DeleteAutoViolationsForRangeParams{
-		From: pgtype.Date{Time: from, Valid: true},
-		To:   pgtype.Date{Time: to, Valid: true},
+		FromDate: pgtype.Date{Time: from, Valid: true},
+		ToDate:   pgtype.Date{Time: to, Valid: true},
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghapus pelanggaran otomatis")
 		return

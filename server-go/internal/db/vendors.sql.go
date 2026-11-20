@@ -57,7 +57,7 @@ SELECT
     i.amount_paid,
     a.name AS account_name,
     w.name AS warehouse_name,
-    COALESCE(i.vendor_id = $1, FALSE) AS is_primary,
+    COALESCE(i.vendor_id = $1, FALSE)::bool AS is_primary,
     COALESCE(SUM(ii.price * ii.quantity), 0)::BIGINT AS total_amount,
     COALESCE(SUM(ii.price * ii.quantity)
         FILTER (WHERE COALESCE(ii.vendor_id, i.vendor_id) = $1), 0)::BIGINT AS vendor_amount,
@@ -90,6 +90,9 @@ type GetVendorHistoryRow struct {
 	LineCount       int32       `json:"line_count"`
 }
 
+// An invoice belongs to a vendor either through its own vendor_id or through a
+// line that overrides it, so both paths are covered here. total_amount is the
+// whole invoice; vendor_amount is only the part actually billed by this vendor.
 func (q *Queries) GetVendorHistory(ctx context.Context, vendorID pgtype.UUID) ([]*GetVendorHistoryRow, error) {
 	rows, err := q.db.Query(ctx, getVendorHistory, vendorID)
 	if err != nil {
@@ -133,14 +136,14 @@ SELECT
     it.code    AS item_code,
     it.is_stock,
     ii.unit_index,
-    it.units->ii.unit_index->>'name' AS unit_name,
+    COALESCE(it.units->ii.unit_index->>'name', '')::text AS unit_name,
     SUM(ii.quantity)::numeric              AS total_quantity,
     SUM(ii.quantity * ii.price)::bigint    AS total_spend,
     COUNT(*)::int                          AS purchase_count,
     MIN(ii.price)::bigint                  AS min_price,
     MAX(ii.price)::bigint                  AS max_price,
-    MIN(inv.date)                          AS first_purchase_date,
-    MAX(inv.date)                          AS last_purchase_date,
+    MIN(inv.date)::date                          AS first_purchase_date,
+    MAX(inv.date)::date                          AS last_purchase_date,
     (ARRAY_AGG(ii.price ORDER BY inv.date DESC, inv.created_at DESC))[1]::bigint AS last_price,
     (ARRAY_AGG(ii.price ORDER BY inv.date ASC,  inv.created_at ASC))[1]::bigint  AS first_price
 FROM invoice_items ii
@@ -157,7 +160,7 @@ type GetVendorItemSummaryRow struct {
 	ItemCode          string         `json:"item_code"`
 	IsStock           bool           `json:"is_stock"`
 	UnitIndex         pgtype.Int4    `json:"unit_index"`
-	UnitName          pgtype.Text    `json:"unit_name"`
+	UnitName          string         `json:"unit_name"`
 	TotalQuantity     pgtype.Numeric `json:"total_quantity"`
 	TotalSpend        int64          `json:"total_spend"`
 	PurchaseCount     int32          `json:"purchase_count"`
@@ -169,6 +172,8 @@ type GetVendorItemSummaryRow struct {
 	FirstPrice        int64          `json:"first_price"`
 }
 
+// Everything this vendor has ever sold us, one row per item + unit so prices
+// stay comparable (a price per dus must never be averaged with a price per pcs).
 func (q *Queries) GetVendorItemSummary(ctx context.Context, vendorID pgtype.UUID) ([]*GetVendorItemSummaryRow, error) {
 	rows, err := q.db.Query(ctx, getVendorItemSummary, vendorID)
 	if err != nil {
@@ -229,6 +234,20 @@ func (q *Queries) ListVendors(ctx context.Context) ([]*Vendor, error) {
 	return items, nil
 }
 
+const setVendorAccountID = `-- name: SetVendorAccountID :exec
+UPDATE vendors SET account_id = $1 WHERE id = $2
+`
+
+type SetVendorAccountIDParams struct {
+	AccountID pgtype.UUID `json:"account_id"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetVendorAccountID(ctx context.Context, arg *SetVendorAccountIDParams) error {
+	_, err := q.db.Exec(ctx, setVendorAccountID, arg.AccountID, arg.ID)
+	return err
+}
+
 const updateVendor = `-- name: UpdateVendor :one
 UPDATE vendors SET name = $1 WHERE id = $2
 RETURNING id, name, account_id
@@ -244,18 +263,4 @@ func (q *Queries) UpdateVendor(ctx context.Context, arg *UpdateVendorParams) (*V
 	var i Vendor
 	err := row.Scan(&i.ID, &i.Name, &i.AccountID)
 	return &i, err
-}
-
-const setVendorAccountID = `-- name: SetVendorAccountID :exec
-UPDATE vendors SET account_id = $1 WHERE id = $2
-`
-
-type SetVendorAccountIDParams struct {
-	AccountID pgtype.UUID `json:"account_id"`
-	ID        pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) SetVendorAccountID(ctx context.Context, arg *SetVendorAccountIDParams) error {
-	_, err := q.db.Exec(ctx, setVendorAccountID, arg.AccountID, arg.ID)
-	return err
 }

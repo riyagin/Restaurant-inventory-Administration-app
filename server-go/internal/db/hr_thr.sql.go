@@ -11,153 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createThrRun = `-- name: CreateThrRun :one
-INSERT INTO thr_runs (id, name, payment_date, status, created_by)
-VALUES (gen_random_uuid(), $1, $2, 'open', $3)
-RETURNING id, name, payment_date, status, created_by, closed_at, paid_at, created_at
-`
-
-type CreateThrRunParams struct {
-	Name        string      `json:"name"`
-	PaymentDate pgtype.Date `json:"payment_date"`
-	CreatedBy   pgtype.UUID `json:"created_by"`
-}
-
-func (q *Queries) CreateThrRun(ctx context.Context, arg *CreateThrRunParams) (*ThrRun, error) {
-	row := q.db.QueryRow(ctx, createThrRun, arg.Name, arg.PaymentDate, arg.CreatedBy)
-	var i ThrRun
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.PaymentDate,
-		&i.Status,
-		&i.CreatedBy,
-		&i.ClosedAt,
-		&i.PaidAt,
-		&i.CreatedAt,
-	)
-	return &i, err
-}
-
-const getThrRunByID = `-- name: GetThrRunByID :one
-SELECT id, name, payment_date, status, created_by, closed_at, paid_at, created_at
-FROM thr_runs
-WHERE id = $1
-`
-
-func (q *Queries) GetThrRunByID(ctx context.Context, id pgtype.UUID) (*ThrRun, error) {
-	row := q.db.QueryRow(ctx, getThrRunByID, id)
-	var i ThrRun
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.PaymentDate,
-		&i.Status,
-		&i.CreatedBy,
-		&i.ClosedAt,
-		&i.PaidAt,
-		&i.CreatedAt,
-	)
-	return &i, err
-}
-
-const listThrRuns = `-- name: ListThrRuns :many
-SELECT
-    r.id, r.name, r.payment_date, r.status, r.created_by,
-    r.closed_at, r.paid_at, r.created_at,
-    COALESCE(SUM(l.thr_amount), 0)::bigint       AS total_thr,
-    COUNT(l.id)::int                             AS line_count,
-    COUNT(l.id) FILTER (WHERE l.reviewed)::int   AS reviewed_count
-FROM thr_runs r
-LEFT JOIN thr_lines l ON l.thr_run_id = r.id
-GROUP BY r.id
-ORDER BY r.payment_date DESC
-`
-
-type ListThrRunsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	Name          string             `json:"name"`
-	PaymentDate   pgtype.Date        `json:"payment_date"`
-	Status        string             `json:"status"`
-	CreatedBy     pgtype.UUID        `json:"created_by"`
-	ClosedAt      pgtype.Timestamptz `json:"closed_at"`
-	PaidAt        pgtype.Timestamptz `json:"paid_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	TotalThr      int64              `json:"total_thr"`
-	LineCount     int32              `json:"line_count"`
-	ReviewedCount int32              `json:"reviewed_count"`
-}
-
-func (q *Queries) ListThrRuns(ctx context.Context) ([]*ListThrRunsRow, error) {
-	rows, err := q.db.Query(ctx, listThrRuns)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []*ListThrRunsRow
-	for rows.Next() {
-		var i ListThrRunsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.PaymentDate,
-			&i.Status,
-			&i.CreatedBy,
-			&i.ClosedAt,
-			&i.PaidAt,
-			&i.CreatedAt,
-			&i.TotalThr,
-			&i.LineCount,
-			&i.ReviewedCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getThrRunSummary = `-- name: GetThrRunSummary :one
-SELECT
-    COALESCE(SUM(l.thr_amount), 0)::bigint AS total_thr,
-    COALESCE(SUM(l.computed_amount), 0)::bigint AS total_computed,
-    COUNT(l.id)::int AS line_count,
-    COUNT(l.id) FILTER (WHERE l.reviewed)::int AS reviewed_count
-FROM thr_lines l
-WHERE l.thr_run_id = $1
-`
-
-type GetThrRunSummaryRow struct {
-	TotalThr      int64 `json:"total_thr"`
-	TotalComputed int64 `json:"total_computed"`
-	LineCount     int32 `json:"line_count"`
-	ReviewedCount int32 `json:"reviewed_count"`
-}
-
-func (q *Queries) GetThrRunSummary(ctx context.Context, thrRunID pgtype.UUID) (*GetThrRunSummaryRow, error) {
-	row := q.db.QueryRow(ctx, getThrRunSummary, thrRunID)
-	var i GetThrRunSummaryRow
-	err := row.Scan(
-		&i.TotalThr,
-		&i.TotalComputed,
-		&i.LineCount,
-		&i.ReviewedCount,
-	)
-	return &i, err
-}
-
-const deleteThrRun = `-- name: DeleteThrRun :exec
-DELETE FROM thr_runs WHERE id = $1
-`
-
-func (q *Queries) DeleteThrRun(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteThrRun, id)
-	return err
-}
-
 const closeThrRun = `-- name: CloseThrRun :one
 UPDATE thr_runs
 SET status = 'closed', closed_at = now()
@@ -181,30 +34,20 @@ func (q *Queries) CloseThrRun(ctx context.Context, id pgtype.UUID) (*ThrRun, err
 	return &i, err
 }
 
-const markThrRunPaid = `-- name: MarkThrRunPaid :one
-UPDATE thr_runs
-SET status = 'paid', paid_at = now()
-WHERE id = $1
-RETURNING id, name, payment_date, status, created_by, closed_at, paid_at, created_at
+const countUnreviewedThrLines = `-- name: CountUnreviewedThrLines :one
+SELECT COUNT(*) FROM thr_lines
+WHERE thr_run_id = $1 AND reviewed = false
 `
 
-func (q *Queries) MarkThrRunPaid(ctx context.Context, id pgtype.UUID) (*ThrRun, error) {
-	row := q.db.QueryRow(ctx, markThrRunPaid, id)
-	var i ThrRun
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.PaymentDate,
-		&i.Status,
-		&i.CreatedBy,
-		&i.ClosedAt,
-		&i.PaidAt,
-		&i.CreatedAt,
-	)
-	return &i, err
+func (q *Queries) CountUnreviewedThrLines(ctx context.Context, thrRunID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreviewedThrLines, thrRunID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createThrLine = `-- name: CreateThrLine :one
+
 INSERT INTO thr_lines (
     id, thr_run_id, employee_id, wage_structure_id, base_salary, join_date,
     months_worked, thr_ratio, computed_amount, thr_amount
@@ -227,6 +70,7 @@ type CreateThrLineParams struct {
 	ThrAmount       int64          `json:"thr_amount"`
 }
 
+// ── THR Lines ────────────────────────────────────────────────────────────────
 func (q *Queries) CreateThrLine(ctx context.Context, arg *CreateThrLineParams) (*ThrLine, error) {
 	row := q.db.QueryRow(ctx, createThrLine,
 		arg.ThrRunID,
@@ -257,6 +101,54 @@ func (q *Queries) CreateThrLine(ctx context.Context, arg *CreateThrLineParams) (
 		&i.ReviewNote,
 	)
 	return &i, err
+}
+
+const createThrRun = `-- name: CreateThrRun :one
+
+INSERT INTO thr_runs (id, name, payment_date, status, created_by)
+VALUES (gen_random_uuid(), $1, $2, 'open', $3)
+RETURNING id, name, payment_date, status, created_by, closed_at, paid_at, created_at
+`
+
+type CreateThrRunParams struct {
+	Name        string      `json:"name"`
+	PaymentDate pgtype.Date `json:"payment_date"`
+	CreatedBy   pgtype.UUID `json:"created_by"`
+}
+
+// ── THR Runs ─────────────────────────────────────────────────────────────────
+func (q *Queries) CreateThrRun(ctx context.Context, arg *CreateThrRunParams) (*ThrRun, error) {
+	row := q.db.QueryRow(ctx, createThrRun, arg.Name, arg.PaymentDate, arg.CreatedBy)
+	var i ThrRun
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.PaymentDate,
+		&i.Status,
+		&i.CreatedBy,
+		&i.ClosedAt,
+		&i.PaidAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const deleteThrLine = `-- name: DeleteThrLine :exec
+DELETE FROM thr_lines WHERE id = $1
+`
+
+func (q *Queries) DeleteThrLine(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteThrLine, id)
+	return err
+}
+
+const deleteThrRun = `-- name: DeleteThrRun :exec
+DELETE FROM thr_runs WHERE id = $1
+`
+
+func (q *Queries) DeleteThrRun(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteThrRun, id)
+	return err
 }
 
 const getThrLineByID = `-- name: GetThrLineByID :one
@@ -322,6 +214,152 @@ func (q *Queries) GetThrLineByRunEmployee(ctx context.Context, arg *GetThrLineBy
 		&i.ReviewNote,
 	)
 	return &i, err
+}
+
+const getThrLineForPayslip = `-- name: GetThrLineForPayslip :one
+SELECT
+    l.id, l.thr_run_id, l.employee_id,
+    l.base_salary, l.months_worked, l.thr_ratio, l.computed_amount, l.thr_amount,
+    l.review_note,
+    e.full_name AS employee_name, e.employee_code, e.join_date,
+    pos.name AS position_name,
+    b.name   AS branch_name,
+    r.name AS run_name, r.payment_date, r.status AS run_status
+FROM thr_lines l
+JOIN thr_runs r        ON r.id = l.thr_run_id
+JOIN employees e       ON e.id = l.employee_id
+LEFT JOIN positions pos ON pos.id = e.position_id
+LEFT JOIN branches  b   ON b.id  = e.branch_id
+WHERE l.id = $1
+`
+
+type GetThrLineForPayslipRow struct {
+	ID             pgtype.UUID    `json:"id"`
+	ThrRunID       pgtype.UUID    `json:"thr_run_id"`
+	EmployeeID     pgtype.UUID    `json:"employee_id"`
+	BaseSalary     int64          `json:"base_salary"`
+	MonthsWorked   int32          `json:"months_worked"`
+	ThrRatio       pgtype.Numeric `json:"thr_ratio"`
+	ComputedAmount int64          `json:"computed_amount"`
+	ThrAmount      int64          `json:"thr_amount"`
+	ReviewNote     pgtype.Text    `json:"review_note"`
+	EmployeeName   string         `json:"employee_name"`
+	EmployeeCode   string         `json:"employee_code"`
+	JoinDate       pgtype.Date    `json:"join_date"`
+	PositionName   pgtype.Text    `json:"position_name"`
+	BranchName     pgtype.Text    `json:"branch_name"`
+	RunName        string         `json:"run_name"`
+	PaymentDate    pgtype.Date    `json:"payment_date"`
+	RunStatus      string         `json:"run_status"`
+}
+
+func (q *Queries) GetThrLineForPayslip(ctx context.Context, id pgtype.UUID) (*GetThrLineForPayslipRow, error) {
+	row := q.db.QueryRow(ctx, getThrLineForPayslip, id)
+	var i GetThrLineForPayslipRow
+	err := row.Scan(
+		&i.ID,
+		&i.ThrRunID,
+		&i.EmployeeID,
+		&i.BaseSalary,
+		&i.MonthsWorked,
+		&i.ThrRatio,
+		&i.ComputedAmount,
+		&i.ThrAmount,
+		&i.ReviewNote,
+		&i.EmployeeName,
+		&i.EmployeeCode,
+		&i.JoinDate,
+		&i.PositionName,
+		&i.BranchName,
+		&i.RunName,
+		&i.PaymentDate,
+		&i.RunStatus,
+	)
+	return &i, err
+}
+
+const getThrRunByID = `-- name: GetThrRunByID :one
+SELECT id, name, payment_date, status, created_by, closed_at, paid_at, created_at
+FROM thr_runs
+WHERE id = $1
+`
+
+func (q *Queries) GetThrRunByID(ctx context.Context, id pgtype.UUID) (*ThrRun, error) {
+	row := q.db.QueryRow(ctx, getThrRunByID, id)
+	var i ThrRun
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.PaymentDate,
+		&i.Status,
+		&i.CreatedBy,
+		&i.ClosedAt,
+		&i.PaidAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const getThrRunSummary = `-- name: GetThrRunSummary :one
+SELECT
+    COALESCE(SUM(l.thr_amount), 0)::bigint AS total_thr,
+    COALESCE(SUM(l.computed_amount), 0)::bigint AS total_computed,
+    COUNT(l.id)::int AS line_count,
+    COUNT(l.id) FILTER (WHERE l.reviewed)::int AS reviewed_count
+FROM thr_lines l
+WHERE l.thr_run_id = $1
+`
+
+type GetThrRunSummaryRow struct {
+	TotalThr      int64 `json:"total_thr"`
+	TotalComputed int64 `json:"total_computed"`
+	LineCount     int32 `json:"line_count"`
+	ReviewedCount int32 `json:"reviewed_count"`
+}
+
+func (q *Queries) GetThrRunSummary(ctx context.Context, thrRunID pgtype.UUID) (*GetThrRunSummaryRow, error) {
+	row := q.db.QueryRow(ctx, getThrRunSummary, thrRunID)
+	var i GetThrRunSummaryRow
+	err := row.Scan(
+		&i.TotalThr,
+		&i.TotalComputed,
+		&i.LineCount,
+		&i.ReviewedCount,
+	)
+	return &i, err
+}
+
+const listThrLineBranchTotals = `-- name: ListThrLineBranchTotals :many
+SELECT e.branch_id, COALESCE(SUM(l.thr_amount), 0)::bigint AS total_thr
+FROM thr_lines l
+JOIN employees e ON e.id = l.employee_id
+WHERE l.thr_run_id = $1
+GROUP BY e.branch_id
+`
+
+type ListThrLineBranchTotalsRow struct {
+	BranchID pgtype.UUID `json:"branch_id"`
+	TotalThr int64       `json:"total_thr"`
+}
+
+func (q *Queries) ListThrLineBranchTotals(ctx context.Context, thrRunID pgtype.UUID) ([]*ListThrLineBranchTotalsRow, error) {
+	rows, err := q.db.Query(ctx, listThrLineBranchTotals, thrRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListThrLineBranchTotalsRow
+	for rows.Next() {
+		var i ListThrLineBranchTotalsRow
+		if err := rows.Scan(&i.BranchID, &i.TotalThr); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listThrLinesForRun = `-- name: ListThrLinesForRun :many
@@ -428,41 +466,55 @@ func (q *Queries) ListThrLinesForRun(ctx context.Context, arg *ListThrLinesForRu
 	return items, nil
 }
 
-const countUnreviewedThrLines = `-- name: CountUnreviewedThrLines :one
-SELECT COUNT(*) FROM thr_lines
-WHERE thr_run_id = $1 AND reviewed = false
+const listThrRuns = `-- name: ListThrRuns :many
+SELECT
+    r.id, r.name, r.payment_date, r.status, r.created_by,
+    r.closed_at, r.paid_at, r.created_at,
+    COALESCE(SUM(l.thr_amount), 0)::bigint       AS total_thr,
+    COUNT(l.id)::int                             AS line_count,
+    COUNT(l.id) FILTER (WHERE l.reviewed)::int   AS reviewed_count
+FROM thr_runs r
+LEFT JOIN thr_lines l ON l.thr_run_id = r.id
+GROUP BY r.id
+ORDER BY r.payment_date DESC
 `
 
-func (q *Queries) CountUnreviewedThrLines(ctx context.Context, thrRunID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countUnreviewedThrLines, thrRunID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type ListThrRunsRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	Name          string             `json:"name"`
+	PaymentDate   pgtype.Date        `json:"payment_date"`
+	Status        string             `json:"status"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	ClosedAt      pgtype.Timestamptz `json:"closed_at"`
+	PaidAt        pgtype.Timestamptz `json:"paid_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	TotalThr      int64              `json:"total_thr"`
+	LineCount     int32              `json:"line_count"`
+	ReviewedCount int32              `json:"reviewed_count"`
 }
 
-const listThrLineBranchTotals = `-- name: ListThrLineBranchTotals :many
-SELECT e.branch_id, COALESCE(SUM(l.thr_amount), 0)::bigint AS total_thr
-FROM thr_lines l
-JOIN employees e ON e.id = l.employee_id
-WHERE l.thr_run_id = $1
-GROUP BY e.branch_id
-`
-
-type ListThrLineBranchTotalsRow struct {
-	BranchID pgtype.UUID `json:"branch_id"`
-	TotalThr int64       `json:"total_thr"`
-}
-
-func (q *Queries) ListThrLineBranchTotals(ctx context.Context, thrRunID pgtype.UUID) ([]*ListThrLineBranchTotalsRow, error) {
-	rows, err := q.db.Query(ctx, listThrLineBranchTotals, thrRunID)
+func (q *Queries) ListThrRuns(ctx context.Context) ([]*ListThrRunsRow, error) {
+	rows, err := q.db.Query(ctx, listThrRuns)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*ListThrLineBranchTotalsRow
+	var items []*ListThrRunsRow
 	for rows.Next() {
-		var i ListThrLineBranchTotalsRow
-		if err := rows.Scan(&i.BranchID, &i.TotalThr); err != nil {
+		var i ListThrRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.PaymentDate,
+			&i.Status,
+			&i.CreatedBy,
+			&i.ClosedAt,
+			&i.PaidAt,
+			&i.CreatedAt,
+			&i.TotalThr,
+			&i.LineCount,
+			&i.ReviewedCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -471,6 +523,60 @@ func (q *Queries) ListThrLineBranchTotals(ctx context.Context, thrRunID pgtype.U
 		return nil, err
 	}
 	return items, nil
+}
+
+const markThrRunPaid = `-- name: MarkThrRunPaid :one
+UPDATE thr_runs
+SET status = 'paid', paid_at = now()
+WHERE id = $1
+RETURNING id, name, payment_date, status, created_by, closed_at, paid_at, created_at
+`
+
+func (q *Queries) MarkThrRunPaid(ctx context.Context, id pgtype.UUID) (*ThrRun, error) {
+	row := q.db.QueryRow(ctx, markThrRunPaid, id)
+	var i ThrRun
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.PaymentDate,
+		&i.Status,
+		&i.CreatedBy,
+		&i.ClosedAt,
+		&i.PaidAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const unreviewThrLine = `-- name: UnreviewThrLine :one
+UPDATE thr_lines
+SET reviewed = false, reviewed_by = NULL, reviewed_at = NULL
+WHERE id = $1
+RETURNING id, thr_run_id, employee_id, wage_structure_id, base_salary, join_date,
+          months_worked, thr_ratio, computed_amount, thr_amount,
+          reviewed, reviewed_by, reviewed_at, review_note
+`
+
+func (q *Queries) UnreviewThrLine(ctx context.Context, id pgtype.UUID) (*ThrLine, error) {
+	row := q.db.QueryRow(ctx, unreviewThrLine, id)
+	var i ThrLine
+	err := row.Scan(
+		&i.ID,
+		&i.ThrRunID,
+		&i.EmployeeID,
+		&i.WageStructureID,
+		&i.BaseSalary,
+		&i.JoinDate,
+		&i.MonthsWorked,
+		&i.ThrRatio,
+		&i.ComputedAmount,
+		&i.ThrAmount,
+		&i.Reviewed,
+		&i.ReviewedBy,
+		&i.ReviewedAt,
+		&i.ReviewNote,
+	)
+	return &i, err
 }
 
 const updateThrLineReview = `-- name: UpdateThrLineReview :one
@@ -513,108 +619,6 @@ func (q *Queries) UpdateThrLineReview(ctx context.Context, arg *UpdateThrLineRev
 		&i.ReviewedBy,
 		&i.ReviewedAt,
 		&i.ReviewNote,
-	)
-	return &i, err
-}
-
-const unreviewThrLine = `-- name: UnreviewThrLine :one
-UPDATE thr_lines
-SET reviewed = false, reviewed_by = NULL, reviewed_at = NULL
-WHERE id = $1
-RETURNING id, thr_run_id, employee_id, wage_structure_id, base_salary, join_date,
-          months_worked, thr_ratio, computed_amount, thr_amount,
-          reviewed, reviewed_by, reviewed_at, review_note
-`
-
-func (q *Queries) UnreviewThrLine(ctx context.Context, id pgtype.UUID) (*ThrLine, error) {
-	row := q.db.QueryRow(ctx, unreviewThrLine, id)
-	var i ThrLine
-	err := row.Scan(
-		&i.ID,
-		&i.ThrRunID,
-		&i.EmployeeID,
-		&i.WageStructureID,
-		&i.BaseSalary,
-		&i.JoinDate,
-		&i.MonthsWorked,
-		&i.ThrRatio,
-		&i.ComputedAmount,
-		&i.ThrAmount,
-		&i.Reviewed,
-		&i.ReviewedBy,
-		&i.ReviewedAt,
-		&i.ReviewNote,
-	)
-	return &i, err
-}
-
-const deleteThrLine = `-- name: DeleteThrLine :exec
-DELETE FROM thr_lines WHERE id = $1
-`
-
-func (q *Queries) DeleteThrLine(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteThrLine, id)
-	return err
-}
-
-const getThrLineForPayslip = `-- name: GetThrLineForPayslip :one
-SELECT
-    l.id, l.thr_run_id, l.employee_id,
-    l.base_salary, l.months_worked, l.thr_ratio, l.computed_amount, l.thr_amount,
-    l.review_note,
-    e.full_name AS employee_name, e.employee_code, e.join_date,
-    pos.name AS position_name,
-    b.name   AS branch_name,
-    r.name AS run_name, r.payment_date, r.status AS run_status
-FROM thr_lines l
-JOIN thr_runs r        ON r.id = l.thr_run_id
-JOIN employees e       ON e.id = l.employee_id
-LEFT JOIN positions pos ON pos.id = e.position_id
-LEFT JOIN branches  b   ON b.id  = e.branch_id
-WHERE l.id = $1
-`
-
-type GetThrLineForPayslipRow struct {
-	ID             pgtype.UUID    `json:"id"`
-	ThrRunID       pgtype.UUID    `json:"thr_run_id"`
-	EmployeeID     pgtype.UUID    `json:"employee_id"`
-	BaseSalary     int64          `json:"base_salary"`
-	MonthsWorked   int32          `json:"months_worked"`
-	ThrRatio       pgtype.Numeric `json:"thr_ratio"`
-	ComputedAmount int64          `json:"computed_amount"`
-	ThrAmount      int64          `json:"thr_amount"`
-	ReviewNote     pgtype.Text    `json:"review_note"`
-	EmployeeName   string         `json:"employee_name"`
-	EmployeeCode   string         `json:"employee_code"`
-	JoinDate       pgtype.Date    `json:"join_date"`
-	PositionName   pgtype.Text    `json:"position_name"`
-	BranchName     pgtype.Text    `json:"branch_name"`
-	RunName        string         `json:"run_name"`
-	PaymentDate    pgtype.Date    `json:"payment_date"`
-	RunStatus      string         `json:"run_status"`
-}
-
-func (q *Queries) GetThrLineForPayslip(ctx context.Context, id pgtype.UUID) (*GetThrLineForPayslipRow, error) {
-	row := q.db.QueryRow(ctx, getThrLineForPayslip, id)
-	var i GetThrLineForPayslipRow
-	err := row.Scan(
-		&i.ID,
-		&i.ThrRunID,
-		&i.EmployeeID,
-		&i.BaseSalary,
-		&i.MonthsWorked,
-		&i.ThrRatio,
-		&i.ComputedAmount,
-		&i.ThrAmount,
-		&i.ReviewNote,
-		&i.EmployeeName,
-		&i.EmployeeCode,
-		&i.JoinDate,
-		&i.PositionName,
-		&i.BranchName,
-		&i.RunName,
-		&i.PaymentDate,
-		&i.RunStatus,
 	)
 	return &i, err
 }

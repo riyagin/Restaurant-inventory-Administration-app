@@ -67,8 +67,8 @@ WHERE attendance_record_id = $1 AND source = 'auto';
 -- name: DeleteAutoViolationsForRange :exec
 DELETE FROM performance_violations
 WHERE source = 'auto'
-  AND date >= $1
-  AND date <= $2;
+  AND date >= sqlc.arg(from_date)
+  AND date <= sqlc.arg(to_date);
 
 -- name: CountPolicyOccurrencesInMonth :one
 SELECT COUNT(*)
@@ -84,10 +84,10 @@ WHERE policy_id = $1
 -- first N absent days each month carry no performance violation.
 SELECT COUNT(*)
 FROM attendance_records
-WHERE employee_id = $1
+WHERE employee_id = sqlc.arg(employee_id)
   AND status = 'absent'
-  AND date >= $2
-  AND date < $3;
+  AND date >= sqlc.arg(month_start)
+  AND date < sqlc.arg(before_date);
 
 -- name: CountConsecutiveAbsentDays :one
 -- Length of the run of consecutive 'absent' attendance records ending on $2
@@ -124,11 +124,7 @@ ORDER BY v.date, v.created_at;
 -- ── Finalized attendance records for a date (engine input) ──────────────────
 
 -- name: ListAttendanceRecordsForDate :many
-SELECT id, employee_id, date, check_in, check_out, check_in_source, check_out_source,
-       check_in_photo_path, device_id, status, is_late, late_minutes,
-       is_early_leave, early_leave_minutes, is_missing_checkout, note,
-       is_half_day, half_day_lost_minutes, half_day_type, is_missing_checkin, is_no_punch
-FROM attendance_records
+SELECT * FROM attendance_records
 WHERE date = $1;
 
 -- ── Performance scores ──────────────────────────────────────────────────────

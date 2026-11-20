@@ -63,6 +63,8 @@ type GetPreviousPettyCashClosingRow struct {
 	ClosingAmount pgtype.Int8 `json:"closing_amount"`
 }
 
+// The previous day's closing figure, offered as the default opening so the two
+// ends of consecutive days are visibly linked rather than typed twice.
 func (q *Queries) GetPreviousPettyCashClosing(ctx context.Context, arg *GetPreviousPettyCashClosingParams) (*GetPreviousPettyCashClosingRow, error) {
 	row := q.db.QueryRow(ctx, getPreviousPettyCashClosing, arg.BranchID, arg.CountDate)
 	var i GetPreviousPettyCashClosingRow
@@ -166,6 +168,8 @@ type ListPettyCashDayStatusRow struct {
 	VarianceNote       pgtype.Text `json:"variance_note"`
 }
 
+// Which branches have counted which end of a given day. Feeds both the petty
+// cash board and the derived daily task.
 func (q *Queries) ListPettyCashDayStatus(ctx context.Context, countDate pgtype.Date) ([]*ListPettyCashDayStatusRow, error) {
 	rows, err := q.db.Query(ctx, listPettyCashDayStatus, countDate)
 	if err != nil {
@@ -270,6 +274,9 @@ type UpsertPettyCashOpeningParams struct {
 	OpeningBy     pgtype.UUID `json:"opening_by"`
 }
 
+// The opening count. Re-recording the same day is a correction of a miscount,
+// not a second observation, so it overwrites — and it clears the closing figures
+// with it, because a closing computed against the old opening is now wrong.
 func (q *Queries) UpsertPettyCashOpening(ctx context.Context, arg *UpsertPettyCashOpeningParams) (*PettyCashCount, error) {
 	row := q.db.QueryRow(ctx, upsertPettyCashOpening,
 		arg.BranchID,

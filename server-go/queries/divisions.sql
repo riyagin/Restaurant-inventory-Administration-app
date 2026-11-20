@@ -30,11 +30,11 @@ WHERE d.id = $1;
 -- name: CreateDivision :one
 INSERT INTO divisions (id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id)
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
-RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at;
+RETURNING *;
 
 -- name: UpdateDivision :one
 UPDATE divisions SET name = $1 WHERE id = $2
-RETURNING id, branch_id, name, revenue_account_id, expense_account_id, discount_account_id, created_at;
+RETURNING *;
 
 -- name: DeleteDivision :exec
 DELETE FROM divisions WHERE id = $1;

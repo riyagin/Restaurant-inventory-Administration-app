@@ -277,7 +277,7 @@ export default function VendorHistory() {
                       <Link to={path} style={{ color: '#4f8ef7', textDecoration: 'none', fontWeight: 600 }}>{r.item_name}</Link>
                       {r.item_code && <div style={{ fontSize: '0.75rem', color: '#aaa' }}>{r.item_code}</div>}
                     </td>
-                    <td style={{ color: '#666' }}>{r.unit_name ?? dash}</td>
+                    <td style={{ color: '#666' }}>{r.unit_name || dash}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{idr(r.last_price)}</td>
                     <td style={{ color: '#888', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>{fmt(r.last_purchase_date)}</td>
                     <td style={{ textAlign: 'right', color: '#555' }}>{avg == null ? dash : idr(avg)}</td>

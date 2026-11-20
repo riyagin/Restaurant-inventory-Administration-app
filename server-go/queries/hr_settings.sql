@@ -1,12 +1,7 @@
 -- ── HR Settings (singleton, id = 1) ──────────────────────────────────────────
 
 -- name: GetHRSettings :one
-SELECT id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
-       company_phone, company_email, company_city,
-       signatory_name, signatory_position, signatory_national_id,
-       doc_number_format, doc_number_counter,
-       doc_working_hours, doc_payment_info, doc_probation_months
-FROM hr_settings
+SELECT * FROM hr_settings
 WHERE id = 1;
 
 -- name: UpdateHRSettings :one
@@ -24,21 +19,13 @@ SET company_name = $1, address = $2, payslip_footer = $3, absence_grace_days = $
     doc_number_format = $11, doc_number_counter = $12,
     doc_working_hours = $13, doc_payment_info = $14, doc_probation_months = $15,
     updated_at = now()
-RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
-          company_phone, company_email, company_city,
-          signatory_name, signatory_position, signatory_national_id,
-          doc_number_format, doc_number_counter,
-          doc_working_hours, doc_payment_info, doc_probation_months;
+RETURNING *;
 
 -- name: UpdateHRSettingsLogo :one
 UPDATE hr_settings
 SET logo_path = $1, updated_at = now()
 WHERE id = 1
-RETURNING id, company_name, address, logo_path, payslip_footer, absence_grace_days, updated_at,
-          company_phone, company_email, company_city,
-          signatory_name, signatory_position, signatory_national_id,
-          doc_number_format, doc_number_counter,
-          doc_working_hours, doc_payment_info, doc_probation_months;
+RETURNING *;
 
 -- ConsumeHRDocumentNumber hands out the current counter and advances it in one
 -- statement, so two people generating a letter at the same time cannot be given

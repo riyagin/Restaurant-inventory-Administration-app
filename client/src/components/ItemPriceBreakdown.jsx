@@ -13,7 +13,7 @@ const monthLabel = (m) => {
 };
 
 const dash = <span style={{ color: '#ccc' }}>—</span>;
-const unitKey = (r) => (r.unit_index ?? 0) + '|' + (r.unit_name ?? '—');
+const unitKey = (r) => (r.unit_index ?? 0) + '|' + (r.unit_name || '—');
 
 // Local YYYY-MM-DD. toISOString() would shift to UTC and hand back yesterday
 // for anyone east of Greenwich, which is everyone using this app.
@@ -129,7 +129,7 @@ export default function ItemPriceBreakdown({ itemId }) {
   // against the price actually paid the time before.
   const lines = useMemo(() => {
     const rows = (data?.purchases ?? [])
-      .filter((r) => (r.unit_index ?? 0) + '|' + (r.unit_name ?? '—') === activeUnit)
+      .filter((r) => (r.unit_index ?? 0) + '|' + (r.unit_name || '—') === activeUnit)
       .slice()
       .reverse();
     return rows.map((r, i) => ({
@@ -215,7 +215,7 @@ export default function ItemPriceBreakdown({ itemId }) {
   };
 
   const dataBody = () => {
-  const unitName = summary.unit_name ?? 'satuan';
+  const unitName = summary.unit_name || 'satuan';
   const avg      = avgPrice(summary);
   const last     = Number(summary.last_price);
   const first    = Number(summary.first_price);
@@ -232,7 +232,7 @@ export default function ItemPriceBreakdown({ itemId }) {
               onClick={() => setUnit(unitKey(u))}
               className={unitKey(u) === activeUnit ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
             >
-              {u.unit_name ?? '—'} ({u.purchase_count})
+              {u.unit_name || '—'} ({u.purchase_count})
             </button>
           ))}
         </div>

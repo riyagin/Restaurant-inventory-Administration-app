@@ -15,10 +15,7 @@ const approveKasbon = `-- name: ApproveKasbon :one
 UPDATE kasbons
 SET status = 'approved', approved_by = $1, approved_at = now(), approval_note = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 type ApproveKasbonParams struct {
@@ -49,6 +46,8 @@ func (q *Queries) ApproveKasbon(ctx context.Context, arg *ApproveKasbonParams) (
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
@@ -83,10 +82,7 @@ INSERT INTO kasbons (
     fund_source_account_id, request_date, resolution_month, status, created_by
 )
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 type CreateKasbonParams struct {
@@ -133,11 +129,14 @@ func (q *Queries) CreateKasbon(ctx context.Context, arg *CreateKasbonParams) (*K
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
 
 const createKasbonInstallment = `-- name: CreateKasbonInstallment :one
+
 INSERT INTO kasbon_installments (id, kasbon_id, due_month, amount, status)
 VALUES (gen_random_uuid(), $1, $2, $3, 'pending')
 RETURNING id, kasbon_id, due_month, amount, payroll_line_id, status
@@ -149,6 +148,7 @@ type CreateKasbonInstallmentParams struct {
 	Amount   int64       `json:"amount"`
 }
 
+// ── Kasbon Installments ──────────────────────────────────────────────────────
 func (q *Queries) CreateKasbonInstallment(ctx context.Context, arg *CreateKasbonInstallmentParams) (*KasbonInstallment, error) {
 	row := q.db.QueryRow(ctx, createKasbonInstallment, arg.KasbonID, arg.DueMonth, arg.Amount)
 	var i KasbonInstallment
@@ -173,11 +173,7 @@ func (q *Queries) DeleteKasbonInstallments(ctx context.Context, kasbonID pgtype.
 }
 
 const getKasbonByID = `-- name: GetKasbonByID :one
-SELECT id, kasbon_number, employee_id, amount, details, sending_method,
-       fund_source_account_id, request_date, resolution_month, status,
-       approved_by, approved_at, approval_note, processed_by, processed_at,
-       evidence_photo_path, created_by, created_at
-FROM kasbons
+SELECT id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track FROM kasbons
 WHERE id = $1
 `
 
@@ -203,6 +199,8 @@ func (q *Queries) GetKasbonByID(ctx context.Context, id pgtype.UUID) (*Kasbon, e
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
@@ -239,11 +237,13 @@ func (q *Queries) GetLastResolvedKasbon(ctx context.Context, employeeID pgtype.U
 }
 
 const getMaxKasbonSeqForYear = `-- name: GetMaxKasbonSeqForYear :one
+
 SELECT COALESCE(MAX(CAST(SUBSTRING(kasbon_number FROM 10) AS INTEGER)), 0)::int AS max_seq
 FROM kasbons
 WHERE kasbon_number ~ ('^KSB-' || $1::text || '-[0-9]+$')
 `
 
+// ── Kasbons ──────────────────────────────────────────────────────────────────
 func (q *Queries) GetMaxKasbonSeqForYear(ctx context.Context, dollar_1 string) (int32, error) {
 	row := q.db.QueryRow(ctx, getMaxKasbonSeqForYear, dollar_1)
 	var max_seq int32
@@ -445,10 +445,7 @@ const rejectKasbon = `-- name: RejectKasbon :one
 UPDATE kasbons
 SET status = 'rejected', approved_by = $1, approved_at = now(), approval_note = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 type RejectKasbonParams struct {
@@ -479,6 +476,8 @@ func (q *Queries) RejectKasbon(ctx context.Context, arg *RejectKasbonParams) (*K
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
@@ -487,10 +486,7 @@ const setKasbonCancelled = `-- name: SetKasbonCancelled :one
 UPDATE kasbons
 SET status = 'cancelled'
 WHERE id = $1
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 func (q *Queries) SetKasbonCancelled(ctx context.Context, id pgtype.UUID) (*Kasbon, error) {
@@ -515,6 +511,8 @@ func (q *Queries) SetKasbonCancelled(ctx context.Context, id pgtype.UUID) (*Kasb
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
@@ -524,10 +522,7 @@ UPDATE kasbons
 SET status = 'processed', processed_by = $1, processed_at = now(),
     evidence_photo_path = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 type SetKasbonProcessedParams struct {
@@ -558,6 +553,8 @@ func (q *Queries) SetKasbonProcessed(ctx context.Context, arg *SetKasbonProcesse
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }
@@ -578,10 +575,7 @@ UPDATE kasbons
 SET amount = $1, details = $2, sending_method = $3, fund_source_account_id = $4,
     resolution_month = $5
 WHERE id = $6
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at
+RETURNING id, kasbon_number, employee_id, amount, details, sending_method, fund_source_account_id, request_date, resolution_month, status, approved_by, approved_at, approval_note, processed_by, processed_at, evidence_photo_path, created_by, created_at, score_at_request, approval_track
 `
 
 type UpdateKasbonParams struct {
@@ -622,6 +616,8 @@ func (q *Queries) UpdateKasbon(ctx context.Context, arg *UpdateKasbonParams) (*K
 		&i.EvidencePhotoPath,
 		&i.CreatedBy,
 		&i.CreatedAt,
+		&i.ScoreAtRequest,
+		&i.ApprovalTrack,
 	)
 	return &i, err
 }

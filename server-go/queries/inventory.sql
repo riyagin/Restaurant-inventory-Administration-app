@@ -49,7 +49,7 @@ empty_items AS (
         NULL::uuid AS id, i.id AS item_id, NULL::uuid AS warehouse_id, 0::numeric AS quantity,
         0::int AS unit_index, NULL::date AS date, NULL::timestamptz AS depleted_at,
         i.name AS item_name, i.code AS item_code, i.units AS item_units,
-        NULL::text AS warehouse_name
+        ''::text AS warehouse_name
     FROM items i
     WHERE sqlc.arg('include_empty')::bool
       AND i.is_stock

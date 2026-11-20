@@ -11,23 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type JournalEntry struct {
-	ID          pgtype.UUID        `json:"id"`
-	EntryDate   pgtype.Date        `json:"entry_date"`
-	SourceType  string             `json:"source_type"`
-	SourceID    pgtype.UUID        `json:"source_id"`
-	Description string             `json:"description"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	ReversesID  pgtype.UUID        `json:"reverses_id"`
+const accountingEquation = `-- name: AccountingEquation :one
+SELECT
+  COALESCE(SUM(balance) FILTER (WHERE account_type = 'asset'), 0)::BIGINT     AS assets,
+  COALESCE(SUM(balance) FILTER (WHERE account_type = 'liability'), 0)::BIGINT AS liabilities,
+  COALESCE(SUM(balance) FILTER (WHERE account_type = 'equity'), 0)::BIGINT    AS equity,
+  COALESCE(SUM(balance) FILTER (WHERE account_type = 'revenue'), 0)::BIGINT   AS revenue,
+  COALESCE(SUM(balance) FILTER (WHERE account_type = 'expense'), 0)::BIGINT   AS expense,
+  (COALESCE(SUM(balance) FILTER (WHERE account_type = 'asset'), 0)
+   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'liability'), 0)
+   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'equity'), 0)
+   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'revenue'), 0)
+   + COALESCE(SUM(balance) FILTER (WHERE account_type = 'expense'), 0))::BIGINT AS difference
+FROM accounts
+`
+
+type AccountingEquationRow struct {
+	Assets      int64 `json:"assets"`
+	Liabilities int64 `json:"liabilities"`
+	Equity      int64 `json:"equity"`
+	Revenue     int64 `json:"revenue"`
+	Expense     int64 `json:"expense"`
+	Difference  int64 `json:"difference"`
 }
 
-type JournalLine struct {
-	ID        pgtype.UUID `json:"id"`
-	EntryID   pgtype.UUID `json:"entry_id"`
-	AccountID pgtype.UUID `json:"account_id"`
-	Amount    int64       `json:"amount"`
-	Memo      string      `json:"memo"`
+// The single number that says whether the books balance: assets minus
+// (liabilities + equity + revenue - expense). Zero is the only correct value.
+func (q *Queries) AccountingEquation(ctx context.Context) (*AccountingEquationRow, error) {
+	row := q.db.QueryRow(ctx, accountingEquation)
+	var i AccountingEquationRow
+	err := row.Scan(
+		&i.Assets,
+		&i.Liabilities,
+		&i.Equity,
+		&i.Revenue,
+		&i.Expense,
+		&i.Difference,
+	)
+	return &i, err
 }
 
 const createJournalEntry = `-- name: CreateJournalEntry :one
@@ -90,6 +111,72 @@ func (q *Queries) InsertJournalLine(ctx context.Context, arg *InsertJournalLineP
 	return err
 }
 
+const listAccountLedger = `-- name: ListAccountLedger :many
+SELECT jl.id, jl.amount, jl.memo,
+       je.id AS entry_id, je.entry_date, je.source_type, je.source_id, je.description
+FROM journal_lines jl
+JOIN journal_entries je ON je.id = jl.entry_id
+WHERE jl.account_id = $1
+  AND ($2::date IS NULL OR je.entry_date >= $2)
+  AND ($3::date IS NULL OR je.entry_date <= $3)
+ORDER BY je.entry_date DESC, je.created_at DESC
+LIMIT $5 OFFSET $4
+`
+
+type ListAccountLedgerParams struct {
+	AccountID  pgtype.UUID `json:"account_id"`
+	DateFrom   pgtype.Date `json:"date_from"`
+	DateTo     pgtype.Date `json:"date_to"`
+	PageOffset int32       `json:"page_offset"`
+	PageLimit  int32       `json:"page_limit"`
+}
+
+type ListAccountLedgerRow struct {
+	ID          pgtype.UUID `json:"id"`
+	Amount      int64       `json:"amount"`
+	Memo        string      `json:"memo"`
+	EntryID     pgtype.UUID `json:"entry_id"`
+	EntryDate   pgtype.Date `json:"entry_date"`
+	SourceType  string      `json:"source_type"`
+	SourceID    pgtype.UUID `json:"source_id"`
+	Description string      `json:"description"`
+}
+
+func (q *Queries) ListAccountLedger(ctx context.Context, arg *ListAccountLedgerParams) ([]*ListAccountLedgerRow, error) {
+	rows, err := q.db.Query(ctx, listAccountLedger,
+		arg.AccountID,
+		arg.DateFrom,
+		arg.DateTo,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListAccountLedgerRow
+	for rows.Next() {
+		var i ListAccountLedgerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Amount,
+			&i.Memo,
+			&i.EntryID,
+			&i.EntryDate,
+			&i.SourceType,
+			&i.SourceID,
+			&i.Description,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAccountTypes = `-- name: ListAccountTypes :many
 SELECT id, account_type FROM accounts WHERE id = ANY($1::uuid[])
 `
@@ -105,7 +192,7 @@ func (q *Queries) ListAccountTypes(ctx context.Context, dollar_1 []pgtype.UUID) 
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*ListAccountTypesRow{}
+	var items []*ListAccountTypesRow
 	for rows.Next() {
 		var i ListAccountTypesRow
 		if err := rows.Scan(&i.ID, &i.AccountType); err != nil {
@@ -137,7 +224,7 @@ func (q *Queries) ListJournalEntriesBySource(ctx context.Context, arg *ListJourn
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*JournalEntry{}
+	var items []*JournalEntry
 	for rows.Next() {
 		var i JournalEntry
 		if err := rows.Scan(
@@ -184,7 +271,7 @@ func (q *Queries) ListJournalLinesForEntry(ctx context.Context, entryID pgtype.U
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*ListJournalLinesForEntryRow{}
+	var items []*ListJournalLinesForEntryRow
 	for rows.Next() {
 		var i ListJournalLinesForEntryRow
 		if err := rows.Scan(
@@ -206,80 +293,14 @@ func (q *Queries) ListJournalLinesForEntry(ctx context.Context, entryID pgtype.U
 	return items, nil
 }
 
-const listAccountLedger = `-- name: ListAccountLedger :many
-SELECT jl.id, jl.amount, jl.memo,
-       je.id AS entry_id, je.entry_date, je.source_type, je.source_id, je.description
-FROM journal_lines jl
-JOIN journal_entries je ON je.id = jl.entry_id
-WHERE jl.account_id = $1
-  AND ($2::date IS NULL OR je.entry_date >= $2)
-  AND ($3::date IS NULL OR je.entry_date <= $3)
-ORDER BY je.entry_date DESC, je.created_at DESC
-LIMIT $4 OFFSET $5
-`
-
-type ListAccountLedgerParams struct {
-	AccountID pgtype.UUID `json:"account_id"`
-	DateFrom  pgtype.Date `json:"date_from"`
-	DateTo    pgtype.Date `json:"date_to"`
-	Limit     int32       `json:"limit"`
-	Offset    int32       `json:"offset"`
-}
-
-type ListAccountLedgerRow struct {
-	ID          pgtype.UUID `json:"id"`
-	Amount      int64       `json:"amount"`
-	Memo        string      `json:"memo"`
-	EntryID     pgtype.UUID `json:"entry_id"`
-	EntryDate   pgtype.Date `json:"entry_date"`
-	SourceType  string      `json:"source_type"`
-	SourceID    pgtype.UUID `json:"source_id"`
-	Description string      `json:"description"`
-}
-
-func (q *Queries) ListAccountLedger(ctx context.Context, arg *ListAccountLedgerParams) ([]*ListAccountLedgerRow, error) {
-	rows, err := q.db.Query(ctx, listAccountLedger,
-		arg.AccountID,
-		arg.DateFrom,
-		arg.DateTo,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*ListAccountLedgerRow{}
-	for rows.Next() {
-		var i ListAccountLedgerRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Amount,
-			&i.Memo,
-			&i.EntryID,
-			&i.EntryDate,
-			&i.SourceType,
-			&i.SourceID,
-			&i.Description,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const trialBalance = `-- name: TrialBalance :many
 SELECT a.id, a.account_number, a.name, a.account_type, a.balance AS cached_balance,
        COALESCE(SUM(
          CASE WHEN a.account_type IN ('asset', 'expense') THEN jl.amount ELSE -jl.amount END
        ), 0)::BIGINT AS journal_balance,
-       a.balance - COALESCE(SUM(
+       (a.balance - COALESCE(SUM(
          CASE WHEN a.account_type IN ('asset', 'expense') THEN jl.amount ELSE -jl.amount END
-       ), 0)::BIGINT AS drift
+       ), 0))::BIGINT AS drift
 FROM accounts a
 LEFT JOIN journal_lines jl ON jl.account_id = a.id
 GROUP BY a.id, a.account_number, a.name, a.account_type, a.balance
@@ -296,13 +317,16 @@ type TrialBalanceRow struct {
 	Drift          int64       `json:"drift"`
 }
 
+// Cached balance vs the balance implied by the journal, per account. `drift` is
+// non-zero only where something wrote accounts.balance outside service.Post, or
+// for history that predates the journal.
 func (q *Queries) TrialBalance(ctx context.Context) ([]*TrialBalanceRow, error) {
 	rows, err := q.db.Query(ctx, trialBalance)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*TrialBalanceRow{}
+	var items []*TrialBalanceRow
 	for rows.Next() {
 		var i TrialBalanceRow
 		if err := rows.Scan(
@@ -322,42 +346,4 @@ func (q *Queries) TrialBalance(ctx context.Context) ([]*TrialBalanceRow, error) 
 		return nil, err
 	}
 	return items, nil
-}
-
-const accountingEquation = `-- name: AccountingEquation :one
-SELECT
-  COALESCE(SUM(balance) FILTER (WHERE account_type = 'asset'), 0)::BIGINT     AS assets,
-  COALESCE(SUM(balance) FILTER (WHERE account_type = 'liability'), 0)::BIGINT AS liabilities,
-  COALESCE(SUM(balance) FILTER (WHERE account_type = 'equity'), 0)::BIGINT    AS equity,
-  COALESCE(SUM(balance) FILTER (WHERE account_type = 'revenue'), 0)::BIGINT   AS revenue,
-  COALESCE(SUM(balance) FILTER (WHERE account_type = 'expense'), 0)::BIGINT   AS expense,
-  (COALESCE(SUM(balance) FILTER (WHERE account_type = 'asset'), 0)
-   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'liability'), 0)
-   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'equity'), 0)
-   - COALESCE(SUM(balance) FILTER (WHERE account_type = 'revenue'), 0)
-   + COALESCE(SUM(balance) FILTER (WHERE account_type = 'expense'), 0))::BIGINT AS difference
-FROM accounts
-`
-
-type AccountingEquationRow struct {
-	Assets      int64 `json:"assets"`
-	Liabilities int64 `json:"liabilities"`
-	Equity      int64 `json:"equity"`
-	Revenue     int64 `json:"revenue"`
-	Expense     int64 `json:"expense"`
-	Difference  int64 `json:"difference"`
-}
-
-func (q *Queries) AccountingEquation(ctx context.Context) (*AccountingEquationRow, error) {
-	row := q.db.QueryRow(ctx, accountingEquation)
-	var i AccountingEquationRow
-	err := row.Scan(
-		&i.Assets,
-		&i.Liabilities,
-		&i.Equity,
-		&i.Revenue,
-		&i.Expense,
-		&i.Difference,
-	)
-	return &i, err
 }

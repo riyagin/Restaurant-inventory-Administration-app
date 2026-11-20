@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const accountNameExists = `-- name: AccountNameExists :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1)
+`
+
+func (q *Queries) AccountNameExists(ctx context.Context, name string) (bool, error) {
+	row := q.db.QueryRow(ctx, accountNameExists, name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const addToAccountBalance = `-- name: AddToAccountBalance :exec
 UPDATE accounts SET balance = balance + $1::bigint WHERE id = $2
 `
@@ -89,6 +100,23 @@ func (q *Queries) GetAccountByID(ctx context.Context, id pgtype.UUID) (*Account,
 	return &i, err
 }
 
+const getAccountByName = `-- name: GetAccountByName :one
+SELECT id, name, account_type FROM accounts WHERE name = $1 LIMIT 1
+`
+
+type GetAccountByNameRow struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	AccountType string      `json:"account_type"`
+}
+
+func (q *Queries) GetAccountByName(ctx context.Context, name string) (*GetAccountByNameRow, error) {
+	row := q.db.QueryRow(ctx, getAccountByName, name)
+	var i GetAccountByNameRow
+	err := row.Scan(&i.ID, &i.Name, &i.AccountType)
+	return &i, err
+}
+
 const getSystemAccountByNumber = `-- name: GetSystemAccountByNumber :one
 SELECT id, name, balance FROM accounts WHERE account_number = $1 AND is_system = true LIMIT 1
 `
@@ -104,43 +132,6 @@ func (q *Queries) GetSystemAccountByNumber(ctx context.Context, accountNumber pg
 	var i GetSystemAccountByNumberRow
 	err := row.Scan(&i.ID, &i.Name, &i.Balance)
 	return &i, err
-}
-
-const accountNameExists = `-- name: AccountNameExists :one
-SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1)
-`
-
-func (q *Queries) AccountNameExists(ctx context.Context, name string) (bool, error) {
-	row := q.db.QueryRow(ctx, accountNameExists, name)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
-const nextVendorPayableNumber = `-- name: NextVendorPayableNumber :one
-SELECT (COALESCE(MAX(account_number), 20100) + 1)::int
-FROM accounts WHERE account_number BETWEEN 20101 AND 20998
-`
-
-func (q *Queries) NextVendorPayableNumber(ctx context.Context) (int32, error) {
-	row := q.db.QueryRow(ctx, nextVendorPayableNumber)
-	var column_1 int32
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const renameAccount = `-- name: RenameAccount :exec
-UPDATE accounts SET name = $1 WHERE id = $2
-`
-
-type RenameAccountParams struct {
-	Name string      `json:"name"`
-	ID   pgtype.UUID `json:"id"`
-}
-
-func (q *Queries) RenameAccount(ctx context.Context, arg *RenameAccountParams) error {
-	_, err := q.db.Exec(ctx, renameAccount, arg.Name, arg.ID)
-	return err
 }
 
 const listAccounts = `-- name: ListAccounts :many
@@ -176,6 +167,34 @@ func (q *Queries) ListAccounts(ctx context.Context) ([]*Account, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const nextVendorPayableNumber = `-- name: NextVendorPayableNumber :one
+SELECT (COALESCE(MAX(account_number), 20100) + 1)::int
+FROM accounts WHERE account_number BETWEEN 20101 AND 20998
+`
+
+// Lowest free number in the per-vendor payable range (20101-20998); 20999 is
+// reserved for the shared "Utang Usaha - Lainnya" bucket.
+func (q *Queries) NextVendorPayableNumber(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, nextVendorPayableNumber)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const renameAccount = `-- name: RenameAccount :exec
+UPDATE accounts SET name = $1 WHERE id = $2
+`
+
+type RenameAccountParams struct {
+	Name string      `json:"name"`
+	ID   pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RenameAccount(ctx context.Context, arg *RenameAccountParams) error {
+	_, err := q.db.Exec(ctx, renameAccount, arg.Name, arg.ID)
+	return err
 }
 
 const updateAccount = `-- name: UpdateAccount :one

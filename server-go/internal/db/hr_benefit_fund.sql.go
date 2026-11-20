@@ -259,7 +259,7 @@ type GetBenefitMonthlyAmountParams struct {
 	AsOf       pgtype.Date `json:"as_of"`
 }
 
-// Dana Kesejahteraan Karyawan (health benefit + pension fund). See migration 085.
+// Tunjangan Kesehatan (health benefit + pension fund). See migration 085.
 // The employee's monthly benefit allowance: the sum of 'benefit_fund' components on
 // the wage structure in force on the given date. 0 when none.
 func (q *Queries) GetBenefitMonthlyAmount(ctx context.Context, arg *GetBenefitMonthlyAmountParams) (int64, error) {

@@ -27,8 +27,8 @@ SELECT COALESCE(SUM(i.amount_paid), 0)::bigint AS total
 FROM invoices i
 JOIN accounts a ON a.id = i.account_id
 WHERE a.is_cash_drawer
-  AND i.branch_id = $1
-  AND COALESCE(i.payment_date, i.date) = $2
+  AND i.branch_id = sqlc.arg(branch_id)
+  AND COALESCE(i.payment_date, i.date) = sqlc.arg(date)
   AND i.payment_status IN ('paid', 'partial');
 
 -- name: ListCashDrawerAccounts :many

@@ -17,9 +17,11 @@ pushd server-go
 go mod tidy || goto :fail
 
 echo.
-echo ===== [2/7] sqlc generate (regenerate internal/db) =====
-sqlc generate || goto :fail
-echo  - If this changed files, run: git diff internal\db   (hand-written vs generated)
+echo ===== [2/7] sqlc diff (internal/db must match queries/) =====
+REM internal\db is generated: never edit it by hand. A failure here means a
+REM query file and its generated code disagree; change the .sql, then run
+REM sqlc generate.
+sqlc diff || goto :fail
 
 echo.
 echo ===== [3/7] go build ./... =====

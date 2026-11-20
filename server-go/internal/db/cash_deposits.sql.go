@@ -147,11 +147,11 @@ ORDER BY cd.date DESC, cd.created_at DESC
 `
 
 type ListCashDepositsParams struct {
-	Column1 pgtype.UUID `json:"column_1"`
-	Column2 pgtype.Date `json:"column_2"`
-	Column3 pgtype.Date `json:"column_3"`
-	Column4 pgtype.Text `json:"column_4"`
-	Column5 pgtype.Text `json:"column_5"`
+	BranchID     pgtype.UUID `json:"branch_id"`
+	FromDate     pgtype.Date `json:"from_date"`
+	ToDate       pgtype.Date `json:"to_date"`
+	MovementType pgtype.Text `json:"movement_type"`
+	Status       pgtype.Text `json:"status"`
 }
 
 type ListCashDepositsRow struct {
@@ -179,11 +179,11 @@ type ListCashDepositsRow struct {
 
 func (q *Queries) ListCashDeposits(ctx context.Context, arg *ListCashDepositsParams) ([]*ListCashDepositsRow, error) {
 	rows, err := q.db.Query(ctx, listCashDeposits,
-		arg.Column1,
-		arg.Column2,
-		arg.Column3,
-		arg.Column4,
-		arg.Column5,
+		arg.BranchID,
+		arg.FromDate,
+		arg.ToDate,
+		arg.MovementType,
+		arg.Status,
 	)
 	if err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ func (q *Queries) ListCashDeposits(ctx context.Context, arg *ListCashDepositsPar
 }
 
 const nextCashDepositNumber = `-- name: NextCashDepositNumber :one
-SELECT 'ST-' || LPAD(nextval('cash_deposit_number_seq')::text, 6, '0') AS number
+SELECT ('ST-' || LPAD(nextval('cash_deposit_number_seq')::text, 6, '0'))::text AS number
 `
 
 func (q *Queries) NextCashDepositNumber(ctx context.Context) (string, error) {
@@ -268,6 +268,9 @@ type SumCashDepositsForAccountDayRow struct {
 	CashOut int64 `json:"cash_out"`
 }
 
+// Movement through one account on one day, split by direction. This is the
+// top-up half of the petty cash reconciliation: the box should hold opening +
+// cash_in - cash_out - spending.
 func (q *Queries) SumCashDepositsForAccountDay(ctx context.Context, arg *SumCashDepositsForAccountDayParams) (*SumCashDepositsForAccountDayRow, error) {
 	row := q.db.QueryRow(ctx, sumCashDepositsForAccountDay, arg.ToAccountID, arg.Date)
 	var i SumCashDepositsForAccountDayRow

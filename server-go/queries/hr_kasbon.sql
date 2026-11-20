@@ -11,17 +11,10 @@ INSERT INTO kasbons (
     fund_source_account_id, request_date, resolution_month, status, created_by
 )
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9)
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: GetKasbonByID :one
-SELECT id, kasbon_number, employee_id, amount, details, sending_method,
-       fund_source_account_id, request_date, resolution_month, status,
-       approved_by, approved_at, approval_note, processed_by, processed_at,
-       evidence_photo_path, created_by, created_at
-FROM kasbons
+SELECT * FROM kasbons
 WHERE id = $1;
 
 -- name: UpdateKasbon :one
@@ -29,47 +22,32 @@ UPDATE kasbons
 SET amount = $1, details = $2, sending_method = $3, fund_source_account_id = $4,
     resolution_month = $5
 WHERE id = $6
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: ApproveKasbon :one
 UPDATE kasbons
 SET status = 'approved', approved_by = $1, approved_at = now(), approval_note = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: RejectKasbon :one
 UPDATE kasbons
 SET status = 'rejected', approved_by = $1, approved_at = now(), approval_note = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: SetKasbonCancelled :one
 UPDATE kasbons
 SET status = 'cancelled'
 WHERE id = $1
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: SetKasbonProcessed :one
 UPDATE kasbons
 SET status = 'processed', processed_by = $1, processed_at = now(),
     evidence_photo_path = $2
 WHERE id = $3
-RETURNING id, kasbon_number, employee_id, amount, details, sending_method,
-          fund_source_account_id, request_date, resolution_month, status,
-          approved_by, approved_at, approval_note, processed_by, processed_at,
-          evidence_photo_path, created_by, created_at;
+RETURNING *;
 
 -- name: SetKasbonResolved :exec
 UPDATE kasbons
@@ -86,12 +64,12 @@ SELECT k.id, k.kasbon_number, k.employee_id, k.amount, k.details, k.sending_meth
 FROM kasbons k
 JOIN employees e ON e.id = k.employee_id
 JOIN accounts a ON a.id = k.fund_source_account_id
-WHERE ($1::text = '' OR k.status = $1)
-  AND ($2::uuid IS NULL OR k.employee_id = $2)
-  AND ($3::text = '' OR lower(e.full_name) LIKE '%' || lower($3) || '%'
-       OR lower(e.employee_code) LIKE '%' || lower($3) || '%'
-       OR lower(k.kasbon_number) LIKE '%' || lower($3) || '%')
-  AND ($4::uuid IS NULL OR e.branch_id = $4)
+WHERE (sqlc.arg(status)::text = '' OR k.status = sqlc.arg(status))
+  AND (sqlc.arg(employee_id)::uuid IS NULL OR k.employee_id = sqlc.arg(employee_id))
+  AND (sqlc.arg(q)::text = '' OR lower(e.full_name) LIKE '%' || lower(sqlc.arg(q)) || '%'
+       OR lower(e.employee_code) LIKE '%' || lower(sqlc.arg(q)) || '%'
+       OR lower(k.kasbon_number) LIKE '%' || lower(sqlc.arg(q)) || '%')
+  AND (sqlc.arg(branch_id)::uuid IS NULL OR e.branch_id = sqlc.arg(branch_id))
 ORDER BY k.created_at DESC;
 
 -- name: GetLastResolvedKasbon :one

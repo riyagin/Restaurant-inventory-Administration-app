@@ -16,6 +16,8 @@ UPDATE vendor_bank_accounts SET is_primary = false
 WHERE vendor_id = $1 AND is_primary
 `
 
+// Clear the vendor's current default before naming a new one; the partial unique
+// index allows only one, so this must run first in the same transaction.
 func (q *Queries) ClearVendorPrimaryBankAccount(ctx context.Context, vendorID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, clearVendorPrimaryBankAccount, vendorID)
 	return err
@@ -104,6 +106,8 @@ FROM vendor_bank_accounts
 ORDER BY vendor_id, is_primary DESC, bank_name, created_at
 `
 
+// Every vendor's accounts in one round trip, so the vendor list can show each
+// one's default destination without a query per row.
 func (q *Queries) ListAllVendorBankAccounts(ctx context.Context) ([]*VendorBankAccount, error) {
 	rows, err := q.db.Query(ctx, listAllVendorBankAccounts)
 	if err != nil {
@@ -185,6 +189,8 @@ AND NOT EXISTS (
 )
 `
 
+// Promote the oldest remaining account after the default was deleted, so a
+// vendor that still has numbers on file never ends up without a default.
 func (q *Queries) PromoteOldestVendorBankAccount(ctx context.Context, vendorID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, promoteOldestVendorBankAccount, vendorID)
 	return err

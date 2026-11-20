@@ -1,37 +1,34 @@
 -- ── Leave Types ──────────────────────────────────────────────────────────────
 
 -- name: ListLeaveTypes :many
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+SELECT * FROM leave_types
 ORDER BY name;
 
 -- name: ListActiveLeaveTypes :many
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+SELECT * FROM leave_types
 WHERE is_active = true
 ORDER BY name;
 
 -- name: GetLeaveTypeByID :one
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+SELECT * FROM leave_types
 WHERE id = $1;
 
 -- name: CreateLeaveType :one
 INSERT INTO leave_types (id, name, is_paid, uses_quota, is_active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, is_paid, uses_quota, is_active;
+RETURNING *;
 
 -- name: UpdateLeaveType :one
 UPDATE leave_types
 SET name = $1, is_paid = $2, uses_quota = $3, is_active = $4
 WHERE id = $5
-RETURNING id, name, is_paid, uses_quota, is_active;
+RETURNING *;
 
 -- name: SetLeaveTypeActive :one
 UPDATE leave_types
 SET is_active = $1
 WHERE id = $2
-RETURNING id, name, is_paid, uses_quota, is_active;
+RETURNING *;
 
 -- name: DeleteLeaveType :exec
 DELETE FROM leave_types WHERE id = $1;
@@ -66,9 +63,7 @@ RETURNING id, employee_id, year, quota_days, used_days;
 -- ── Leave Requests ───────────────────────────────────────────────────────────
 
 -- name: GetLeaveRequestByID :one
-SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
-FROM leave_requests
+SELECT * FROM leave_requests
 WHERE id = $1;
 
 -- name: CreateLeaveRequest :one
@@ -77,20 +72,16 @@ INSERT INTO leave_requests (
     status, created_by, is_backdated
 )
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending', $7, $8)
-RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated;
+RETURNING *;
 
 -- name: SetLeaveRequestStatus :one
 UPDATE leave_requests
 SET status = $1, decided_by = $2, decided_at = now(), decision_note = $3
 WHERE id = $4
-RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated;
+RETURNING *;
 
 -- name: ListOverlappingRequests :many
-SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
-FROM leave_requests
+SELECT * FROM leave_requests
 WHERE employee_id = $1
   AND status IN ('pending', 'approved')
   AND start_date <= $3
@@ -105,10 +96,10 @@ SELECT lr.id, lr.employee_id, lr.leave_type_id, lr.start_date, lr.end_date,
 FROM leave_requests lr
 JOIN employees e ON e.id = lr.employee_id
 JOIN leave_types lt ON lt.id = lr.leave_type_id
-WHERE ($1::text = '' OR lr.status = $1)
-  AND ($2::uuid IS NULL OR e.branch_id = $2)
-  AND ($3::uuid IS NULL OR lr.employee_id = $3)
-  AND ($4::int = 0 OR EXTRACT(YEAR FROM lr.start_date) = $4)
+WHERE (sqlc.arg(status)::text = '' OR lr.status = sqlc.arg(status))
+  AND (sqlc.arg(branch_id)::uuid IS NULL OR e.branch_id = sqlc.arg(branch_id))
+  AND (sqlc.arg(employee_id)::uuid IS NULL OR lr.employee_id = sqlc.arg(employee_id))
+  AND (sqlc.arg(year)::int = 0 OR EXTRACT(YEAR FROM lr.start_date) = sqlc.arg(year))
 ORDER BY lr.created_at DESC;
 
 -- name: ListLeaveRequestsByEmployee :many

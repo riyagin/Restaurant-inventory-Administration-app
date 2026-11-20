@@ -56,7 +56,7 @@ func (h *CashDepositsHandler) List(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "branch_id tidak valid")
 			return
 		}
-		params.Column1 = pgtype.UUID{Bytes: id, Valid: true}
+		params.BranchID = pgtype.UUID{Bytes: id, Valid: true}
 	}
 	if v := q.Get("from"); v != "" {
 		d, err := time.Parse("2006-01-02", v)
@@ -64,7 +64,7 @@ func (h *CashDepositsHandler) List(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "tanggal awal tidak valid")
 			return
 		}
-		params.Column2 = pgtype.Date{Time: d, Valid: true}
+		params.FromDate = pgtype.Date{Time: d, Valid: true}
 	}
 	if v := q.Get("to"); v != "" {
 		d, err := time.Parse("2006-01-02", v)
@@ -72,13 +72,13 @@ func (h *CashDepositsHandler) List(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "tanggal akhir tidak valid")
 			return
 		}
-		params.Column3 = pgtype.Date{Time: d, Valid: true}
+		params.ToDate = pgtype.Date{Time: d, Valid: true}
 	}
 	if v := q.Get("type"); v != "" {
-		params.Column4 = pgtype.Text{String: v, Valid: true}
+		params.MovementType = pgtype.Text{String: v, Valid: true}
 	}
 	if v := q.Get("status"); v != "" {
-		params.Column5 = pgtype.Text{String: v, Valid: true}
+		params.Status = pgtype.Text{String: v, Valid: true}
 	}
 
 	rows, err := h.queries.ListCashDeposits(r.Context(), params)

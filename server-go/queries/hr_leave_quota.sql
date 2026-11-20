@@ -13,7 +13,7 @@ WHERE leave_request_id = $1 AND date > $2;
 -- name: SumLeaveQuotaUsage :one
 SELECT COALESCE(SUM(cost), 0)::int
 FROM leave_quota_usage
-WHERE employee_id = $1 AND date >= $2 AND date < $3;
+WHERE employee_id = sqlc.arg(employee_id) AND date >= sqlc.arg(from_date) AND date < sqlc.arg(to_date);
 
 -- name: GetLeaveMonthlyQuota :one
 SELECT quota_days FROM leave_monthly_quotas
@@ -32,31 +32,31 @@ SELECT m.month::date AS month,
        q.quota_days
 FROM (
   SELECT date_trunc('month', lu.date)::date AS month FROM leave_quota_usage lu
-  WHERE lu.employee_id = $1 AND lu.date >= $2 AND lu.date < $3
+  WHERE lu.employee_id = sqlc.arg(employee_id) AND lu.date >= sqlc.arg(from_date) AND lu.date < sqlc.arg(to_date)
   UNION
   SELECT lq.month FROM leave_monthly_quotas lq
-  WHERE lq.employee_id = $1 AND lq.month >= $2 AND lq.month < $3
+  WHERE lq.employee_id = sqlc.arg(employee_id) AND lq.month >= sqlc.arg(from_date) AND lq.month < sqlc.arg(to_date)
 ) m
 LEFT JOIN (
   SELECT date_trunc('month', lu2.date)::date AS month, SUM(lu2.cost) AS used
   FROM leave_quota_usage lu2
-  WHERE lu2.employee_id = $1 AND lu2.date >= $2 AND lu2.date < $3
+  WHERE lu2.employee_id = sqlc.arg(employee_id) AND lu2.date >= sqlc.arg(from_date) AND lu2.date < sqlc.arg(to_date)
   GROUP BY 1
 ) u ON u.month = m.month
-LEFT JOIN leave_monthly_quotas q ON q.employee_id = $1 AND q.month = m.month
+LEFT JOIN leave_monthly_quotas q ON q.employee_id = sqlc.arg(employee_id) AND q.month = m.month
 ORDER BY m.month;
 
 -- name: ListMonthlyLeaveBalances :many
 -- Every active employee's allowance and usage for the month starting $1;
 -- $2 is the default allowance for employees without an override.
-SELECT e.id, e.full_name, e.employee_code, COALESCE(b.name, 'Tanpa Cabang')::text AS branch_name,
-       COALESCE(q.quota_days, $2::int)::int AS quota_days,
-       (q.quota_days IS NOT NULL) AS overridden,
+SELECT e.id AS employee_id, e.full_name AS employee_name, e.employee_code, COALESCE(b.name, 'Tanpa Cabang')::text AS branch_name,
+       COALESCE(q.quota_days, sqlc.arg(default_quota)::int)::int AS quota_days,
+       (q.quota_days IS NOT NULL)::bool AS overridden,
        COALESCE((SELECT SUM(u.cost) FROM leave_quota_usage u
-                 WHERE u.employee_id = e.id AND u.date >= $1
-                   AND u.date < ($1::date + interval '1 month')), 0)::int AS used_days
+                 WHERE u.employee_id = e.id AND u.date >= sqlc.arg(month)
+                   AND u.date < (sqlc.arg(month)::date + interval '1 month')), 0)::int AS used_days
 FROM employees e
 LEFT JOIN branches b ON b.id = e.branch_id
-LEFT JOIN leave_monthly_quotas q ON q.employee_id = e.id AND q.month = $1
+LEFT JOIN leave_monthly_quotas q ON q.employee_id = e.id AND q.month = sqlc.arg(month)
 WHERE e.status = 'active'
 ORDER BY COALESCE(b.name, 'Tanpa Cabang'), e.full_name;

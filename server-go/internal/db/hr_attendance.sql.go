@@ -14,7 +14,7 @@ import (
 const createAttendanceDevice = `-- name: CreateAttendanceDevice :one
 INSERT INTO attendance_devices (id, name, branch_id, api_key_hash, is_active)
 VALUES (gen_random_uuid(), $1, $2, $3, true)
-RETURNING id, name, branch_id, api_key_hash, is_active, created_at
+RETURNING id, name, branch_id, api_key_hash, is_active, created_at, last_seen_at
 `
 
 type CreateAttendanceDeviceParams struct {
@@ -33,6 +33,7 @@ func (q *Queries) CreateAttendanceDevice(ctx context.Context, arg *CreateAttenda
 		&i.ApiKeyHash,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.LastSeenAt,
 	)
 	return &i, err
 }
@@ -117,8 +118,7 @@ func (q *Queries) DeleteWorkSchedule(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getActiveDeviceByKeyHash = `-- name: GetActiveDeviceByKeyHash :one
-SELECT id, name, branch_id, api_key_hash, is_active, created_at
-FROM attendance_devices
+SELECT id, name, branch_id, api_key_hash, is_active, created_at, last_seen_at FROM attendance_devices
 WHERE api_key_hash = $1 AND is_active = true
 `
 
@@ -132,6 +132,7 @@ func (q *Queries) GetActiveDeviceByKeyHash(ctx context.Context, apiKeyHash strin
 		&i.ApiKeyHash,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.LastSeenAt,
 	)
 	return &i, err
 }
@@ -494,17 +495,6 @@ func (q *Queries) ListAttendanceDevices(ctx context.Context) ([]*ListAttendanceD
 	return items, nil
 }
 
-const touchAttendanceDevice = `-- name: TouchAttendanceDevice :exec
-UPDATE attendance_devices SET last_seen_at = now() WHERE id = $1
-`
-
-// Stamps device liveness. Called fire-and-forget by the DeviceAuth middleware on
-// every device-key request, so the dashboard can show which kiosks are still alive.
-func (q *Queries) TouchAttendanceDevice(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, touchAttendanceDevice, id)
-	return err
-}
-
 const listDeviceRosterByBranch = `-- name: ListDeviceRosterByBranch :many
 SELECT employee_code, full_name, photo_path,
        face_embedding, face_embedding_version, face_enrolled_at
@@ -547,32 +537,6 @@ func (q *Queries) ListDeviceRosterByBranch(ctx context.Context, branchID pgtype.
 		return nil, err
 	}
 	return items, nil
-}
-
-const upsertEmployeeFaceEmbedding = `-- name: UpsertEmployeeFaceEmbedding :exec
-UPDATE employees
-SET face_embedding = $2,
-    face_embedding_version = $3,
-    face_enrolled_at = $4,
-    updated_at = now()
-WHERE id = $1
-`
-
-type UpsertEmployeeFaceEmbeddingParams struct {
-	ID                   pgtype.UUID        `json:"id"`
-	FaceEmbedding        []byte             `json:"face_embedding"`
-	FaceEmbeddingVersion pgtype.Text        `json:"face_embedding_version"`
-	FaceEnrolledAt       pgtype.Timestamptz `json:"face_enrolled_at"`
-}
-
-func (q *Queries) UpsertEmployeeFaceEmbedding(ctx context.Context, arg *UpsertEmployeeFaceEmbeddingParams) error {
-	_, err := q.db.Exec(ctx, upsertEmployeeFaceEmbedding,
-		arg.ID,
-		arg.FaceEmbedding,
-		arg.FaceEmbeddingVersion,
-		arg.FaceEnrolledAt,
-	)
-	return err
 }
 
 const listPresentAttendanceForEmployeeRange = `-- name: ListPresentAttendanceForEmployeeRange :many
@@ -690,7 +654,7 @@ const setAttendanceDeviceActive = `-- name: SetAttendanceDeviceActive :one
 UPDATE attendance_devices
 SET is_active = $1
 WHERE id = $2
-RETURNING id, name, branch_id, api_key_hash, is_active, created_at
+RETURNING id, name, branch_id, api_key_hash, is_active, created_at, last_seen_at
 `
 
 type SetAttendanceDeviceActiveParams struct {
@@ -708,8 +672,20 @@ func (q *Queries) SetAttendanceDeviceActive(ctx context.Context, arg *SetAttenda
 		&i.ApiKeyHash,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.LastSeenAt,
 	)
 	return &i, err
+}
+
+const touchAttendanceDevice = `-- name: TouchAttendanceDevice :exec
+UPDATE attendance_devices SET last_seen_at = now() WHERE id = $1
+`
+
+// Stamps device liveness. Called fire-and-forget by the DeviceAuth middleware on
+// every device-key request, so the dashboard can show which kiosks are still alive.
+func (q *Queries) TouchAttendanceDevice(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchAttendanceDevice, id)
+	return err
 }
 
 const updateAttendanceRecord = `-- name: UpdateAttendanceRecord :one
@@ -818,6 +794,34 @@ func (q *Queries) UpdateAttendanceRecord(ctx context.Context, arg *UpdateAttenda
 		&i.ReviewResolved,
 	)
 	return &i, err
+}
+
+const upsertEmployeeFaceEmbedding = `-- name: UpsertEmployeeFaceEmbedding :exec
+UPDATE employees
+SET face_embedding = $2,
+    face_embedding_version = $3,
+    face_enrolled_at = $4,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpsertEmployeeFaceEmbeddingParams struct {
+	ID                   pgtype.UUID        `json:"id"`
+	FaceEmbedding        []byte             `json:"face_embedding"`
+	FaceEmbeddingVersion pgtype.Text        `json:"face_embedding_version"`
+	FaceEnrolledAt       pgtype.Timestamptz `json:"face_enrolled_at"`
+}
+
+// Stores the face enrollment produced on a device. Keyed by employee id (resolved
+// from employee_code in the handler, which also checks the device's branch).
+func (q *Queries) UpsertEmployeeFaceEmbedding(ctx context.Context, arg *UpsertEmployeeFaceEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, upsertEmployeeFaceEmbedding,
+		arg.ID,
+		arg.FaceEmbedding,
+		arg.FaceEmbeddingVersion,
+		arg.FaceEnrolledAt,
+	)
+	return err
 }
 
 const upsertWorkSchedule = `-- name: UpsertWorkSchedule :one

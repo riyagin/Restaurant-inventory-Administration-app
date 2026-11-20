@@ -135,7 +135,7 @@ SELECT
     e.photo_path, e.user_id, e.status,
     e.employment_type, e.contract_end_date, e.permanent_since, e.resign_date,
     e.created_at, e.updated_at,
-    (e.face_embedding IS NOT NULL) AS has_face, e.face_enrolled_at
+    (e.face_embedding IS NOT NULL)::bool AS has_face, e.face_enrolled_at
 FROM employees e
 JOIN positions p ON p.id = e.position_id
 JOIN branches  b ON b.id = e.branch_id
@@ -214,46 +214,47 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id pgtype.UUID) (*GetEmpl
 	return &i, err
 }
 
-const resignEmployee = `-- name: ResignEmployee :exec
-UPDATE employees
-SET status = 'resigned',
-    resign_date = $2,
-    updated_at = now()
+const getEmployeePhotoPath = `-- name: GetEmployeePhotoPath :one
+SELECT photo_path FROM employees WHERE id = $1
+`
+
+func (q *Queries) GetEmployeePhotoPath(ctx context.Context, id pgtype.UUID) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, getEmployeePhotoPath, id)
+	var photo_path pgtype.Text
+	err := row.Scan(&photo_path)
+	return photo_path, err
+}
+
+const getMaxEmployeeCodeSeq = `-- name: GetMaxEmployeeCodeSeq :one
+SELECT COALESCE(MAX(CAST(SUBSTRING(employee_code FROM 5) AS INTEGER)), 0)::int AS max_seq
+FROM employees
+WHERE employee_code ~ '^EMP-[0-9]+$'
+`
+
+// Returns the highest numeric suffix among auto-generated EMP-#### codes.
+func (q *Queries) GetMaxEmployeeCodeSeq(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, getMaxEmployeeCodeSeq)
+	var max_seq int32
+	err := row.Scan(&max_seq)
+	return max_seq, err
+}
+
+const getPositionByID = `-- name: GetPositionByID :one
+SELECT id, name, is_active, created_at
+FROM positions
 WHERE id = $1
 `
 
-type ResignEmployeeParams struct {
-	ID         pgtype.UUID `json:"id"`
-	ResignDate pgtype.Date `json:"resign_date"`
-}
-
-// ResignEmployee marks an employee as resigned (mengundurkan diri), stamping the
-// effective resignation date.
-func (q *Queries) ResignEmployee(ctx context.Context, arg *ResignEmployeeParams) error {
-	_, err := q.db.Exec(ctx, resignEmployee, arg.ID, arg.ResignDate)
-	return err
-}
-
-const transitionEmployeeToPermanent = `-- name: TransitionEmployeeToPermanent :exec
-UPDATE employees
-SET employment_type = 'permanent',
-    permanent_since = $2,
-    contract_end_date = NULL,
-    updated_at = now()
-WHERE id = $1
-`
-
-type TransitionEmployeeToPermanentParams struct {
-	ID             pgtype.UUID `json:"id"`
-	PermanentSince pgtype.Date `json:"permanent_since"`
-}
-
-// TransitionEmployeeToPermanent converts a contract (PKWT) employee to permanent
-// (PKWTT), stamping permanent_since (the THR tenure "day 0") and clearing the contract
-// end date.
-func (q *Queries) TransitionEmployeeToPermanent(ctx context.Context, arg *TransitionEmployeeToPermanentParams) error {
-	_, err := q.db.Exec(ctx, transitionEmployeeToPermanent, arg.ID, arg.PermanentSince)
-	return err
+func (q *Queries) GetPositionByID(ctx context.Context, id pgtype.UUID) (*Position, error) {
+	row := q.db.QueryRow(ctx, getPositionByID, id)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.IsActive,
+		&i.CreatedAt,
+	)
+	return &i, err
 }
 
 const listExpiringContracts = `-- name: ListExpiringContracts :many
@@ -285,6 +286,8 @@ type ListExpiringContractsRow struct {
 	DaysRemaining   int32       `json:"days_remaining"`
 }
 
+// Active contract employees whose contract ends within the given window
+// (in days from today) — including any already past due. Ordered soonest first.
 func (q *Queries) ListExpiringContracts(ctx context.Context, withinDays int32) ([]*ListExpiringContractsRow, error) {
 	rows, err := q.db.Query(ctx, listExpiringContracts, withinDays)
 	if err != nil {
@@ -313,48 +316,6 @@ func (q *Queries) ListExpiringContracts(ctx context.Context, withinDays int32) (
 		return nil, err
 	}
 	return items, nil
-}
-
-const getEmployeePhotoPath = `-- name: GetEmployeePhotoPath :one
-SELECT photo_path FROM employees WHERE id = $1
-`
-
-func (q *Queries) GetEmployeePhotoPath(ctx context.Context, id pgtype.UUID) (pgtype.Text, error) {
-	row := q.db.QueryRow(ctx, getEmployeePhotoPath, id)
-	var photo_path pgtype.Text
-	err := row.Scan(&photo_path)
-	return photo_path, err
-}
-
-const getMaxEmployeeCodeSeq = `-- name: GetMaxEmployeeCodeSeq :one
-SELECT COALESCE(MAX(CAST(SUBSTRING(employee_code FROM 5) AS INTEGER)), 0)::int AS max_seq
-FROM employees
-WHERE employee_code ~ '^EMP-[0-9]+$'
-`
-
-func (q *Queries) GetMaxEmployeeCodeSeq(ctx context.Context) (int32, error) {
-	row := q.db.QueryRow(ctx, getMaxEmployeeCodeSeq)
-	var max_seq int32
-	err := row.Scan(&max_seq)
-	return max_seq, err
-}
-
-const getPositionByID = `-- name: GetPositionByID :one
-SELECT id, name, is_active, created_at
-FROM positions
-WHERE id = $1
-`
-
-func (q *Queries) GetPositionByID(ctx context.Context, id pgtype.UUID) (*Position, error) {
-	row := q.db.QueryRow(ctx, getPositionByID, id)
-	var i Position
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.IsActive,
-		&i.CreatedAt,
-	)
-	return &i, err
 }
 
 const listPositions = `-- name: ListPositions :many
@@ -388,6 +349,25 @@ func (q *Queries) ListPositions(ctx context.Context) ([]*Position, error) {
 	return items, nil
 }
 
+const resignEmployee = `-- name: ResignEmployee :exec
+UPDATE employees
+SET status = 'resigned',
+    resign_date = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type ResignEmployeeParams struct {
+	ID         pgtype.UUID `json:"id"`
+	ResignDate pgtype.Date `json:"resign_date"`
+}
+
+// Marks an employee as resigned (mengundurkan diri), stamping the effective date.
+func (q *Queries) ResignEmployee(ctx context.Context, arg *ResignEmployeeParams) error {
+	_, err := q.db.Exec(ctx, resignEmployee, arg.ID, arg.ResignDate)
+	return err
+}
+
 const setEmployeeDivision = `-- name: SetEmployeeDivision :exec
 UPDATE employees SET division_id = $2, updated_at = now() WHERE id = $1
 `
@@ -402,6 +382,25 @@ type SetEmployeeDivisionParams struct {
 // position, which drives the wage structure.
 func (q *Queries) SetEmployeeDivision(ctx context.Context, arg *SetEmployeeDivisionParams) error {
 	_, err := q.db.Exec(ctx, setEmployeeDivision, arg.ID, arg.DivisionID)
+	return err
+}
+
+const transitionEmployeeToPermanent = `-- name: TransitionEmployeeToPermanent :exec
+UPDATE employees
+SET employment_type = 'permanent',
+    permanent_since = $2,
+    contract_end_date = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+type TransitionEmployeeToPermanentParams struct {
+	ID             pgtype.UUID `json:"id"`
+	PermanentSince pgtype.Date `json:"permanent_since"`
+}
+
+func (q *Queries) TransitionEmployeeToPermanent(ctx context.Context, arg *TransitionEmployeeToPermanentParams) error {
+	_, err := q.db.Exec(ctx, transitionEmployeeToPermanent, arg.ID, arg.PermanentSince)
 	return err
 }
 

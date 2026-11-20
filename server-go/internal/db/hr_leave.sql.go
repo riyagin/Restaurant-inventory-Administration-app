@@ -53,8 +53,7 @@ INSERT INTO leave_requests (
     status, created_by, is_backdated
 )
 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending', $7, $8)
-RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
+RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason, status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated, has_doctor_note
 `
 
 type CreateLeaveRequestParams struct {
@@ -95,6 +94,7 @@ func (q *Queries) CreateLeaveRequest(ctx context.Context, arg *CreateLeaveReques
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.IsBackdated,
+		&i.HasDoctorNote,
 	)
 	return &i, err
 }
@@ -102,7 +102,7 @@ func (q *Queries) CreateLeaveRequest(ctx context.Context, arg *CreateLeaveReques
 const createLeaveType = `-- name: CreateLeaveType :one
 INSERT INTO leave_types (id, name, is_paid, uses_quota, is_active)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, is_paid, uses_quota, is_active
+RETURNING id, name, is_paid, uses_quota, is_active, requires_doctor_note
 `
 
 type CreateLeaveTypeParams struct {
@@ -126,6 +126,7 @@ func (q *Queries) CreateLeaveType(ctx context.Context, arg *CreateLeaveTypeParam
 		&i.IsPaid,
 		&i.UsesQuota,
 		&i.IsActive,
+		&i.RequiresDoctorNote,
 	)
 	return &i, err
 }
@@ -155,6 +156,7 @@ func (q *Queries) DeleteLeaveType(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getLeaveBalance = `-- name: GetLeaveBalance :one
+
 SELECT id, employee_id, year, quota_days, used_days
 FROM leave_balances
 WHERE employee_id = $1 AND year = $2
@@ -165,6 +167,7 @@ type GetLeaveBalanceParams struct {
 	Year       int32       `json:"year"`
 }
 
+// ── Leave Balances ───────────────────────────────────────────────────────────
 func (q *Queries) GetLeaveBalance(ctx context.Context, arg *GetLeaveBalanceParams) (*LeaveBalance, error) {
 	row := q.db.QueryRow(ctx, getLeaveBalance, arg.EmployeeID, arg.Year)
 	var i LeaveBalance
@@ -179,12 +182,12 @@ func (q *Queries) GetLeaveBalance(ctx context.Context, arg *GetLeaveBalanceParam
 }
 
 const getLeaveRequestByID = `-- name: GetLeaveRequestByID :one
-SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
-FROM leave_requests
+
+SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason, status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated, has_doctor_note FROM leave_requests
 WHERE id = $1
 `
 
+// ── Leave Requests ───────────────────────────────────────────────────────────
 func (q *Queries) GetLeaveRequestByID(ctx context.Context, id pgtype.UUID) (*LeaveRequest, error) {
 	row := q.db.QueryRow(ctx, getLeaveRequestByID, id)
 	var i LeaveRequest
@@ -203,13 +206,13 @@ func (q *Queries) GetLeaveRequestByID(ctx context.Context, id pgtype.UUID) (*Lea
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.IsBackdated,
+		&i.HasDoctorNote,
 	)
 	return &i, err
 }
 
 const getLeaveTypeByID = `-- name: GetLeaveTypeByID :one
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+SELECT id, name, is_paid, uses_quota, is_active, requires_doctor_note FROM leave_types
 WHERE id = $1
 `
 
@@ -222,6 +225,7 @@ func (q *Queries) GetLeaveTypeByID(ctx context.Context, id pgtype.UUID) (*LeaveT
 		&i.IsPaid,
 		&i.UsesQuota,
 		&i.IsActive,
+		&i.RequiresDoctorNote,
 	)
 	return &i, err
 }
@@ -272,8 +276,7 @@ func (q *Queries) IncrementLeaveBalanceUsed(ctx context.Context, arg *IncrementL
 }
 
 const listActiveLeaveTypes = `-- name: ListActiveLeaveTypes :many
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+SELECT id, name, is_paid, uses_quota, is_active, requires_doctor_note FROM leave_types
 WHERE is_active = true
 ORDER BY name
 `
@@ -293,6 +296,7 @@ func (q *Queries) ListActiveLeaveTypes(ctx context.Context) ([]*LeaveType, error
 			&i.IsPaid,
 			&i.UsesQuota,
 			&i.IsActive,
+			&i.RequiresDoctorNote,
 		); err != nil {
 			return nil, err
 		}
@@ -317,8 +321,8 @@ WHERE lr.employee_id = $1
 
 type ListApprovedUnpaidLeaveOverlappingParams struct {
 	EmployeeID pgtype.UUID `json:"employee_id"`
-	StartDate  pgtype.Date `json:"start_date"`
 	EndDate    pgtype.Date `json:"end_date"`
+	StartDate  pgtype.Date `json:"start_date"`
 }
 
 type ListApprovedUnpaidLeaveOverlappingRow struct {
@@ -329,7 +333,7 @@ type ListApprovedUnpaidLeaveOverlappingRow struct {
 }
 
 func (q *Queries) ListApprovedUnpaidLeaveOverlapping(ctx context.Context, arg *ListApprovedUnpaidLeaveOverlappingParams) ([]*ListApprovedUnpaidLeaveOverlappingRow, error) {
-	rows, err := q.db.Query(ctx, listApprovedUnpaidLeaveOverlapping, arg.EmployeeID, arg.StartDate, arg.EndDate)
+	rows, err := q.db.Query(ctx, listApprovedUnpaidLeaveOverlapping, arg.EmployeeID, arg.EndDate, arg.StartDate)
 	if err != nil {
 		return nil, err
 	}
@@ -546,11 +550,12 @@ func (q *Queries) ListLeaveRequestsByEmployee(ctx context.Context, employeeID pg
 }
 
 const listLeaveTypes = `-- name: ListLeaveTypes :many
-SELECT id, name, is_paid, uses_quota, is_active
-FROM leave_types
+
+SELECT id, name, is_paid, uses_quota, is_active, requires_doctor_note FROM leave_types
 ORDER BY name
 `
 
+// ── Leave Types ──────────────────────────────────────────────────────────────
 func (q *Queries) ListLeaveTypes(ctx context.Context) ([]*LeaveType, error) {
 	rows, err := q.db.Query(ctx, listLeaveTypes)
 	if err != nil {
@@ -566,6 +571,7 @@ func (q *Queries) ListLeaveTypes(ctx context.Context) ([]*LeaveType, error) {
 			&i.IsPaid,
 			&i.UsesQuota,
 			&i.IsActive,
+			&i.RequiresDoctorNote,
 		); err != nil {
 			return nil, err
 		}
@@ -578,9 +584,7 @@ func (q *Queries) ListLeaveTypes(ctx context.Context) ([]*LeaveType, error) {
 }
 
 const listOverlappingRequests = `-- name: ListOverlappingRequests :many
-SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-       status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
-FROM leave_requests
+SELECT id, employee_id, leave_type_id, start_date, end_date, day_count, reason, status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated, has_doctor_note FROM leave_requests
 WHERE employee_id = $1
   AND status IN ('pending', 'approved')
   AND start_date <= $3
@@ -589,12 +593,12 @@ WHERE employee_id = $1
 
 type ListOverlappingRequestsParams struct {
 	EmployeeID pgtype.UUID `json:"employee_id"`
-	StartDate  pgtype.Date `json:"start_date"`
 	EndDate    pgtype.Date `json:"end_date"`
+	StartDate  pgtype.Date `json:"start_date"`
 }
 
 func (q *Queries) ListOverlappingRequests(ctx context.Context, arg *ListOverlappingRequestsParams) ([]*LeaveRequest, error) {
-	rows, err := q.db.Query(ctx, listOverlappingRequests, arg.EmployeeID, arg.StartDate, arg.EndDate)
+	rows, err := q.db.Query(ctx, listOverlappingRequests, arg.EmployeeID, arg.EndDate, arg.StartDate)
 	if err != nil {
 		return nil, err
 	}
@@ -617,6 +621,7 @@ func (q *Queries) ListOverlappingRequests(ctx context.Context, arg *ListOverlapp
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.IsBackdated,
+			&i.HasDoctorNote,
 		); err != nil {
 			return nil, err
 		}
@@ -658,8 +663,7 @@ const setLeaveRequestStatus = `-- name: SetLeaveRequestStatus :one
 UPDATE leave_requests
 SET status = $1, decided_by = $2, decided_at = now(), decision_note = $3
 WHERE id = $4
-RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason,
-          status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated
+RETURNING id, employee_id, leave_type_id, start_date, end_date, day_count, reason, status, decided_by, decided_at, decision_note, created_by, created_at, is_backdated, has_doctor_note
 `
 
 type SetLeaveRequestStatusParams struct {
@@ -692,6 +696,7 @@ func (q *Queries) SetLeaveRequestStatus(ctx context.Context, arg *SetLeaveReques
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.IsBackdated,
+		&i.HasDoctorNote,
 	)
 	return &i, err
 }
@@ -700,7 +705,7 @@ const setLeaveTypeActive = `-- name: SetLeaveTypeActive :one
 UPDATE leave_types
 SET is_active = $1
 WHERE id = $2
-RETURNING id, name, is_paid, uses_quota, is_active
+RETURNING id, name, is_paid, uses_quota, is_active, requires_doctor_note
 `
 
 type SetLeaveTypeActiveParams struct {
@@ -717,6 +722,7 @@ func (q *Queries) SetLeaveTypeActive(ctx context.Context, arg *SetLeaveTypeActiv
 		&i.IsPaid,
 		&i.UsesQuota,
 		&i.IsActive,
+		&i.RequiresDoctorNote,
 	)
 	return &i, err
 }
@@ -725,7 +731,7 @@ const updateLeaveType = `-- name: UpdateLeaveType :one
 UPDATE leave_types
 SET name = $1, is_paid = $2, uses_quota = $3, is_active = $4
 WHERE id = $5
-RETURNING id, name, is_paid, uses_quota, is_active
+RETURNING id, name, is_paid, uses_quota, is_active, requires_doctor_note
 `
 
 type UpdateLeaveTypeParams struct {
@@ -751,11 +757,13 @@ func (q *Queries) UpdateLeaveType(ctx context.Context, arg *UpdateLeaveTypeParam
 		&i.IsPaid,
 		&i.UsesQuota,
 		&i.IsActive,
+		&i.RequiresDoctorNote,
 	)
 	return &i, err
 }
 
 const upsertLeaveAttendance = `-- name: UpsertLeaveAttendance :exec
+
 INSERT INTO attendance_records (id, employee_id, date, status)
 VALUES (gen_random_uuid(), $1, $2, 'leave')
 ON CONFLICT (employee_id, date)
@@ -768,6 +776,7 @@ type UpsertLeaveAttendanceParams struct {
 	Date       pgtype.Date `json:"date"`
 }
 
+// ── Attendance upsert for approved leave ─────────────────────────────────────
 func (q *Queries) UpsertLeaveAttendance(ctx context.Context, arg *UpsertLeaveAttendanceParams) error {
 	_, err := q.db.Exec(ctx, upsertLeaveAttendance, arg.EmployeeID, arg.Date)
 	return err

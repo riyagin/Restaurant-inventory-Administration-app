@@ -433,7 +433,7 @@ func (h *CashTrackingHandler) Settlement(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if rows == nil {
-		rows = []*db.GetPOSSettlementRangeRow{}
+		rows = []*db.PosSettlementByBranch{}
 	}
 	respondJSON(w, http.StatusOK, rows)
 }

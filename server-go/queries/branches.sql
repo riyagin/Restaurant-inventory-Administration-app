@@ -27,11 +27,11 @@ WHERE b.id = $1;
 -- name: CreateBranch :one
 INSERT INTO branches (id, name, revenue_account_id, expense_account_id, petty_cash_account_id)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)
-RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id;
+RETURNING *;
 
 -- name: UpdateBranch :one
 UPDATE branches SET name = $1 WHERE id = $2
-RETURNING id, name, revenue_account_id, expense_account_id, created_at, petty_cash_account_id;
+RETURNING *;
 
 -- name: DeleteBranch :exec
 DELETE FROM branches WHERE id = $1;

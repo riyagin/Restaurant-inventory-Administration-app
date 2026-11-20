@@ -49,8 +49,8 @@ func EvaluationRange(month time.Time) (from, to time.Time, ok bool) {
 // Backs both the "Evaluasi" backfill endpoint and the adjustment screen.
 func ReevaluateRange(ctx context.Context, qtx *db.Queries, from, to time.Time) error {
 	if err := qtx.DeleteAutoViolationsForRange(ctx, &db.DeleteAutoViolationsForRangeParams{
-		From: pgtype.Date{Time: from, Valid: true},
-		To:   pgtype.Date{Time: to, Valid: true},
+		FromDate: pgtype.Date{Time: from, Valid: true},
+		ToDate:   pgtype.Date{Time: to, Valid: true},
 	}); err != nil {
 		return err
 	}
