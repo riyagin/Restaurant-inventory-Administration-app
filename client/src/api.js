@@ -59,7 +59,45 @@ const authRequest = (path, data) =>
 function clearSession() {
   localStorage.removeItem('token');
   localStorage.removeItem('user');
+  invalidateReference();
 }
+
+// Reference lists (branches, divisions, positions) are read by dozens of pages
+// and change rarely, so one request serves every page for a few minutes. A
+// mutation through this module invalidates its list at once; the TTL covers
+// edits made by other users. Each caller gets its own copy of the array, so a
+// page that sorts its list in place cannot reorder another page's.
+const REFERENCE_TTL_MS = 5 * 60 * 1000;
+const referenceCache = new Map(); // key → { at, promise }
+
+function cachedReference(key, load) {
+  const hit = referenceCache.get(key);
+  if (!hit || Date.now() - hit.at > REFERENCE_TTL_MS) {
+    const promise = load().catch((err) => {
+      referenceCache.delete(key); // never cache a failure
+      throw err;
+    });
+    referenceCache.set(key, { at: Date.now(), promise });
+  }
+  return referenceCache.get(key).promise.then((res) => ({
+    ...res,
+    data: Array.isArray(res.data) ? [...res.data] : res.data,
+  }));
+}
+
+export function invalidateReference(...keys) {
+  if (keys.length === 0) referenceCache.clear();
+  else keys.forEach((k) => referenceCache.delete(k));
+}
+
+// Wraps a mutation so the lists it changes are refetched on next read.
+const invalidating = (keys, fn) => async (...args) => {
+  try {
+    return await fn(...args);
+  } finally {
+    invalidateReference(...keys);
+  }
+};
 
 // One retry covers the race between tabs: each refresh rotates the cookie, so a
 // tab whose request went out just before another tab's rotation landed is
@@ -137,7 +175,11 @@ export function getUser() {
 
 // Login and logout bypass the shared instance: a 401 from the login form is a
 // wrong password to show on the page, not an expired session to refresh.
-export const login = (data) => authRequest('login', data);
+export const login = async (data) => {
+  const res = await authRequest('login', data);
+  invalidateReference();
+  return res;
+};
 
 // Best-effort: revokes the access token and the refresh cookie on the server.
 // The local session is cleared whatever the outcome.
@@ -261,10 +303,11 @@ export const createStockTransfer = (data) => api.post('/stock-transfers', data);
 export const updateStockTransfer = (groupId, data) => api.put(`/stock-transfers/group/${groupId}`, data);
 export const deleteStockTransfer = (groupId) => api.delete(`/stock-transfers/group/${groupId}`);
 
-export const getBranches = () => api.get('/branches');
-export const createBranch = (data) => api.post('/branches', data);
-export const updateBranch = (id, data) => api.put(`/branches/${id}`, data);
-export const deleteBranch = (id) => api.delete(`/branches/${id}`);
+// A branch change can create or drop its divisions too, so both lists go.
+export const getBranches = () => cachedReference('branches', () => api.get('/branches'));
+export const createBranch = invalidating(['branches', 'divisions'], (data) => api.post('/branches', data));
+export const updateBranch = invalidating(['branches', 'divisions'], (id, data) => api.put(`/branches/${id}`, data));
+export const deleteBranch = invalidating(['branches', 'divisions'], (id) => api.delete(`/branches/${id}`));
 
 // ── Kas cabang: Pembelanjaan Harian, Kas Kecil, Setoran ─────────────────────
 // The branch's cash side. Spending leaves the box, counts observe it, setoran
@@ -304,10 +347,14 @@ export const getCashDeposits = (params) => api.get('/cash-deposits', { params })
 export const createCashDeposit = (data) => api.post('/cash-deposits', data);
 export const cancelCashDeposit = (id, reason) => api.post(`/cash-deposits/${id}/cancel`, { reason });
 
-export const getDivisions = (params) => api.get('/divisions', { params });
-export const createDivision = (data) => api.post('/divisions', data);
-export const updateDivision = (id, data) => api.put(`/divisions/${id}`, data);
-export const deleteDivision = (id) => api.delete(`/divisions/${id}`);
+// Only the unfiltered list is cached; a filtered request always goes out.
+export const getDivisions = (params) =>
+  params && Object.keys(params).length
+    ? api.get('/divisions', { params })
+    : cachedReference('divisions', () => api.get('/divisions'));
+export const createDivision = invalidating(['divisions'], (data) => api.post('/divisions', data));
+export const updateDivision = invalidating(['divisions'], (id, data) => api.put(`/divisions/${id}`, data));
+export const deleteDivision = invalidating(['divisions'], (id) => api.delete(`/divisions/${id}`));
 
 export const getDivisionCategories = (params) => api.get('/division-categories', { params });
 export const createDivisionCategory = (data) => api.post('/division-categories', data);
@@ -431,10 +478,10 @@ export const deleteEmployeePhoto = (id) => api.delete(`/hr/employees/${id}/photo
 // Removes the face embedding + all attendance face photos (non-active employees only).
 export const deleteEmployeeFaceData = (id) => api.delete(`/hr/employees/${id}/face`);
 
-export const getPositions   = () => api.get('/hr/positions');
-export const createPosition = (data) => api.post('/hr/positions', data);
-export const updatePosition = (id, data) => api.put(`/hr/positions/${id}`, data);
-export const deletePosition = (id) => api.delete(`/hr/positions/${id}`);
+export const getPositions   = () => cachedReference('positions', () => api.get('/hr/positions'));
+export const createPosition = invalidating(['positions'], (data) => api.post('/hr/positions', data));
+export const updatePosition = invalidating(['positions'], (id, data) => api.put(`/hr/positions/${id}`, data));
+export const deletePosition = invalidating(['positions'], (id) => api.delete(`/hr/positions/${id}`));
 
 // ── HR: Dokumen (generator PKWT/PKWTT/SP/Paklaring + arsip dokumen karyawan) ──
 // format = 'docx' | 'pdf'; returns a blob for the browser to download.
