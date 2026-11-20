@@ -173,9 +173,26 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 			deductions = append(deductions, service.PayslipLineItem{Label: c.Name, Amount: c.Amount})
 		}
 	}
+	// Kasbon: name the advance(s) and carry what is still owed. Read from the
+	// installments themselves, so it works before the period is closed too.
+	var kasbons []service.PayslipKasbon
 	if line.KasbonDeduction != 0 {
+		rows, kerr := h.queries.ListPayslipKasbons(ctx, &db.ListPayslipKasbonsParams{
+			PayrollLineID: lineID,
+			EmployeeID:    line.EmployeeID,
+			DueMonth:      pgtype.Date{Time: service.FirstOfMonth(line.PeriodMonth.Time), Valid: true},
+		})
+		var nums []string
+		if kerr == nil {
+			for _, k := range rows {
+				nums = append(nums, k.KasbonNumber)
+				kasbons = append(kasbons, service.PayslipKasbon{
+					Number: k.KasbonNumber, Amount: k.KasbonAmount, Deducted: k.Deducted, Remaining: k.Remaining,
+				})
+			}
+		}
 		label := "Kasbon"
-		if nums, kerr := h.queries.ListLineKasbonNumbers(ctx, lineID); kerr == nil && len(nums) > 0 {
+		if len(nums) > 0 {
 			label = "Kasbon (" + strings.Join(nums, ", ") + ")"
 		}
 		deductions = append(deductions, service.PayslipLineItem{Label: label, Amount: line.KasbonDeduction})
@@ -236,7 +253,8 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 		TotalDeduction: totalDeduction,
 		NetPay:         line.NetPay,
 		Note:           note,
-		Performance:    h.payslipPerformance(ctx, lineID, line.EmployeeID, line.PeriodMonth.Time),
+		Kasbons:        kasbons,
+		Performance:    h.payslipPerformance(ctx, lineID, line),
 	}
 	if data.Performance != nil {
 		data.Performance.GradeLinked = anyGradeLinked
@@ -244,33 +262,115 @@ func (h *PayslipHandler) buildPayslipData(r *http.Request, lineID pgtype.UUID) (
 	return data, line, nil
 }
 
-// payslipPerformance assembles the KINERJA block: the score and grade frozen on
-// the line when it was generated, and the calendar month's violations grouped
-// by offense (the score is per calendar month, Kebijakan HRD III.1). A read
-// failure drops the block rather than the slip.
-func (h *PayslipHandler) payslipPerformance(ctx context.Context, lineID, employeeID pgtype.UUID, month time.Time) *service.PayslipPerformance {
+// payslipPerformance assembles the KINERJA table: the score and grade frozen on
+// the line, and one dated row per violation (calendar month of the score,
+// Kebijakan HRD III.1) and per day that cost pay (the line's payroll window),
+// each with the times that made it an offense. The per-day pay figures come from
+// the same functions payroll sums, so the rows add up to the POTONGAN lines. A
+// read failure drops the block rather than the slip.
+func (h *PayslipHandler) payslipPerformance(ctx context.Context, lineID pgtype.UUID, line *db.GetPayrollLineForPayslipRow) *service.PayslipPerformance {
 	perf := &service.PayslipPerformance{Score: -1}
-	if pl, err := h.queries.GetPayrollLineByID(ctx, lineID); err == nil && pl.PerformanceScore.Valid {
+	pl, err := h.queries.GetPayrollLineByID(ctx, lineID)
+	if err != nil {
+		return nil
+	}
+	if pl.PerformanceScore.Valid {
 		perf.Score = int(pl.PerformanceScore.Int32)
 	}
 	if g, err := h.queries.GetPayrollLineGrade(ctx, lineID); err == nil && g.PerformanceGrade.Valid {
 		perf.Grade = g.PerformanceGrade.String
 	}
-	start := service.FirstOfMonth(month)
-	rows, err := h.queries.ListViolationSummaryForMonth(ctx, &db.ListViolationSummaryForMonthParams{
-		EmployeeID: employeeID,
-		Date:       pgtype.Date{Time: start, Valid: true},
-		Date_2:     pgtype.Date{Time: start.AddDate(0, 1, -1), Valid: true},
+	period, err := h.queries.GetPayrollPeriodByID(ctx, pl.PayrollPeriodID)
+	if err != nil {
+		return nil
+	}
+	monthStart := service.FirstOfMonth(line.PeriodMonth.Time)
+	monthEnd := monthStart.AddDate(0, 1, -1)
+	from, to := period.StartDate.Time, period.EndDate.Time
+	if !from.Equal(monthStart) || !to.Equal(monthEnd) {
+		perf.WindowNote = fmt.Sprintf("Poin dihitung %s – %s; potongan gaji periode %s – %s",
+			dateLabelID(monthStart), dateLabelID(monthEnd), dateLabelID(from), dateLabelID(to))
+	}
+	emp := line.EmployeeID
+	pgd := func(t time.Time) pgtype.Date { return pgtype.Date{Time: t, Valid: true} }
+
+	// Violations (points).
+	vrows, err := h.queries.ListViolationDetailsForRange(ctx, &db.ListViolationDetailsForRangeParams{
+		EmployeeID: emp, Date: pgd(monthStart), Date_2: pgd(monthEnd),
 	})
 	if err != nil {
 		return nil
 	}
-	for _, r := range rows {
-		perf.Violations = append(perf.Violations, service.PayslipViolation{
-			Label: r.Label, Count: int(r.Occurrences), Points: int(r.Points),
+	tsPtr := func(t pgtype.Timestamptz) *time.Time {
+		if !t.Valid {
+			return nil
+		}
+		v := t.Time
+		return &v
+	}
+	violations := make([]service.OffenseViolation, 0, len(vrows))
+	for _, v := range vrows {
+		violations = append(violations, service.OffenseViolation{
+			Date: v.Date.Time, Label: v.Label, RuleType: v.RuleType, Points: int(v.Points),
+			CheckIn: tsPtr(v.CheckIn), CheckOut: tsPtr(v.CheckOut),
+			LateMin: int(v.LateMinutes), EarlyMin: int(v.EarlyLeaveMinutes), LostMin: int(v.HalfDayLostMinutes),
 		})
 	}
+
+	// Per-day pay cuts, only where the line actually charged that kind.
+	var cuts []service.DayPayCut
+	if pl.AttendanceCutDeduction != 0 {
+		sched := service.DefaultSchedule()
+		if e, err := h.queries.GetEmployeeByID(ctx, emp); err == nil {
+			if ws, err := h.queries.GetWorkScheduleByBranch(ctx, e.BranchID); err == nil && ws != nil {
+				sched = service.ScheduleFromRow(ws)
+			}
+		}
+		if sum, err := service.AttendanceCutsForPeriod(ctx, h.queries, emp, from, to, pl.DailyRate, sched); err == nil {
+			for _, d := range sum.Days {
+				if t, err := time.Parse("2006-01-02", d.Date); err == nil && d.Amount > 0 {
+					cuts = append(cuts, service.DayPayCut{Date: t, Kind: service.PayCutAttendance, Amount: d.Amount})
+				}
+			}
+		}
+	}
+	if pl.HalfDayDeduction != 0 {
+		if hrows, err := h.queries.ListHalfDaysForRange(ctx, &db.ListHalfDaysForRangeParams{
+			EmployeeID: emp, Date: pgd(from), Date_2: pgd(to),
+		}); err == nil {
+			for _, r := range hrows {
+				amt := (int64(r.HalfDayLostMinutes)*pl.OvertimeHourlyRate + 30) / 60
+				cuts = append(cuts, service.DayPayCut{Date: r.Date.Time, Kind: service.PayCutHalfDay, Amount: amt})
+			}
+		}
+	}
+	if pl.UnpaidLeaveDeduction != 0 {
+		if days, err := service.LeavePayCutDays(ctx, h.queries, emp, from, to, pl.DailyRate); err == nil {
+			for _, d := range days {
+				note := ""
+				if d.Weight > 1 {
+					note = fmt.Sprintf("%s, %d× gaji harian", weekdayID(d.Date), d.Weight)
+				}
+				cuts = append(cuts, service.DayPayCut{Date: d.Date, Kind: service.PayCutLeave, Amount: d.Amount, Note: note})
+			}
+		}
+		if days, err := service.AlphaPayCutDays(ctx, h.queries, emp, from, to); err == nil {
+			for _, d := range days {
+				note := ""
+				if d.Cost > 1 {
+					note = fmt.Sprintf("%s, %d× gaji harian", weekdayID(d.Date), d.Cost)
+				}
+				cuts = append(cuts, service.DayPayCut{Date: d.Date, Kind: service.PayCutAlpha, Amount: int64(d.Cost) * pl.DailyRate, Note: note})
+			}
+		}
+	}
+	perf.Rows = service.BuildPayslipOffenses(violations, cuts)
 	return perf
+}
+
+// weekdayID names a day in Indonesian ("Sabtu").
+func weekdayID(t time.Time) string {
+	return [...]string{"Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"}[t.Weekday()]
 }
 
 func textValue(t pgtype.Text) string {

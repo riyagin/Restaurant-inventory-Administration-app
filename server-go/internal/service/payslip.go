@@ -50,7 +50,8 @@ type PayslipData struct {
 	// DailyPaid lists wage components disbursed manually day by day during the period
 	// (type 'daily_allowance', e.g. uang makan handed out in cash). They are shown for
 	// the employee's information only and are NOT part of TotalEarnings / NetPay, so
-	// they render in their own block below the net-pay box.
+	// they are listed in PENDAPATAN marked "*", and the net box shows the
+	// grand total (with them) and the transfer (without them).
 	DailyPaid []PayslipLineItem
 
 	// Totals.
@@ -61,6 +62,9 @@ type PayslipData struct {
 	// Catatan (review note), optional.
 	Note string
 
+	// Kasbons repaid on this slip, with what is still owed after it.
+	Kasbons []PayslipKasbon
+
 	// Performance is the month's point record (Kebijakan HRD III: everyone
 	// starts at 100, violations deduct). Nil = not shown (e.g. the THR slip).
 	Performance *PayslipPerformance
@@ -70,19 +74,25 @@ type PayslipData struct {
 // its grade, and the month's violations grouped by offense. Employees are
 // entitled to an explanation of their monthly points (Ketentuan Tambahan 5).
 type PayslipPerformance struct {
-	Score      int // 0–100; -1 = not evaluated
-	Grade      string
-	Violations []PayslipViolation
+	Score int // 0–100; -1 = not evaluated
+	Grade string
+	// Rows: one per violation and per day that cost pay, in date order
+	// (BuildPayslipOffenses).
+	Rows []PayslipOffense
+	// WindowNote explains when the score month and the pay window differ
+	// (cut-off 26–25), e.g. "Poin: 1–31 Okt · potongan gaji: 26 Sep – 25 Okt".
+	WindowNote string
 	// GradeLinked: the slip carries components paid by grade, so the block
 	// says which grade they were paid at.
 	GradeLinked bool
 }
 
-// PayslipViolation is one offense and how often it occurred in the month.
-type PayslipViolation struct {
-	Label  string
-	Count  int
-	Points int // total points deducted (positive)
+// PayslipKasbon is one cash advance repaid (partly) on the slip.
+type PayslipKasbon struct {
+	Number    string
+	Amount    int64 // the advance as disbursed
+	Deducted  int64 // repaid on this slip
+	Remaining int64 // still owed after this slip
 }
 
 // formatRupiah renders a whole-rupiah amount in id-ID style, e.g. 1500000 ->
@@ -251,17 +261,27 @@ func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
 	pdf.SetX(left + colW + 2)
 	pdf.CellFormat(colW-2, 5.5, "POTONGAN", "B", 1, "L", false, 0, "")
 
+	// Daily payouts (uang makan) are earnings too: they sit in PENDAPATAN,
+	// marked "*", and count in Total Pendapatan. Only the transfer leaves them
+	// out — the net box below shows both figures.
+	earnRows := append([]PayslipLineItem(nil), d.Earnings...)
+	var dailyTotal int64
+	for _, it := range d.DailyPaid {
+		dailyTotal += it.Amount
+		earnRows = append(earnRows, PayslipLineItem{Label: it.Label + " *", Amount: it.Amount})
+	}
+
 	pdf.SetFont("Arial", "", 7)
-	maxRows := len(d.Earnings)
+	maxRows := len(earnRows)
 	if len(d.Deductions) > maxRows {
 		maxRows = len(d.Deductions)
 	}
 	rowY := pdf.GetY() + 0.8
 	for i := 0; i < maxRows; i++ {
 		pdf.SetXY(left, rowY)
-		if i < len(d.Earnings) {
-			pdf.CellFormat(colW-2-amtW, 4.2, tr(d.Earnings[i].Label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(amtW, 4.2, formatRupiah(d.Earnings[i].Amount), "", 0, "R", false, 0, "")
+		if i < len(earnRows) {
+			pdf.CellFormat(colW-2-amtW, 4.2, tr(fitText(pdf, earnRows[i].Label, colW-3-amtW)), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW, 4.2, formatRupiah(earnRows[i].Amount), "", 0, "R", false, 0, "")
 		} else {
 			pdf.CellFormat(colW-2, 4.2, "", "", 0, "L", false, 0, "")
 		}
@@ -280,53 +300,84 @@ func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
 	pdf.SetFont("Arial", "B", 7.5)
 	pdf.SetX(left)
 	pdf.CellFormat(colW-2-amtW, 5.5, "Total Pendapatan", "T", 0, "L", false, 0, "")
-	pdf.CellFormat(amtW, 5.5, formatRupiah(d.TotalEarnings), "T", 0, "R", false, 0, "")
+	pdf.CellFormat(amtW, 5.5, formatRupiah(d.TotalEarnings+dailyTotal), "T", 0, "R", false, 0, "")
 	pdf.SetX(left + colW + 2)
 	pdf.CellFormat(colW-2-amtW, 5.5, "Total Potongan", "T", 0, "L", false, 0, "")
 	pdf.CellFormat(amtW, 5.5, formatRupiah(d.TotalDeduction), "T", 1, "R", false, 0, "")
 	pdf.Ln(3)
 
 	// ── Net pay box ────────────────────────────────────────────────────────────
-	pdf.SetX(left)
-	pdf.SetFont("Arial", "B", 9.5)
+	// Without daily payouts the box is the transfer alone. With them it shows
+	// the grand total (everything the month paid), what was already handed out
+	// daily, and the transfer — the amount the bank sends.
 	pdf.SetFillColor(240, 243, 247)
-	pdf.CellFormat(contentW, 7.5, tr("GAJI BERSIH: "+formatRupiah(d.NetPay)), "1", 1, "C", true, 0, "")
+	if dailyTotal > 0 {
+		grand := d.NetPay + dailyTotal
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 8.5)
+		pdf.CellFormat(contentW-amtW-6, 6, tr("TOTAL GAJI (termasuk dibayar harian)"), "LT", 0, "L", true, 0, "")
+		pdf.CellFormat(amtW+6, 6, formatRupiah(grand), "TR", 1, "R", true, 0, "")
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "", 7.5)
+		pdf.CellFormat(contentW-amtW-6, 4.5, tr("Sudah dibayar tunai harian *"), "L", 0, "L", true, 0, "")
+		pdf.CellFormat(amtW+6, 4.5, "- "+formatRupiah(dailyTotal), "R", 1, "R", true, 0, "")
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 9.5)
+		pdf.CellFormat(contentW-amtW-6, 7, tr("GAJI BERSIH DITRANSFER"), "LTB", 0, "L", true, 0, "")
+		pdf.CellFormat(amtW+6, 7, formatRupiah(d.NetPay), "TRB", 1, "R", true, 0, "")
+	} else {
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 9.5)
+		pdf.CellFormat(contentW, 7.5, tr("GAJI BERSIH: "+formatRupiah(d.NetPay)), "1", 1, "C", true, 0, "")
+	}
 	pdf.SetX(left)
 	pdf.SetFont("Arial", "I", 7)
 	terbilang := Terbilang(d.NetPay) + " rupiah"
-	pdf.MultiCell(contentW, 3.6, tr("Terbilang: "+capitalizeFirst(terbilang)), "", "C", false)
-	pdf.Ln(2.5)
-
-	// ── Dibayar harian (informational, outside the take-home total) ────────────
-	if len(d.DailyPaid) > 0 {
-		var dailyTotal int64
-		pdf.SetX(left)
-		pdf.SetFont("Arial", "B", 7)
-		pdf.CellFormat(contentW, 4.5, tr("DIBAYAR HARIAN (di luar transfer gaji)"), "B", 1, "L", false, 0, "")
-		pdf.SetFont("Arial", "", 7)
-		for _, it := range d.DailyPaid {
-			dailyTotal += it.Amount
-			pdf.SetX(left)
-			pdf.CellFormat(contentW-amtW, 4, tr(it.Label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(amtW, 4, formatRupiah(it.Amount), "", 1, "R", false, 0, "")
-		}
-		pdf.SetX(left)
-		pdf.SetFont("Arial", "B", 7)
-		pdf.CellFormat(contentW-amtW, 4, tr("Total Dibayar Harian"), "T", 0, "L", false, 0, "")
-		pdf.CellFormat(amtW, 4, formatRupiah(dailyTotal), "T", 1, "R", false, 0, "")
+	label := "Terbilang: "
+	if dailyTotal > 0 {
+		label = "Terbilang (ditransfer): "
+	}
+	pdf.MultiCell(contentW, 3.6, tr(label+capitalizeFirst(terbilang)), "", "C", false)
+	if dailyTotal > 0 {
 		pdf.SetX(left)
 		pdf.SetFont("Arial", "I", 6.5)
 		pdf.SetTextColor(110, 110, 110)
-		pdf.MultiCell(contentW, 3.2, tr("Sudah diterima tunai secara harian, tidak termasuk dalam gaji bersih di atas."), "", "L", false)
+		pdf.MultiCell(contentW, 3.2, tr("* Dibayar tunai setiap hari kerja selama periode, tidak ikut ditransfer."), "", "C", false)
 		pdf.SetTextColor(0, 0, 0)
+	}
+	pdf.Ln(2.5)
+
+	// ── Kasbon (what is repaid and what is still owed) ────────────────────────
+	if len(d.Kasbons) > 0 {
+		var remaining int64
+		for _, k := range d.Kasbons {
+			remaining += k.Remaining
+		}
+		pdf.SetX(left)
+		pdf.SetFont("Arial", "B", 7)
+		pdf.CellFormat(contentW*0.5, 4.5, tr("KASBON"), "B", 0, "L", false, 0, "")
+		pdf.CellFormat(contentW*0.5, 4.5, tr("Sisa setelah gaji ini: "+formatRupiah(remaining)), "B", 1, "R", false, 0, "")
+		pdf.SetFont("Arial", "", 7)
+		for _, k := range d.Kasbons {
+			pdf.SetX(left)
+			pdf.CellFormat(contentW-amtW-14, 3.9, tr(fmt.Sprintf("%s · pinjaman %s · dipotong bulan ini %s",
+				k.Number, formatRupiah(k.Amount), formatRupiah(k.Deducted))), "", 0, "L", false, 0, "")
+			pdf.CellFormat(amtW+14, 3.9, tr("sisa "+formatRupiah(k.Remaining)), "", 1, "R", false, 0, "")
+		}
 		pdf.Ln(2)
 	}
 
-	// ── Kinerja (points, grade, offenses) ──────────────────────────────────────
+	// ── Kinerja: every offense by date, with points and pay ────────────────────
 	if p := d.Performance; p != nil {
+		totalPts := 0
+		var totalPay int64
+		for _, r := range p.Rows {
+			totalPts += r.Points
+			totalPay += r.Amount
+		}
 		pdf.SetX(left)
 		pdf.SetFont("Arial", "B", 7)
-		pdf.CellFormat(contentW*0.5, 4.5, tr("KINERJA BULAN INI"), "B", 0, "L", false, 0, "")
+		pdf.CellFormat(contentW*0.5, 4.5, tr("KINERJA & PELANGGARAN"), "B", 0, "L", false, 0, "")
 		head := "Poin: belum dievaluasi"
 		if p.Score >= 0 {
 			head = fmt.Sprintf("Poin: %d / 100", p.Score)
@@ -335,41 +386,85 @@ func drawPayslipPanel(pdf *fpdf.Fpdf, d PayslipData, originX float64) float64 {
 			}
 		}
 		pdf.CellFormat(contentW*0.5, 4.5, tr(head), "B", 1, "R", false, 0, "")
-		pdf.SetFont("Arial", "", 7)
-		if len(p.Violations) == 0 {
+
+		const dateW, ptsW, payW, rowH = 15.0, 13.0, 22.0, 3.5
+		labelW := contentW - dateW - ptsW - payW
+		if len(p.Rows) == 0 {
 			pdf.SetX(left)
 			pdf.SetFont("Arial", "I", 7)
 			pdf.CellFormat(contentW, 4, tr("Tidak ada pelanggaran — poin penuh."), "", 1, "L", false, 0, "")
-		}
-		total := 0
-		for _, v := range p.Violations {
-			total += v.Points
-			label := v.Label
-			if v.Count > 1 {
-				label = fmt.Sprintf("%s (%dx)", label, v.Count)
+		} else {
+			pdf.SetX(left)
+			pdf.SetFont("Arial", "B", 6.3)
+			pdf.SetTextColor(90, 90, 90)
+			pdf.CellFormat(dateW, rowH, "Tanggal", "", 0, "L", false, 0, "")
+			pdf.CellFormat(labelW, rowH, tr("Pelanggaran & waktu"), "", 0, "L", false, 0, "")
+			pdf.CellFormat(ptsW, rowH, "Poin", "", 0, "R", false, 0, "")
+			pdf.CellFormat(payW, rowH, "Potongan gaji", "", 1, "R", false, 0, "")
+			pdf.SetTextColor(0, 0, 0)
+
+			// Keep the slip on its A5 half: room is what is left above the footer
+			// band after the totals row, the notes and a two-line Catatan.
+			room := (sheetH - panelBotY - 6) - pdf.GetY() - 4 - 7 - 8
+			maxRows := int(room / rowH)
+			if maxRows < 1 {
+				maxRows = 1
+			}
+			shown := p.Rows
+			var hidden []PayslipOffense
+			if len(shown) > maxRows {
+				shown, hidden = p.Rows[:maxRows-1], p.Rows[maxRows-1:]
+			}
+			pdf.SetFont("Arial", "", 6.5)
+			for _, r := range shown {
+				pdf.SetX(left)
+				pdf.CellFormat(dateW, rowH, tr(offenseDateLabel(r.Date)), "", 0, "L", false, 0, "")
+				pdf.CellFormat(labelW, rowH, tr(fitText(pdf, r.Label, labelW-1)), "", 0, "L", false, 0, "")
+				pts, pay := "-", "-"
+				if r.Points > 0 {
+					pts = fmt.Sprintf("-%d", r.Points)
+				}
+				if r.Amount > 0 {
+					pay = formatRupiah(r.Amount)
+				}
+				pdf.CellFormat(ptsW, rowH, pts, "", 0, "R", false, 0, "")
+				pdf.CellFormat(payW, rowH, tr(pay), "", 1, "R", false, 0, "")
+			}
+			if len(hidden) > 0 {
+				hp, hpay := 0, int64(0)
+				for _, r := range hidden {
+					hp += r.Points
+					hpay += r.Amount
+				}
+				pdf.SetX(left)
+				pdf.SetFont("Arial", "I", 6.5)
+				pdf.CellFormat(dateW, rowH, "", "", 0, "L", false, 0, "")
+				pdf.CellFormat(labelW, rowH, tr(fmt.Sprintf("… %d baris lainnya (lihat Evaluasi Karyawan)", len(hidden))), "", 0, "L", false, 0, "")
+				pdf.CellFormat(ptsW, rowH, fmt.Sprintf("-%d", hp), "", 0, "R", false, 0, "")
+				pdf.CellFormat(payW, rowH, tr(formatRupiah(hpay)), "", 1, "R", false, 0, "")
 			}
 			pdf.SetX(left)
-			pdf.CellFormat(contentW-amtW, 3.7, tr(label), "", 0, "L", false, 0, "")
-			pdf.CellFormat(amtW, 3.7, tr(fmt.Sprintf("-%d poin", v.Points)), "", 1, "R", false, 0, "")
+			pdf.SetFont("Arial", "B", 6.8)
+			pdf.CellFormat(dateW+labelW, 4, tr("Total"), "T", 0, "L", false, 0, "")
+			pdf.CellFormat(ptsW, 4, fmt.Sprintf("-%d", totalPts), "T", 0, "R", false, 0, "")
+			pdf.CellFormat(payW, 4, tr(formatRupiah(totalPay)), "T", 1, "R", false, 0, "")
 		}
-		if len(p.Violations) > 0 {
-			pdf.SetX(left)
-			pdf.SetFont("Arial", "B", 7)
-			pdf.CellFormat(contentW-amtW, 4, tr("Total pengurangan"), "T", 0, "L", false, 0, "")
-			pdf.CellFormat(amtW, 4, tr(fmt.Sprintf("-%d poin", total)), "T", 1, "R", false, 0, "")
-		}
+
 		var notes []string
-		if total > 100 {
+		if totalPts > 100 {
 			notes = append(notes, "Poin tidak dapat kurang dari 0.")
+		}
+		if p.WindowNote != "" {
+			notes = append(notes, p.WindowNote+".")
 		}
 		if p.GradeLinked && strings.TrimSpace(p.Grade) != "" {
 			notes = append(notes, "Komponen yang mengikuti grade dibayar sesuai Grade "+p.Grade+".")
 		}
 		if len(notes) > 0 {
 			pdf.SetX(left)
-			pdf.SetFont("Arial", "I", 6.5)
+			pdf.SetFont("Arial", "I", 6.3)
 			pdf.SetTextColor(110, 110, 110)
-			pdf.MultiCell(contentW, 3.2, tr(strings.Join(notes, " ")), "", "L", false)
+			pdf.MultiCell(contentW, 3.1, tr(strings.Join(notes, " ")), "", "L", false)
 			pdf.SetTextColor(0, 0, 0)
 		}
 		pdf.Ln(2)
@@ -419,4 +514,19 @@ func capitalizeFirst(s string) string {
 		r[0] = r[0] - 'a' + 'A'
 	}
 	return string(r)
+}
+
+// fitText shortens s with an ellipsis until it fits w mm in the current font.
+func fitText(pdf *fpdf.Fpdf, s string, w float64) string {
+	if pdf.GetStringWidth(tr(s)) <= w {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 1 {
+		r = r[:len(r)-1]
+		if pdf.GetStringWidth(tr(string(r)+"…")) <= w {
+			return string(r) + "…"
+		}
+	}
+	return s
 }

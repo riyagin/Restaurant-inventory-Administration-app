@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/go-pdf/fpdf"
 )
@@ -79,11 +80,21 @@ func TestPayslipPanelFitsA5Half(t *testing.T) {
 		d.Deductions = append(d.Deductions, PayslipLineItem{Label: fmt.Sprintf("Potongan Tambahan %d", i+1), Amount: 50000})
 	}
 	d.DailyPaid = append(d.DailyPaid, PayslipLineItem{Label: "Uang Transport Harian (24 hari)", Amount: 240000})
+	d.Kasbons = []PayslipKasbon{
+		{Number: "KSB-2026-0001", Amount: 500000, Deducted: 250000, Remaining: 250000},
+		{Number: "KSB-2026-0002", Amount: 300000, Deducted: 150000, Remaining: 150000},
+	}
 	// A worst-case KINERJA block: every offense of the late/leave/absence table.
-	d.Performance = &PayslipPerformance{Score: 0, Grade: "C"}
-	for i := 0; i < 7; i++ {
-		d.Performance.Violations = append(d.Performance.Violations,
-			PayslipViolation{Label: fmt.Sprintf("Pelanggaran contoh nomor %d", i+1), Count: 2, Points: 20})
+	// 40 dated rows: more than an A5 half can hold, so the table must cap
+	// itself and summarise the rest.
+	d.Performance = &PayslipPerformance{Score: 0, Grade: "C", GradeLinked: true,
+		WindowNote: "Poin: 1–31 Okt · potongan gaji: 26 Sep – 25 Okt"}
+	for i := 0; i < 40; i++ {
+		d.Performance.Rows = append(d.Performance.Rows, PayslipOffense{
+			Date:   time.Date(2026, 10, 1+i%28, 0, 0, 0, 0, time.UTC),
+			Label:  fmt.Sprintf("Terlambat 11 - 20 menit — masuk 08:%02d, telat %d mnt, baris yang cukup panjang", 10+i%9, 10+i%9),
+			Points: 3, Amount: 3125,
+		})
 	}
 
 	pdf := fpdf.New("L", "mm", "A4", "")

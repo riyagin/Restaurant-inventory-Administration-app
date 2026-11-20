@@ -126,20 +126,33 @@ func AlphaForMonth(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID,
 // AlphaPayCut is the pay lost to Alpha days in [from, to] that the allowance
 // could not cover: days counts them, deduction = Σ cost × dailyRate.
 func AlphaPayCut(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time, dailyRate int64) (int, int64, error) {
+	list, err := AlphaPayCutDays(ctx, qtx, employeeID, from, to)
+	if err != nil {
+		return 0, 0, err
+	}
+	weight := 0
+	for _, d := range list {
+		weight += d.Cost
+	}
+	return len(list), int64(weight) * dailyRate, nil
+}
+
+// AlphaPayCutDays lists the uncovered Alpha days in [from, to], in date order —
+// the days AlphaPayCut charges (each costs Cost × daily rate).
+func AlphaPayCutDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time) ([]AlphaDay, error) {
 	from, to = dateOnlyUTC(from), dateOnlyUTC(to)
-	days, weight := 0, 0
+	var out []AlphaDay
 	for m := MonthStart(from); !m.After(to); m = m.AddDate(0, 1, 0) {
 		am, err := AlphaForMonth(ctx, qtx, employeeID, m)
 		if err != nil {
-			return 0, 0, err
+			return nil, err
 		}
 		for _, d := range am.Days {
 			if d.Covered || d.Date.Before(from) || d.Date.After(to) {
 				continue
 			}
-			days++
-			weight += d.Cost
+			out = append(out, d)
 		}
 	}
-	return days, int64(weight) * dailyRate, nil
+	return out, nil
 }

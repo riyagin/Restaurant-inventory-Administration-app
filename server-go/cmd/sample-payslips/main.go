@@ -9,6 +9,9 @@
 //	                  check-in
 //	CONTOH-04 Dodi  — five Alpha days (two in a row), leaving work without
 //	                  permission, a day with no punches at all
+//	CONTOH-05 Eka   — outstanding kasbon: Rp 500.000 taken 15 Okt, repaid in two
+//	                  installments (Okt, Nov); October repays half, half is
+//	                  still owed
 //
 // Everything hangs off one branch, "Contoh Slip Gaji", and wage components
 // suffixed "(Contoh)", so it never mixes with real data; -clean removes it all.
@@ -68,6 +71,7 @@ var people = []person{
 	{"CONTOH-02", "Bayu Saputra", "02-terlambat-dan-izin-setengah-hari", "Terlambat di setiap tingkat + izin masuk siang + izin pulang awal", true},
 	{"CONTOH-03", "Sari Wulandari", "03-izin-sakit-dan-lupa-absen", "Izin satu hari (Rabu & Sabtu), sakit tanpa surat dokter, tidak check-out, tidak check-in", false},
 	{"CONTOH-04", "Dodi Firmansyah", "04-alpha-dan-pelanggaran-manual", "5× Alpha (2 berturut-turut), keluar kantor tanpa izin, tidak check-in & check-out", false},
+	{"CONTOH-05", "Eka Pratama", "05-kasbon-belum-lunas", "Kasbon Rp 500.000 (15 Okt), 2× cicilan: Okt dipotong, sisa Rp 250.000 dipotong Nov", false},
 }
 
 type app struct {
@@ -163,6 +167,7 @@ func main() {
 	fmt.Println("[3] Libur / izin / sakit lewat handler pengajuan")
 	a.fileLeaves()
 	a.manualViolations()
+	a.kasbon()
 	fmt.Println("[4] Baris gaji (regenerate) + catatan")
 	lines := a.payroll(period)
 	fmt.Println("[5] Pemeriksaan angka")
@@ -212,6 +217,7 @@ func (a *app) cleanAll() {
 		`DELETE FROM attendance_records WHERE employee_id IN ` + emps,
 		`DELETE FROM leave_quota_usage WHERE employee_id IN ` + emps,
 		`DELETE FROM leave_requests WHERE employee_id IN ` + emps,
+		`DELETE FROM kasbons WHERE employee_id IN ` + emps, // installments cascade
 		`DELETE FROM employee_wage_components WHERE wage_structure_id IN (SELECT id FROM wage_structures WHERE employee_id IN ` + emps + `)`,
 		`DELETE FROM wage_structures WHERE employee_id IN ` + emps,
 		`DELETE FROM employees WHERE employee_code LIKE '` + codePrefix + `%'`,
@@ -422,6 +428,30 @@ func (a *app) manualViolations() {
 	must(tx.Commit(a.ctx))
 }
 
+// kasbon gives CONTOH-05 an advance that is still being repaid. It is filed
+// the way Kebijakan Kasbon allows (15 Okt is inside the 10–20 window, PKWTT,
+// Rp 500.000, two installments starting in the request month, score 100 →
+// priority) and stored as already approved and disbursed. The disbursement
+// journal entry (Cr Kas / Dr Piutang Karyawan) is deliberately NOT posted, so
+// the sample never touches the ledger; -clean deletes the kasbon again.
+func (a *app) kasbon() {
+	var fund pgtype.UUID
+	must(a.pool.QueryRow(a.ctx, `SELECT id FROM accounts WHERE account_type = 'asset' AND NOT is_system
+		ORDER BY account_number NULLS LAST LIMIT 1`).Scan(&fund))
+	maxSeq, err := a.q.GetMaxKasbonSeqForYear(a.ctx, "2026")
+	must(err)
+	number := service.GenerateKasbonNumber(2026, maxSeq)
+	var id pgtype.UUID
+	must(a.pool.QueryRow(a.ctx, `INSERT INTO kasbons (kasbon_number, employee_id, amount, details, sending_method,
+			fund_source_account_id, request_date, resolution_month, status, approved_at, approval_note, processed_at,
+			score_at_request, approval_track)
+		VALUES ($1,$2,500000,'Contoh: biaya sekolah anak','Transfer Bank',$3,'2026-10-15','2026-11-01','processed',
+			'2026-10-15 10:00+07','Contoh — prioritas (poin 100)','2026-10-15 14:00+07',100,'priority') RETURNING id`,
+		number, a.emp["CONTOH-05"], fund).Scan(&id))
+	a.exec(`INSERT INTO kasbon_installments (kasbon_id, due_month, amount) VALUES ($1,'2026-10-01',250000), ($1,'2026-11-01',250000)`, id)
+	fmt.Printf("    CONTOH-05 kasbon %s Rp 500.000 — cicilan Okt 250.000 + Nov 250.000 (tanpa jurnal)\n", number)
+}
+
 // payroll gives each sample employee a line in the period through the real
 // single-line regenerate (a placeholder row first, since regenerate replaces an
 // existing line), then reviews it with a note.
@@ -458,6 +488,7 @@ type want struct {
 	leaveCut, alphaCut int64
 	lateCut, halfDay   int64
 	gross, net         int64
+	kasbon             int64
 }
 
 // Expected figures, worked out by hand from Kebijakan HRD and the dev
@@ -471,10 +502,12 @@ type want struct {
 //     costs −30; 6–7 in a row costs −40; manual −10 −10 → 10 → C. The 5 Alpha
 //     days cost 5 allowance days against 4: one day unpaid, 100.000.
 var wants = map[string]want{
-	"CONTOH-01": {100, "A", 1_000_000, 350_000, 500_000, 31 * mealRate, 0, 0, 0, 0, 0, 4_450_000, 4_450_000},
-	"CONTOH-02": {73, "B", 500_000, 0, 0, 31 * mealRate, 0, 0, 0, 21_875, 62_500, 3_100_000, 3_015_625},
-	"CONTOH-03": {48, "C", 0, 0, 0, 27 * mealRate, 4, 500_000, 0, 0, 0, 2_600_000, 2_100_000},
-	"CONTOH-04": {10, "C", 0, 0, 0, 26 * mealRate, 1, 100_000, 100_000, 0, 0, 2_600_000, 2_500_000},
+	"CONTOH-01": {100, "A", 1_000_000, 350_000, 500_000, 31 * mealRate, 0, 0, 0, 0, 0, 4_450_000, 4_450_000, 0},
+	"CONTOH-02": {73, "B", 500_000, 0, 0, 31 * mealRate, 0, 0, 0, 21_875, 62_500, 3_100_000, 3_015_625, 0},
+	"CONTOH-03": {48, "C", 0, 0, 0, 27 * mealRate, 4, 500_000, 0, 0, 0, 2_600_000, 2_100_000, 0},
+	"CONTOH-04": {10, "C", 0, 0, 0, 26 * mealRate, 1, 100_000, 100_000, 0, 0, 2_600_000, 2_500_000, 0},
+	// 05: clean month (Tier A, crew); the October installment of the kasbon.
+	"CONTOH-05": {100, "A", 1_000_000, 350_000, 0, 31 * mealRate, 0, 0, 0, 0, 0, 3_950_000, 3_700_000, 250_000},
 }
 
 func (a *app) verify(lines map[string]pgtype.UUID) {
@@ -484,10 +517,11 @@ func (a *app) verify(lines map[string]pgtype.UUID) {
 		var score pgtype.Int4
 		var grade pgtype.Text
 		var days int32
-		var leave, alpha, late, half, gross, net int64
+		var leave, alpha, late, half, gross, net, kasbon int64
 		must(a.pool.QueryRow(a.ctx, `SELECT performance_score, performance_grade, unpaid_leave_days, unpaid_leave_deduction,
-			alpha_deduction, attendance_cut_deduction, half_day_deduction, gross_pay, net_pay FROM payroll_lines WHERE id=$1`,
-			lines[p.code]).Scan(&score, &grade, &days, &leave, &alpha, &late, &half, &gross, &net))
+			alpha_deduction, attendance_cut_deduction, half_day_deduction, gross_pay, net_pay, kasbon_deduction
+			FROM payroll_lines WHERE id=$1`,
+			lines[p.code]).Scan(&score, &grade, &days, &leave, &alpha, &late, &half, &gross, &net, &kasbon))
 		comp := func(key string) int64 {
 			var v int64
 			_ = a.pool.QueryRow(a.ctx, `SELECT amount FROM payroll_line_components WHERE payroll_line_id=$1 AND wage_component_id=$2`,
@@ -502,6 +536,7 @@ func (a *app) verify(lines map[string]pgtype.UUID) {
 		a.expect("Uang makan (dibayar harian)", w.meal, comp("meal"))
 		a.expect("hari tanpa gaji / potongannya", fmt.Sprintf("%d/%d", w.leaveDays, w.leaveCut), fmt.Sprintf("%d/%d", days, leave))
 		a.expect("bagian Alpha di potongan itu", w.alphaCut, alpha)
+		a.expect("potongan kasbon", w.kasbon, kasbon)
 		a.expect("potongan terlambat", w.lateCut, late)
 		a.expect("potongan setengah hari", w.halfDay, half)
 		a.expect("bruto", w.gross, gross)

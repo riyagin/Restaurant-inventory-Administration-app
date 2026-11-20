@@ -123,19 +123,66 @@ WHERE lr.employee_id = @employee_id
   AND lr.start_date <= @window_to::date
   AND lr.end_date >= @window_from::date;
 
--- ── Payslip: the month's violations ─────────────────────────────────────────
+-- ── Payslip: offense detail ─────────────────────────────────────────────────
 
--- name: ListViolationSummaryForMonth :many
--- The KINERJA block of the payslip: violations in [$2, $3] grouped by offense,
--- in the order they first occurred.
-SELECT COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
-       COUNT(*)::int AS occurrences,
-       SUM(pv.points)::int AS points,
-       MIN(pv.date)::date AS first_date
+-- name: ListViolationDetailsForRange :many
+-- Every violation in [$2, $3], one row each, with the attendance it was judged
+-- on (check-in/out and minutes), for the payslip's per-date offense table.
+SELECT pv.date,
+       COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
+       COALESCE(pp.rule_type, 'manual')::text AS rule_type,
+       pv.points,
+       ar.check_in,
+       ar.check_out,
+       COALESCE(ar.late_minutes, 0)::int AS late_minutes,
+       COALESCE(ar.early_leave_minutes, 0)::int AS early_leave_minutes,
+       COALESCE(ar.half_day_lost_minutes, 0)::int AS half_day_lost_minutes
 FROM performance_violations pv
 LEFT JOIN performance_policies pp ON pp.id = pv.policy_id
+LEFT JOIN attendance_records ar ON ar.id = pv.attendance_record_id
 WHERE pv.employee_id = $1
   AND pv.date >= $2
   AND pv.date <= $3
-GROUP BY 1
-ORDER BY first_date, label;
+ORDER BY pv.date, pv.points DESC;
+
+-- name: ListHalfDaysForRange :many
+-- Half-day days in [$2, $3]: what payroll's half_day_deduction is made of.
+SELECT date, half_day_type, half_day_lost_minutes, check_in, check_out
+FROM attendance_records
+WHERE employee_id = $1
+  AND date >= $2
+  AND date <= $3
+  AND is_half_day
+ORDER BY date;
+
+-- name: ListPayslipKasbons :many
+-- The kasbon a payroll line repays, for the payslip: what this line deducts from
+-- each kasbon and what is still owed after it. On a closed period the installments
+-- are linked to the line; on an open one they are the processed kasbon's pending
+-- installments due by the period month (the rule payroll generation used).
+-- "remaining" counts installments due after the month, so an old slip keeps
+-- showing the balance as it stood then.
+WITH on_line AS (
+  SELECT ki.kasbon_id, ki.amount
+  FROM kasbon_installments ki
+  WHERE ki.payroll_line_id = $1
+  UNION ALL
+  SELECT ki.kasbon_id, ki.amount
+  FROM kasbon_installments ki
+  JOIN kasbons k ON k.id = ki.kasbon_id
+  WHERE k.employee_id = $2
+    AND k.status = 'processed'
+    AND ki.status = 'pending'
+    AND ki.payroll_line_id IS NULL
+    AND ki.due_month <= $3
+    AND NOT EXISTS (SELECT 1 FROM kasbon_installments z WHERE z.payroll_line_id = $1)
+)
+SELECT k.kasbon_number,
+       k.amount AS kasbon_amount,
+       SUM(o.amount)::bigint AS deducted,
+       COALESCE((SELECT SUM(x.amount) FROM kasbon_installments x
+                 WHERE x.kasbon_id = k.id AND x.due_month > $3), 0)::bigint AS remaining
+FROM on_line o
+JOIN kasbons k ON k.id = o.kasbon_id
+GROUP BY k.id, k.kasbon_number, k.amount
+ORDER BY k.kasbon_number;

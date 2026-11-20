@@ -282,6 +282,57 @@ func (q *Queries) ListGradeComponentPercents(ctx context.Context) ([]*Performanc
 	return items, nil
 }
 
+const listHalfDaysForRange = `-- name: ListHalfDaysForRange :many
+SELECT date, half_day_type, half_day_lost_minutes, check_in, check_out
+FROM attendance_records
+WHERE employee_id = $1
+  AND date >= $2
+  AND date <= $3
+  AND is_half_day
+ORDER BY date
+`
+
+type ListHalfDaysForRangeParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	Date       pgtype.Date `json:"date"`
+	Date_2     pgtype.Date `json:"date_2"`
+}
+
+type ListHalfDaysForRangeRow struct {
+	Date               pgtype.Date        `json:"date"`
+	HalfDayType        pgtype.Text        `json:"half_day_type"`
+	HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
+	CheckIn            pgtype.Timestamptz `json:"check_in"`
+	CheckOut           pgtype.Timestamptz `json:"check_out"`
+}
+
+// Half-day days in [$2, $3]: what payroll's half_day_deduction is made of.
+func (q *Queries) ListHalfDaysForRange(ctx context.Context, arg *ListHalfDaysForRangeParams) ([]*ListHalfDaysForRangeRow, error) {
+	rows, err := q.db.Query(ctx, listHalfDaysForRange, arg.EmployeeID, arg.Date, arg.Date_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListHalfDaysForRangeRow
+	for rows.Next() {
+		var i ListHalfDaysForRangeRow
+		if err := rows.Scan(
+			&i.Date,
+			&i.HalfDayType,
+			&i.HalfDayLostMinutes,
+			&i.CheckIn,
+			&i.CheckOut,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listKasbonPolicyChecks = `-- name: ListKasbonPolicyChecks :many
 SELECT id, score_at_request, approval_track FROM kasbons
 WHERE approval_track IS NOT NULL
@@ -373,51 +424,137 @@ func (q *Queries) ListLeaveTypeDoctorNoteFlags(ctx context.Context) ([]*ListLeav
 	return items, nil
 }
 
-const listViolationSummaryForMonth = `-- name: ListViolationSummaryForMonth :many
+const listPayslipKasbons = `-- name: ListPayslipKasbons :many
+WITH on_line AS (
+  SELECT ki.kasbon_id, ki.amount
+  FROM kasbon_installments ki
+  WHERE ki.payroll_line_id = $1
+  UNION ALL
+  SELECT ki.kasbon_id, ki.amount
+  FROM kasbon_installments ki
+  JOIN kasbons k ON k.id = ki.kasbon_id
+  WHERE k.employee_id = $2
+    AND k.status = 'processed'
+    AND ki.status = 'pending'
+    AND ki.payroll_line_id IS NULL
+    AND ki.due_month <= $3
+    AND NOT EXISTS (SELECT 1 FROM kasbon_installments z WHERE z.payroll_line_id = $1)
+)
+SELECT k.kasbon_number,
+       k.amount AS kasbon_amount,
+       SUM(o.amount)::bigint AS deducted,
+       COALESCE((SELECT SUM(x.amount) FROM kasbon_installments x
+                 WHERE x.kasbon_id = k.id AND x.due_month > $3), 0)::bigint AS remaining
+FROM on_line o
+JOIN kasbons k ON k.id = o.kasbon_id
+GROUP BY k.id, k.kasbon_number, k.amount
+ORDER BY k.kasbon_number
+`
 
-SELECT COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
-       COUNT(*)::int AS occurrences,
-       SUM(pv.points)::int AS points,
-       MIN(pv.date)::date AS first_date
+type ListPayslipKasbonsParams struct {
+	PayrollLineID pgtype.UUID `json:"payroll_line_id"`
+	EmployeeID    pgtype.UUID `json:"employee_id"`
+	DueMonth      pgtype.Date `json:"due_month"`
+}
+
+type ListPayslipKasbonsRow struct {
+	KasbonNumber string `json:"kasbon_number"`
+	KasbonAmount int64  `json:"kasbon_amount"`
+	Deducted     int64  `json:"deducted"`
+	Remaining    int64  `json:"remaining"`
+}
+
+// The kasbon a payroll line repays, for the payslip: what this line deducts from
+// each kasbon and what is still owed after it. On a closed period the installments
+// are linked to the line; on an open one they are the processed kasbon's pending
+// installments due by the period month (the rule payroll generation used).
+// "remaining" counts installments due after the month, so an old slip keeps
+// showing the balance as it stood then.
+func (q *Queries) ListPayslipKasbons(ctx context.Context, arg *ListPayslipKasbonsParams) ([]*ListPayslipKasbonsRow, error) {
+	rows, err := q.db.Query(ctx, listPayslipKasbons, arg.PayrollLineID, arg.EmployeeID, arg.DueMonth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListPayslipKasbonsRow
+	for rows.Next() {
+		var i ListPayslipKasbonsRow
+		if err := rows.Scan(
+			&i.KasbonNumber,
+			&i.KasbonAmount,
+			&i.Deducted,
+			&i.Remaining,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listViolationDetailsForRange = `-- name: ListViolationDetailsForRange :many
+
+SELECT pv.date,
+       COALESCE(pp.name, NULLIF(pv.note, ''), 'Pelanggaran')::text AS label,
+       COALESCE(pp.rule_type, 'manual')::text AS rule_type,
+       pv.points,
+       ar.check_in,
+       ar.check_out,
+       COALESCE(ar.late_minutes, 0)::int AS late_minutes,
+       COALESCE(ar.early_leave_minutes, 0)::int AS early_leave_minutes,
+       COALESCE(ar.half_day_lost_minutes, 0)::int AS half_day_lost_minutes
 FROM performance_violations pv
 LEFT JOIN performance_policies pp ON pp.id = pv.policy_id
+LEFT JOIN attendance_records ar ON ar.id = pv.attendance_record_id
 WHERE pv.employee_id = $1
   AND pv.date >= $2
   AND pv.date <= $3
-GROUP BY 1
-ORDER BY first_date, label
+ORDER BY pv.date, pv.points DESC
 `
 
-type ListViolationSummaryForMonthParams struct {
+type ListViolationDetailsForRangeParams struct {
 	EmployeeID pgtype.UUID `json:"employee_id"`
 	Date       pgtype.Date `json:"date"`
 	Date_2     pgtype.Date `json:"date_2"`
 }
 
-type ListViolationSummaryForMonthRow struct {
-	Label       string      `json:"label"`
-	Occurrences int32       `json:"occurrences"`
-	Points      int32       `json:"points"`
-	FirstDate   pgtype.Date `json:"first_date"`
+type ListViolationDetailsForRangeRow struct {
+	Date               pgtype.Date        `json:"date"`
+	Label              string             `json:"label"`
+	RuleType           string             `json:"rule_type"`
+	Points             int32              `json:"points"`
+	CheckIn            pgtype.Timestamptz `json:"check_in"`
+	CheckOut           pgtype.Timestamptz `json:"check_out"`
+	LateMinutes        int32              `json:"late_minutes"`
+	EarlyLeaveMinutes  int32              `json:"early_leave_minutes"`
+	HalfDayLostMinutes int32              `json:"half_day_lost_minutes"`
 }
 
-// ── Payslip: the month's violations ─────────────────────────────────────────
-// The KINERJA block of the payslip: violations in [$2, $3] grouped by offense,
-// in the order they first occurred.
-func (q *Queries) ListViolationSummaryForMonth(ctx context.Context, arg *ListViolationSummaryForMonthParams) ([]*ListViolationSummaryForMonthRow, error) {
-	rows, err := q.db.Query(ctx, listViolationSummaryForMonth, arg.EmployeeID, arg.Date, arg.Date_2)
+// ── Payslip: offense detail ─────────────────────────────────────────────────
+// Every violation in [$2, $3], one row each, with the attendance it was judged
+// on (check-in/out and minutes), for the payslip's per-date offense table.
+func (q *Queries) ListViolationDetailsForRange(ctx context.Context, arg *ListViolationDetailsForRangeParams) ([]*ListViolationDetailsForRangeRow, error) {
+	rows, err := q.db.Query(ctx, listViolationDetailsForRange, arg.EmployeeID, arg.Date, arg.Date_2)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []*ListViolationSummaryForMonthRow
+	var items []*ListViolationDetailsForRangeRow
 	for rows.Next() {
-		var i ListViolationSummaryForMonthRow
+		var i ListViolationDetailsForRangeRow
 		if err := rows.Scan(
+			&i.Date,
 			&i.Label,
-			&i.Occurrences,
+			&i.RuleType,
 			&i.Points,
-			&i.FirstDate,
+			&i.CheckIn,
+			&i.CheckOut,
+			&i.LateMinutes,
+			&i.EarlyLeaveMinutes,
+			&i.HalfDayLostMinutes,
 		); err != nil {
 			return nil, err
 		}

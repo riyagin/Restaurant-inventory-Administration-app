@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -220,10 +221,29 @@ func LeavePayCutDayWeight(d time.Time, unpaid bool) int {
 	return 1
 }
 
+// LeavePayCutDay is one leave day that costs pay.
+type LeavePayCutDay struct {
+	Date   time.Time
+	Unpaid bool // unpaid leave; false = sick leave without a doctor's note
+	Weight int  // days' pay it costs (2 for unpaid leave on a weekend)
+	Amount int64
+}
+
 // LeavePayCut counts the approved leave days in [from, to] that cost pay and
 // prices them at dailyRate. days is the number of leave days (what the payslip
 // shows); deduction already includes the weekend weight.
 func LeavePayCut(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time, dailyRate int64) (int, int64, error) {
+	list, err := LeavePayCutDays(ctx, qtx, employeeID, from, to, dailyRate)
+	var total int64
+	for _, d := range list {
+		total += d.Amount
+	}
+	return len(list), total, err
+}
+
+// LeavePayCutDays is LeavePayCut day by day, in date order (the payslip lists
+// them). LeavePayCut sums it, so the two cannot disagree.
+func LeavePayCutDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time, dailyRate int64) ([]LeavePayCutDay, error) {
 	from, to = dateOnlyUTC(from), dateOnlyUTC(to)
 	rows, err := qtx.ListApprovedPayCutLeaveOverlapping(ctx, &db.ListApprovedPayCutLeaveOverlappingParams{
 		EmployeeID: employeeID,
@@ -231,15 +251,15 @@ func LeavePayCut(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, f
 		WindowTo:   pgtype.Date{Time: to, Valid: true},
 	})
 	if err != nil || len(rows) == 0 {
-		return 0, 0, err
+		return nil, err
 	}
 	workDays := LeaveScheduleForBranch(ctx, qtx, branchForEmployee(ctx, qtx, employeeID))
 	holidays, err := HolidaySetInRange(ctx, qtx, from, to)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	seen := map[string]bool{}
-	days, weight := 0, 0
+	var out []LeavePayCutDay
 	for _, r := range rows {
 		s, e := dateOnlyUTC(r.StartDate.Time), dateOnlyUTC(r.EndDate.Time)
 		if s.Before(from) {
@@ -254,11 +274,12 @@ func LeavePayCut(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, f
 				continue
 			}
 			seen[key] = true
-			days++
-			weight += LeavePayCutDayWeight(d, !r.IsPaid)
+			w := LeavePayCutDayWeight(d, !r.IsPaid)
+			out = append(out, LeavePayCutDay{Date: d, Unpaid: !r.IsPaid, Weight: w, Amount: int64(w) * dailyRate})
 		}
 	}
-	return days, int64(weight) * dailyRate, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Date.Before(out[j].Date) })
+	return out, nil
 }
 
 // ── Insentif Libur Nasional ──────────────────────────────────────────────────
