@@ -300,7 +300,7 @@ export default function PerformanceDashboard() {
   const scMissing = (sc?.branches || []).filter(b => !b.pool && b.member_count > 0);
   const scShownTotal = rows.reduce((t, r) => t + (scByEmployee[r.id]?.hasPool ? scByEmployee[r.id].amount : 0), 0);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [month, branchId]);
+  useEffect(() => { load(); }, [month, branchId]); // eslint-disable-line react-hooks/exhaustive-deps -- reload on filter change only
 
   const handleEvaluate = async () => {
     setEvaluating(true);

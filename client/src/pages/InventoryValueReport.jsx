@@ -185,7 +185,7 @@ export default function InventoryValueReport() {
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                           <thead>
                             <tr>
-                              {['Kode', 'Barang', 'Jumlah', 'Satuan', 'Nilai', 'Tanggal', '% Gudang'].map((h, i) => (
+                              {['Kode', 'Barang', 'Jumlah', 'Satuan', 'Nilai', 'Tanggal', '% Gudang'].map((h) => (
                                 <th key={h} style={{
                                   textAlign: ['Nilai', '% Gudang', 'Jumlah'].includes(h) ? 'right' : 'left',
                                   padding: '0.3rem 0.6rem', color: '#888', fontWeight: 600, borderBottom: '1px solid #e8e8e8',

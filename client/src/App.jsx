@@ -552,9 +552,9 @@ export default function App() {
                 <Route path="/daily-purchases" element={<RequireCore><DailyPurchases /></RequireCore>} />
                 <Route path="/daily-purchases/new" element={<RequireCore><DailyPurchaseForm /></RequireCore>} />
                 <Route path="/templates" element={<RequireCore><Templates /></RequireCore>} />
-                {/* The three template kinds used to be three pages. The old
-                    paths stay as redirects: they are linked from the pages that
-                    consume the templates, and from bookmarks. */}
+                {/* Per-kind template paths redirect to the shared Templates
+                    page: they are linked from the pages that consume the
+                    templates, and from bookmarks. */}
                 <Route path="/daily-purchase-templates" element={<Navigate to="/templates?tab=pembelanjaan" replace />} />
                 <Route path="/invoice-templates" element={<Navigate to="/templates?tab=invoice" replace />} />
                 <Route path="/dispatch-templates" element={<Navigate to="/templates?tab=pengiriman" replace />} />

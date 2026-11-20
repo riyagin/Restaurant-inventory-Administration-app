@@ -21,11 +21,10 @@ const api = axios.create({ baseURL: apiBaseUrl });
 /**
  * URL for an uploaded file (receipt photo, employee photo, company logo).
  *
- * The database stores a **bare filename**, not a path — `invoice-<id>-<ts>.jpg`.
- * Pasting that straight onto an origin produced `http://host` + `invoice-…jpg`
- * with no separator and no `/uploads/` segment, which is why invoice photos
- * uploaded fine and then never appeared. Everything that renders an upload
- * should go through here rather than assembling the URL by hand.
+ * The database stores a **bare filename**, not a path — `invoice-<id>-<ts>.jpg`
+ * — so it needs the `/uploads/` segment and a separator before it resolves.
+ * Everything that renders an upload should go through here rather than
+ * assembling the URL by hand.
  *
  * The host is derived from the API base so it follows /config.json: same-origin
  * in production (where nginx serves /uploads/), and the dev server's origin

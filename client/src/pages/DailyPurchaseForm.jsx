@@ -8,12 +8,9 @@ import CurrencyInput from '../components/CurrencyInput';
 import SearchSelect from '../components/SearchSelect';
 
 import { todayWIB } from '../time';
-// Recording one shopping run, on its own page.
-//
-// It used to be a panel that unfolded above the list, which meant the list
-// re-rendered under every keystroke and a half-filled run was lost the moment
-// anyone touched a filter. A shopping run has a header, a variable number of
-// lines and a running total — that is a page, not a panel.
+// Recording one shopping run, on its own page: a run has a header, a variable
+// number of lines and a running total, and a half-filled run must survive
+// anyone touching the list's filters.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();

@@ -22,7 +22,7 @@ const SHORTCUTS = [
 
 const DAYS_SHOWN = 7;
 
-const iso = (d) => d.toISOString().slice(0, 10);
+
 const daysAgo = (n) => shiftTodayWIB(-n);
 
 const fmtDay = (s) => {

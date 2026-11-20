@@ -41,9 +41,6 @@ export default function Enumerations() {
   const srcUnits = srcItem?.units ?? [];
   const outUnits = outItem?.units ?? [];
 
-  // Preview: cost per output unit
-  const srcUnitName = srcUnits[Number(form.source_unit_idx)]?.name ?? '';
-  const outUnitName = outUnits[Number(form.output_unit_idx)]?.name ?? '';
 
   const handleSubmit = async (e) => {
     e.preventDefault();

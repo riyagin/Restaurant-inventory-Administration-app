@@ -222,7 +222,7 @@ export default function KasbonDashboard() {
       {/* Ongoing (approved/processed, not resolved) */}
       <section>
         <h3 style={sectionH}>Kasbon Berjalan</h3>
-        <KasbonTable rows={ongoing} loading={loading} emptyText="Tidak ada kasbon berjalan." showInstallments />
+        <KasbonTable rows={ongoing} loading={loading} emptyText="Tidak ada kasbon berjalan." />
       </section>
 
       {approval && <ApprovalModal kasbon={approval} onClose={() => setApproval(null)} onDone={() => { setApproval(null); load(); }} />}
@@ -242,7 +242,7 @@ function CancelBtn({ k, onDone }) {
   return <button className="btn btn-sm btn-link" style={{ marginLeft: '0.35rem' }} onClick={cancel}>Batalkan</button>;
 }
 
-function KasbonTable({ rows, loading, emptyText, renderActions, extraActions, showInstallments }) {
+function KasbonTable({ rows, loading, emptyText, renderActions, extraActions }) {
   return (
     <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
       <table style={{ width: '100%' }}>

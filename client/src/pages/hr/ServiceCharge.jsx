@@ -237,7 +237,7 @@ export default function ServiceCharge() {
       .catch(err => { setData(null); setError(err.response?.data?.error || 'Gagal memuat data service charge'); })
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [month]);
+  useEffect(() => { load(); }, [month]); // eslint-disable-line react-hooks/exhaustive-deps -- reload on filter change only
 
   const saveComponent = async () => {
     try { await setServiceChargeComponent(pickComponent); load(); }

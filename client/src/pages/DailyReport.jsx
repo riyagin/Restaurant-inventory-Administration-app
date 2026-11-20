@@ -5,16 +5,10 @@ import { getDailyReport, getBranches } from '../api';
 import { fmtTime as fmtWIBTime, todayWIB } from '../time';
 // Laporan Harian — the day at a glance, with the paperwork underneath it.
 //
-// This page used to open with five stat tiles and then five long tables of
-// individual documents. Everything was there and nothing was answered: "how did
-// we do today" needed you to read every row and add up in your head, and the
-// per-branch and per-division split — the two cuts anybody actually asks about —
-// were not derivable from the page at all.
-//
-// So the landing view is now the overview: what each branch earned and spent,
-// and which divisions carried the revenue. The document tables are still here,
-// unchanged, one collapse away — they are what you open when the overview shows
-// something surprising, which is the order those two questions come in.
+// The landing view answers "how did we do today": what each branch earned and
+// spent, and which divisions carried the revenue. The document tables sit one
+// collapse away — they are what you open when the overview shows something
+// surprising.
 //
 // The overview figures come from the journal (see handler.dailyPerformance), not
 // from summing the tables below. The tables are source rows, and summing them

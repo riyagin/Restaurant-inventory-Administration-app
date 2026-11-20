@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getAccounts, getBranches, getDivisions, getSales, createSale, deleteSale } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
 
@@ -108,7 +108,7 @@ export default function Sales() {
           >‹</button>
 
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: `repeat(${Math.min(cashAccounts.length, CAROUSEL_PAGE)}, 1fr)`, gap: '0.75rem', overflow: 'hidden' }}>
-            {visibleAccounts.map((a, i) => (
+            {visibleAccounts.map((a) => (
               <div key={a.id} className={`stat-card${Number(a.balance) < 0 ? ' warning' : ''}`} style={{ margin: 0 }}>
                 <div className="label" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</div>
                 <div className="value" style={{ fontSize: '1.1rem', color: Number(a.balance) < 0 ? '#e67e22' : '#1a1a2e' }}>

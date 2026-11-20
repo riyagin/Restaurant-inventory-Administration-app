@@ -151,12 +151,6 @@ export default function SalesImport() {
     }
     finalDiscRows.push(...discRows);
     setDiscMappings(finalDiscRows);
-
-    // The delivery fee account is assigned on parse and does not depend on the
-    // branch. It used to be auto-filled here from the lain-lain division's
-    // *expense* account, which is the wrong side of the ledger: the fee is
-    // revenue, so filling an expense account meant crediting it and driving it
-    // negative.
   };
 
   const handleFileChange = async (file) => {
@@ -190,9 +184,7 @@ export default function SalesImport() {
       const totalBiaya = Math.round(data.totalBiaya || 0);
       setDiscMappings(totalDisc > 0 ? [{ division_id: null, label: 'Diskon', amount: totalDisc, account_id: '' }] : []);
       // Auto-assign "Pendapatan Ongkir DO"; the operator can still change it in
-      // the dropdown. Compared with Number() because account_number arrives as a
-      // number — the old `=== '59999'` string comparison never matched, so this
-      // never actually defaulted to anything.
+      // the dropdown. account_number arrives as a number, so compare numerically.
       const defaultBiayaId =
         accounts.find(a => Number(a.account_number) === DELIVERY_FEE_ACCOUNT_NUMBER)?.id || '';
       setBiayaMappings(totalBiaya > 0 ? [{ label: 'Biaya Tambahan', amount: totalBiaya, account_id: defaultBiayaId }] : []);
@@ -226,11 +218,8 @@ export default function SalesImport() {
   // Revenue is net-based (gross - disc - commission), so discount is already embedded.
   //
   // Balance: net_revenue = cash_received. "Biaya Tambahan" is deliberately NOT in
-  // this equation. The rule used to be `revenue === cash + biaya`, which treats
-  // the fee as withheld from what the business receives — but the POS excludes it
-  // from Net *and* from the payment breakdown, so it sits outside both sides.
-  // Across the 153 existing imports carrying a fee, that old rule matched exactly
-  // zero of them, so the badge read "tidak seimbang" on every delivery day.
+  // this equation: the POS excludes it from Net *and* from the payment
+  // breakdown, so it sits outside both sides.
   const balanced = totalRevenue > 0 && totalRevenue === totalCash;
 
   const updateCash       = (i, field, val) => setCashMappings(ms => ms.map((m, idx) => idx === i ? { ...m, [field]: val } : m));
@@ -332,7 +321,7 @@ export default function SalesImport() {
     try {
       const dates = parsed.dates || [{ date: parsed.date, totalNet: totalRevenue, totalGross: parsed.totalGross, totalDisc: parsed.totalDisc || 0, totalBiaya: parsed.totalBiaya || 0 }];
       const grandNet   = dates.reduce((s, d) => s + d.totalNet, 0) || 1;
-      const grandCash  = dates.reduce((s, d) => s + d.totalNet, 0) || 1; // same as grandNet
+
       const grandDisc  = dates.reduce((s, d) => s + d.totalDisc, 0) || 1;
       const grandBiaya = dates.reduce((s, d) => s + d.totalBiaya, 0) || 1;
 
@@ -345,9 +334,9 @@ export default function SalesImport() {
         const biayaRatio = grandBiaya > 0 ? d.totalBiaya / grandBiaya : 1 / dates.length;
 
         // For the last date, use remainder to avoid rounding drift
-        const rev = revMappings.map((m, mi) => {
+        const rev = revMappings.map(m => {
           const amt = isLast
-            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd, di) => s + scale(m.amount, grandNet > 0 ? dd.totalNet / grandNet : 1 / dates.length), 0)
+            ? Number(m.amount) - dates.slice(0, -1).reduce((s, dd) => s + scale(m.amount, grandNet > 0 ? dd.totalNet / grandNet : 1 / dates.length), 0)
             : scale(m.amount, netRatio);
           return { label: m.label, account_id: m.account_id, amount: amt };
         }).filter(m => m.amount > 0);

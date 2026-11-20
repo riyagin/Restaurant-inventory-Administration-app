@@ -4,7 +4,7 @@ import { getExpenseSummaryReport } from '../api';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v);
-const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID') : '—';
+
 
 export default function ExpenseSummary() {
   const [groups, setGroups]   = useState([]);

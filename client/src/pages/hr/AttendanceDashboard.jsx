@@ -295,7 +295,7 @@ export default function AttendanceDashboard() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [date, branchId, anomalyOnly]);
+  useEffect(() => { load(); }, [date, branchId, anomalyOnly]); // eslint-disable-line react-hooks/exhaustive-deps -- reload on filter change only
 
   const handleReconcile = async () => {
     setReconciling(true);

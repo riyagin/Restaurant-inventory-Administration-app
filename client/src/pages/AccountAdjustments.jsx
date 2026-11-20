@@ -34,6 +34,23 @@ function AccountBadge({ type, number, name }) {
   );
 }
 
+function AccountSelect({ groups, value, onChange, exclude, placeholder = '— Pilih akun —' }) {
+  return (
+    <select value={value} onChange={onChange} required>
+      <option value="">{placeholder}</option>
+      {Object.entries(groups).map(([type, accts]) => (
+        <optgroup key={type} label={TYPE_LABEL[type] || type}>
+          {accts.filter(a => a.id !== exclude).map(a => (
+            <option key={a.id} value={a.id}>
+              {a.account_number ? `${a.account_number} · ` : ''}{a.name}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
+
 export default function AccountAdjustments() {
   const [accounts, setAccounts]           = useState([]);
   const [adjustments, setAdjustments]     = useState([]);
@@ -78,20 +95,6 @@ export default function AccountAdjustments() {
     return g;
   }, {});
 
-  const AccountSelect = ({ value, onChange, exclude, placeholder = '— Pilih akun —' }) => (
-    <select value={value} onChange={onChange} required>
-      <option value="">{placeholder}</option>
-      {Object.entries(groupedAccounts).map(([type, accts]) => (
-        <optgroup key={type} label={TYPE_LABEL[type] || type}>
-          {accts.filter(a => a.id !== exclude).map(a => (
-            <option key={a.id} value={a.id}>
-              {a.account_number ? `${a.account_number} · ` : ''}{a.name}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
-  );
 
   const handleAdjustSubmit = async (e) => {
     e.preventDefault();
@@ -203,7 +206,7 @@ export default function AccountAdjustments() {
             <form onSubmit={handleAdjustSubmit}>
               <div className="form-group">
                 <label>Akun</label>
-                <AccountSelect
+                <AccountSelect groups={groupedAccounts}
                   value={form.account_id}
                   onChange={e => setForm(f => ({ ...f, account_id: e.target.value }))}
                 />
@@ -271,7 +274,7 @@ export default function AccountAdjustments() {
             <form onSubmit={handleTransferSubmit}>
               <div className="form-group">
                 <label>Dari Akun (Sumber)</label>
-                <AccountSelect
+                <AccountSelect groups={groupedAccounts}
                   value={transfer.from_account_id}
                   onChange={e => setTransfer(f => ({ ...f, from_account_id: e.target.value }))}
                   exclude={transfer.to_account_id}
@@ -289,7 +292,7 @@ export default function AccountAdjustments() {
 
               <div className="form-group">
                 <label>Ke Akun (Tujuan)</label>
-                <AccountSelect
+                <AccountSelect groups={groupedAccounts}
                   value={transfer.to_account_id}
                   onChange={e => setTransfer(f => ({ ...f, to_account_id: e.target.value }))}
                   exclude={transfer.from_account_id}

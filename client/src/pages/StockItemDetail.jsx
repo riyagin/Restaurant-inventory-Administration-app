@@ -400,9 +400,9 @@ export default function StockItemDetail() {
             </table>
           </Card>
 
-          {/* Per-dispatch detail. These lines used to sit on the Pembelian tab,
-              because a dispatch books its cost onto an auto-created expense
-              invoice — they belong here, next to the usage they explain. */}
+          {/* Per-dispatch detail. A dispatch books its cost onto an
+              auto-created expense invoice, but these lines belong here, next
+              to the usage they explain, not on the Pembelian tab. */}
           <Card title={`Riwayat Pengeluaran (${dispatches.length})`}>
             <table>
               <thead>

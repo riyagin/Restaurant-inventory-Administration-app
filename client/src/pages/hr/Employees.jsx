@@ -77,6 +77,21 @@ function EmploymentBadge({ type, contractEnd }) {
   );
 }
 
+function SortHeader({ col, sort, dir, onSort, children }) {
+  return (
+    <th
+      onClick={() => onSort(col)}
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      title="Klik untuk mengurutkan"
+    >
+      {children}
+      <span style={{ color: sort === col ? '#1967d2' : '#c3c8d2', marginLeft: 4 }}>
+        {sort === col ? (dir === 'asc' ? '▲' : '▼') : '↕'}
+      </span>
+    </th>
+  );
+}
+
 export default function Employees() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -123,7 +138,7 @@ export default function Employees() {
     getContractAlerts().then(r => setAlerts(r.data?.data || [])).catch(() => setAlerts([]));
   }, []);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [q, branchId, divisionId, positionId, status, employmentType, face, sort, dir, page]);
+  useEffect(() => { load(); }, [q, branchId, divisionId, positionId, status, employmentType, face, sort, dir, page]); // eslint-disable-line react-hooks/exhaustive-deps -- reload on filter change only
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
@@ -138,18 +153,6 @@ export default function Employees() {
     }
   };
 
-  const SortHeader = ({ col, children }) => (
-    <th
-      onClick={() => toggleSort(col)}
-      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
-      title="Klik untuk mengurutkan"
-    >
-      {children}
-      <span style={{ color: sort === col ? '#1967d2' : '#c3c8d2', marginLeft: 4 }}>
-        {sort === col ? (dir === 'asc' ? '▲' : '▼') : '↕'}
-      </span>
-    </th>
-  );
 
   return (
     <>
@@ -261,13 +264,13 @@ export default function Employees() {
           <thead>
             <tr>
               <th>Foto</th>
-              <SortHeader col="code">Kode</SortHeader>
-              <SortHeader col="name">Nama</SortHeader>
+              <SortHeader sort={sort} dir={dir} onSort={toggleSort} col="code">Kode</SortHeader>
+              <SortHeader sort={sort} dir={dir} onSort={toggleSort} col="name">Nama</SortHeader>
               <th>Jabatan</th>
               <th>Cabang</th>
               <th>Divisi</th>
               <th>Tipe</th>
-              <SortHeader col="join_date">Tgl Bergabung</SortHeader>
+              <SortHeader sort={sort} dir={dir} onSort={toggleSort} col="join_date">Tgl Bergabung</SortHeader>
               <th>Status</th>
               <th>Wajah</th>
             </tr>

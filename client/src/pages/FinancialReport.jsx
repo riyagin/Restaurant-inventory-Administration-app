@@ -29,12 +29,10 @@ function buildTree(accounts) {
 
 // A parent's total is its own postings plus its children's.
 //
-// The children used to be the whole story, because the only parents that existed
-// were pure groupings that never held a balance (Utang Usaha 20100, the type
-// roots). Expense categories broke that: a division's expense account now has
-// category children AND its own direct postings — dispatch usage debits the
-// parent, since consumed stock belongs to no purchase category. Summing only the
-// children would drop that spending out of the report entirely.
+// A division's expense account has expense-category children AND its own direct
+// postings — dispatch usage debits the parent, since consumed stock belongs to
+// no purchase category. Summing only the children would drop that spending out
+// of the report entirely.
 //
 // Adding the parent's own balance is a no-op for the pure groupings, which carry
 // zero by design.

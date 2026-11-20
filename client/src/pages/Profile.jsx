@@ -4,7 +4,7 @@ import { updateUser } from '../api';
 const emptyPw = { old_password: '', password: '', confirm: '' };
 
 export default function Profile() {
-  const [user, setUser] = useState(() => {
+  const [user] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}'); } catch { return {}; }
   });
 
@@ -32,7 +32,6 @@ export default function Profile() {
     }
   };
 
-  const fmt = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '—';
 
   return (
     <>

@@ -17,10 +17,8 @@ import { todayWIB } from '../time';
 // warehouse; and settled the moment they are recorded, so no payment status. One
 // row is one journal entry: Dr the category's sub-account, Cr whatever paid it.
 //
-// The breakdown down the right-hand side is the reason the screen exists. All of
-// this used to land on a single "Beban - <cabang> / Operasional" account, where
-// the total was visible and the composition was not — a branch's overhead being
-// high told you nothing about which bill had moved.
+// The breakdown down the right-hand side is the reason the screen exists: a
+// branch's overhead total alone does not tell you which bill moved.
 
 const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 

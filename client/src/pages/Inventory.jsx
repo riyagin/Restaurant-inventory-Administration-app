@@ -46,10 +46,9 @@ const SOURCE_LABEL = {
 
 // One lot's life, not the item's.
 //
-// The old panel showed every movement of the item in that warehouse, so the
-// deliveries either side of this one were mixed into the same list and you could
-// not tell which usage came out of which batch. This shows the arrival, the
-// usages that actually consumed *this* lot, and whatever is still on the shelf.
+// Shows the arrival, the usages that actually consumed *this* lot, and whatever
+// is still on the shelf — not every movement of the item in the warehouse, which
+// would mix in neighbouring deliveries.
 function LotHistoryPanel({ lotId }) {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
