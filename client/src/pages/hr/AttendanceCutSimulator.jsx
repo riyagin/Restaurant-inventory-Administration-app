@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import CurrencyInput from '../../components/CurrencyInput';
 import { getShifts, getWorkSchedules, simulateAttendanceCut } from '../../api';
+import { fmtIDR } from '../../format';
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const hm = (s) => (s ? String(s).slice(0, 5) : '');
 const hours = (m) => (Number(m || 0) / 60).toLocaleString('id-ID', { maximumFractionDigits: 2 });
 

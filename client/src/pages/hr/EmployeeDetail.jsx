@@ -19,9 +19,9 @@ import { BackdatedBadge } from './LeaveRuleWidgets';
 import { UnusedChip, UsedDaysCell } from './LeaveBalancesPanel';
 
 import { fmtDateTime, todayWIB, ymd } from '../../time';
+import { fmtIDR } from '../../format';
 
 const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Tunjangan Kesehatan', welfare_fund: 'Dana Kesejahteraan' };
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Monthly projection: base + fixed allowances − fixed deductions (bonuses excluded — variable per period).
 // Per-hari-hadir components carry a daily rate, so project them across the structure's expected working days.

@@ -10,6 +10,7 @@ import { OP_KINDS, kindOf, NAMED_OP_CATEGORIES } from './operationalKinds';
 import AnnualRentPanel from './AnnualRentPanel';
 
 import { shiftMonthsWIB, todayWIB } from '../time';
+import { rp } from '../format';
 // Recording one standing bill.
 //
 // A page per kind rather than one form with a category dropdown, because these
@@ -24,7 +25,6 @@ import { shiftMonthsWIB, todayWIB } from '../time';
 // the second, every month-on-month comparison is off by whenever the bill
 // happened to be paid, and a month nobody paid for is invisible.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 
 // Default the period to last month: a bill lands after the month it covers, so

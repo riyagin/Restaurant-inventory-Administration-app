@@ -4,6 +4,7 @@ import {
   getServiceCharge, saveServiceChargePool, deleteServiceChargePool, setServiceChargeComponent,
 } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
+import { fmtIDR } from '../../format';
 
 // Service Charge — set each branch's pot for the month BEFORE evaluation.
 //
@@ -17,7 +18,6 @@ const monthNow = () => {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
 };
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtMonth = (m) => {
   const [y, mo] = m.split('-');
   return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });

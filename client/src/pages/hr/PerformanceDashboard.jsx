@@ -7,6 +7,7 @@ import {
 } from '../../api';
 
 import { todayWIB } from '../../time';
+import { fmtIDR } from '../../format';
 const RULE_LABELS = {
   late: 'Terlambat',
   early_leave: 'Pulang Awal',
@@ -43,7 +44,6 @@ function ScoreBadge({ score }) {
 }
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }) : '-';
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Uang makan (daily_allowance components, paid in cash every day outside
 // payroll) earned in the month, next to base salary, so a review shows what the

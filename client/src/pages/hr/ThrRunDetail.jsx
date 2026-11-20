@@ -5,6 +5,7 @@ import {
   closeThrRun, markThrRunPaid, getPositions, getBranches,
   downloadThrPayslip, downloadThrRunPayslips,
 } from '../../api';
+import { fmtIDR } from '../../format';
 
 // Trigger a browser download from an Axios blob response.
 function saveBlob(data, filename) {
@@ -19,7 +20,6 @@ function saveBlob(data, filename) {
 }
 
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const numVal = (n) => Number(n ?? 0);
 const ratioLabel = (months) => Number(months) >= 12 ? '1 bulan penuh' : `${Number(months)}/12`;

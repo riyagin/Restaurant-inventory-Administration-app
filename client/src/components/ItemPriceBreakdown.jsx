@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getItemPriceHistory } from '../api';
+import { num } from '../format';
 
 const idr = (v) =>
   new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(v) || 0);
-const num = (v) => Number(v ?? 0).toLocaleString('id-ID', { maximumFractionDigits: 3 });
 const fmt = (d) => (d ? new Date(d).toLocaleDateString('id-ID', { dateStyle: 'medium' }) : '—');
 const monthLabel = (m) => {
   if (!m) return '—';

@@ -7,6 +7,7 @@ import { isAdminRole } from '../roles';
 import CurrencyInput from '../components/CurrencyInput';
 
 import { todayWIB } from '../time';
+import { rp } from '../format';
 // Kas Kecil — the daily cash box count, one row per branch.
 //
 // The whole page is one equation made visible:
@@ -16,7 +17,6 @@ import { todayWIB } from '../time';
 // and then the counted closing against it. A gap is real money, so it is shown
 // in red and cannot be saved without an explanation.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 
 export default function PettyCash() {

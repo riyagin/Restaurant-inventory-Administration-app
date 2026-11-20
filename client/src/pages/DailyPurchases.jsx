@@ -4,13 +4,13 @@ import { getDailyPurchases, cancelDailyPurchase, getBranches } from '../api';
 import { getRole } from '../roles';
 
 import { todayWIB } from '../time';
+import { rp } from '../format';
 // The record of what each branch spent out of its cash box.
 //
 // List only — entry lives on its own page. Keeping the form here meant the list
 // re-rendered under every keystroke and a half-filled run was lost the moment
 // anyone touched a filter.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 
 export default function DailyPurchases() {

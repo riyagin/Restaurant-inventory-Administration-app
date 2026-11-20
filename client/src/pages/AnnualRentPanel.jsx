@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOperationalExpense, getAnnualRents } from '../api';
 import CurrencyInput from '../components/CurrencyInput';
+import { rp } from '../format';
 
 // Sewa tahunan — the "Tahunan" tab of the Sewa form.
 //
@@ -14,7 +15,6 @@ import CurrencyInput from '../components/CurrencyInput';
 
 const TERM = 12;
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

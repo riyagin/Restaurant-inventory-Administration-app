@@ -5,6 +5,7 @@ import {
 } from '../../api';
 import KasbonFormModal from './KasbonFormModal';
 import { canApprove, isBranchOperator } from '../../roles';
+import { fmtIDR } from '../../format';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -19,7 +20,6 @@ const STATUS_COLORS = {
   cancelled: { bg: '#eef1f6', color: '#667' },
 };
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 

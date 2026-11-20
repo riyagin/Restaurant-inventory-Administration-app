@@ -7,6 +7,7 @@ import {
 import CurrencyInput from '../../components/CurrencyInput';
 import SearchSelect from '../../components/SearchSelect';
 import { canApprove } from '../../roles';
+import { fmtIDR } from '../../format';
 
 // Tunjangan Kesehatan (formerly "Dana Kesejahteraan" — that name now belongs to
 // the separate retirement fund on the employee page). Each employee has a monthly allowance (wage
@@ -14,7 +15,6 @@ import { canApprove } from '../../roles';
 // allowance; anything above it becomes a kasbon. On payday the unused part of the
 // month moves to the pension fund, which is paid out on resignation.
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fmtMonth = (d) => d ? new Date(d.length === 7 ? `${d}-01` : d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 const todayISO = () => {

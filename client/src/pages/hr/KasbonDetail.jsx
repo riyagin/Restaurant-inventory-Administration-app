@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getKasbon, uploadUrl } from '../../api';
 
 import { fmtDateTime } from '../../time';
+import { fmtIDR } from '../../format';
 
 const STATUS_LABELS = {
   pending: 'Menunggu', approved: 'Disetujui', rejected: 'Ditolak',
@@ -17,7 +18,6 @@ const STATUS_COLORS = {
   cancelled: { bg: '#eef1f6', color: '#667' },
 };
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => fmtDateTime(d, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) || '-';
 const fmtDateOnly = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';

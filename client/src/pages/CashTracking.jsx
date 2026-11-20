@@ -7,6 +7,7 @@ import { getRole } from '../roles';
 import CurrencyInput from '../components/CurrencyInput';
 
 import { todayWIB } from '../time';
+import { rp } from '../format';
 // Pelacakan Kas — the branch till.
 //
 // Not the same money as Kas Kecil, which is why it is not the same page. The
@@ -21,7 +22,6 @@ import { todayWIB } from '../time';
 // drawer, the rest are shown so the day's takings can be checked against what
 // the EDC and the platforms actually settled.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 
 export default function CashTracking() {

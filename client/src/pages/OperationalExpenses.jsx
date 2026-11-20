@@ -11,6 +11,7 @@ import Icon from '../components/Icon';
 import { OP_KINDS } from './operationalKinds';
 
 import { todayWIB } from '../time';
+import { rp } from '../format';
 // Beban Operasional — the standing bills of keeping a branch open.
 //
 // Listrik, air, sewa, iuran keamanan. Not goods, so no items, no units, no
@@ -20,7 +21,6 @@ import { todayWIB } from '../time';
 // The breakdown down the right-hand side is the reason the screen exists: a
 // branch's overhead total alone does not tell you which bill moved.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 
 const monthLabel = (ym) => {
   if (!ym) return '—';

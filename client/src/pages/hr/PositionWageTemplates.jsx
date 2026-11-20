@@ -5,8 +5,8 @@ import {
 } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
 import { todayWIB } from '../../time';
+import { fmtIDR } from '../../format';
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
 
 const TYPE_LABELS = {

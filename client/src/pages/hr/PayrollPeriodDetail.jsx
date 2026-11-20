@@ -11,6 +11,7 @@ import {
 } from '../../api';
 
 import { fmtTime as fmtWIBTime } from '../../time';
+import { fmtIDR } from '../../format';
 // Classify an employee's saved bank into an export bucket.
 function classifyBank(name) {
   const s = (name || '').toLowerCase();
@@ -32,7 +33,6 @@ function saveBlob(data, filename) {
 }
 
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const numVal = (n) => Number(n ?? 0);

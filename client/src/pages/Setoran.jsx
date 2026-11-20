@@ -8,6 +8,7 @@ import { isAdminRole } from '../roles';
 import CurrencyInput from '../components/CurrencyInput';
 
 import { shiftTodayWIB, todayWIB } from '../time';
+import { rp } from '../format';
 // Setoran — cash leaving one place and arriving in another.
 //
 // Two movements share this page because they are the same event: the branch
@@ -16,7 +17,6 @@ import { shiftTodayWIB, todayWIB } from '../time';
 // sensible from/to accounts; both remain editable, because the real world
 // occasionally routes money somewhere the dropdown did not predict.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 
 const TYPES = [

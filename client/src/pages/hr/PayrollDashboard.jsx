@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { getPayrollPeriods, createPayrollPeriod, deletePayrollPeriod } from '../../api';
 
 import { monthWIB } from '../../time';
+import { fmtIDR } from '../../format';
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
 const STATUS_COLORS = {
   open:   { bg: '#fff8e1', color: '#a06800' },
@@ -10,7 +11,6 @@ const STATUS_COLORS = {
   paid:   { bg: '#e6f4ea', color: '#1e7e34' },
 };
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtMonth = (d) => d ? new Date(d).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }) : '-';
 
 function StatusChip({ status }) {

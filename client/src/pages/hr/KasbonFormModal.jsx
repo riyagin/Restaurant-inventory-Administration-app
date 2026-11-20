@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { getEmployees, getAccounts, createKasbon, getKasbonEligibility } from '../../api';
 import CurrencyInput from '../../components/CurrencyInput';
+import { fmtIDR } from '../../format';
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 
 // Furthest a repayment month may fall after the request month — must match the
 // backend's service.MaxRepaymentMonths (server-go/internal/service/kasbon.go).

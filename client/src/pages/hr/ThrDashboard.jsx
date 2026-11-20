@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getThrRuns, createThrRun, deleteThrRun } from '../../api';
 
 import { todayWIB } from '../../time';
+import { fmtIDR } from '../../format';
 const STATUS_LABELS = { open: 'Terbuka', closed: 'Ditutup', paid: 'Dibayar' };
 const STATUS_COLORS = {
   open:   { bg: '#fff8e1', color: '#a06800' },
@@ -10,7 +11,6 @@ const STATUS_COLORS = {
   paid:   { bg: '#e6f4ea', color: '#1e7e34' },
 };
 
-const fmtIDR = (n) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(Number(n || 0));
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '-';
 
 function StatusChip({ status }) {

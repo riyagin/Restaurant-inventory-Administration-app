@@ -8,11 +8,11 @@ import CurrencyInput from '../components/CurrencyInput';
 import SearchSelect from '../components/SearchSelect';
 
 import { todayWIB } from '../time';
+import { rp } from '../format';
 // Recording one shopping run, on its own page: a run has a header, a variable
 // number of lines and a running total, and a half-filled run must survive
 // anyone touching the list's filters.
 
-const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const today = () => todayWIB();
 const emptyLine = () => ({ item_id: '', description: '', quantity: '', unit_index: 0, price: '' });
 
