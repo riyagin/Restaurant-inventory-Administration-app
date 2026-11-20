@@ -11,8 +11,7 @@ import (
 	"inventory-app/server-go/internal/db"
 )
 
-// Journal source types. One per kind of financial event, so every entry can be
-// traced back to the row that caused it.
+// Journal source types: what kind of row caused an entry.
 const (
 	SourceInvoice     = "invoice"
 	SourceInvoicePay  = "invoice_payment"
@@ -29,84 +28,59 @@ const (
 	SourceVendorMerge = "vendor_merge"
 	SourceOpening     = "opening_balance"
 	SourceCapital     = "capital_injection"
-	// SourceDailyPurchase is Pembelanjaan Harian — a branch's daily shopping,
-	// paid on the spot out of its petty cash box.
+	// SourceDailyPurchase is Pembelanjaan Harian, paid from petty cash.
 	SourceDailyPurchase = "daily_purchase"
-	// SourceCashDeposit is Setoran — moving cash between the branch box, the
-	// main till and the owner's bank.
+	// SourceCashDeposit is Setoran.
 	SourceCashDeposit = "cash_deposit"
-	// SourceOperationalExpense is Beban Operasional — a branch's standing bills
-	// (listrik, air, sewa), booked to the sub-account that names them.
+	// SourceOperationalExpense is Beban Operasional.
 	SourceOperationalExpense = "operational_expense"
-	// SourcePettyCashVariance is the difference between the counted closing
-	// balance and what the ledger says should be in the box.
-	SourcePettyCashVariance = "petty_cash_variance"
+	SourcePettyCashVariance  = "petty_cash_variance"
 )
 
-// OwnerCapitalAccountNumber is the equity account owner deposits are credited
-// to — including cash carried over when a previous system is replaced.
 const OwnerCapitalAccountNumber = 30100
 
-// DeliveryFeeReceivableNumber is where the POS "Biaya Tambahan" delivery fee is
-// debited. The fee is earned at the sale but excluded from the POS payment
-// breakdown, so it is receivable from the delivery platform until settled.
+// DeliveryFeeReceivableNumber holds the POS delivery fee until the platform settles it.
 const DeliveryFeeReceivableNumber = 10400
 
-// SuspenseAccountNumber is where a leg lands when its account cannot be
-// resolved — an unconfigured warehouse inventory account, a branch with no
-// expense account. Skipping such legs would silently unbalance the books;
-// parking them in a real, visibly-named account keeps the entry balanced and
-// turns a misconfiguration into something you can see in the CoA.
+// SuspenseAccountNumber takes legs whose account cannot be resolved, so the entry
+// stays balanced and the misconfiguration is visible.
 const SuspenseAccountNumber = 19999
 
-// ManualAdjustmentEquityNumber is the counter-leg for single-account manual
-// adjustments. That screen moves one account's balance without naming a
-// counterparty, so the balancing half lands in equity, where an otherwise
-// unexplained movement belongs.
+// ManualAdjustmentEquityNumber is the counter-leg of single-account manual adjustments.
 const ManualAdjustmentEquityNumber = 30800
 
-// Line is one leg of a journal entry. Amount is debit-positive: a debit is
-// positive, a credit is negative. Build lines with Dr and Cr rather than setting
-// Amount directly, so the sign convention lives in one place.
+// Line is one leg of an entry. Amount is debit-positive; build it with Dr and Cr.
 type Line struct {
 	AccountID uuid.UUID
 	Amount    int64
 	Memo      string
 }
 
-// Dr returns a debit leg. A negative amount is a credit, which is what makes
-// reversals natural: Dr(acct, -x) undoes Dr(acct, x).
 func Dr(accountID uuid.UUID, amount int64) Line {
 	return Line{AccountID: accountID, Amount: amount}
 }
 
-// Cr returns a credit leg.
 func Cr(accountID uuid.UUID, amount int64) Line {
 	return Line{AccountID: accountID, Amount: -amount}
 }
 
-// WithMemo annotates a leg. Optional; the entry description usually says enough.
 func (l Line) WithMemo(memo string) Line {
 	l.Memo = memo
 	return l
 }
 
-// Entry is one financial event and all of its legs.
 type Entry struct {
 	Date        time.Time
 	SourceType  string
 	SourceID    uuid.UUID
 	Description string
 	CreatedBy   uuid.UUID
-	// ReversesID links this entry to the one it reverses. Reversals are appended,
-	// never applied by rewriting the original.
+	// Reversals are appended; the original is never rewritten.
 	ReversesID uuid.UUID
 	Lines      []Line
 }
 
-// ErrUnbalanced is returned when an entry's legs do not sum to zero. The DB
-// carries the same rule as a deferred constraint trigger, so an unbalanced entry
-// cannot reach disk even if a caller bypasses Post.
+// ErrUnbalanced: the legs do not sum to zero. A deferred DB trigger enforces the same rule.
 type ErrUnbalanced struct {
 	Difference int64
 }
@@ -115,16 +89,9 @@ func (e ErrUnbalanced) Error() string {
 	return fmt.Sprintf("jurnal tidak seimbang: selisih debit-kredit = %d", e.Difference)
 }
 
-// Post writes one journal entry and updates the cached account balances in the
-// same transaction. It is the only way anything should ever write
-// accounts.balance.
-//
-// Legs with a zero amount are dropped (a zero leg carries no information and
-// would otherwise pad a one-sided entry into looking two-sided). Legs whose
-// account is uuid.Nil are redirected to the suspense account rather than
-// skipped — skipping is exactly how the books drifted before.
-//
-// Must be called with a transaction-scoped *db.Queries.
+// Post writes one entry and updates accounts.balance in the same transaction; it is
+// the only writer of accounts.balance. Zero legs are dropped and uuid.Nil legs go to
+// suspense. Requires a transaction-scoped *db.Queries.
 func Post(ctx context.Context, qtx *db.Queries, e Entry) (uuid.UUID, error) {
 	lines := make([]Line, 0, len(e.Lines))
 	var net int64
@@ -137,8 +104,6 @@ func Post(ctx context.Context, qtx *db.Queries, e Entry) (uuid.UUID, error) {
 	}
 
 	if len(lines) == 0 {
-		// Nothing of value happened (an invoice with a zero total, a dispatch that
-		// consumed no value). Not an error — just no entry.
 		return uuid.Nil, nil
 	}
 	if net != 0 {
@@ -148,8 +113,6 @@ func Post(ctx context.Context, qtx *db.Queries, e Entry) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("jurnal %q: entri harus memiliki minimal 2 baris", e.SourceType)
 	}
 
-	// Resolve unresolvable legs to the suspense account so the entry still
-	// balances and the misconfiguration surfaces in the CoA.
 	var suspense uuid.UUID
 	for i := range lines {
 		if lines[i].AccountID != uuid.Nil {
@@ -203,10 +166,7 @@ func Post(ctx context.Context, qtx *db.Queries, e Entry) (uuid.UUID, error) {
 	return entry.ID.Bytes, nil
 }
 
-// applyToBalanceCache moves accounts.balance in each account's natural direction.
-// journal_lines is debit-positive; accounts.balance is natural-sign per type, so
-// debit-normal accounts take the amount as-is and credit-normal accounts take it
-// negated. A zero-sum entry therefore always leaves A = L + E + R - Exp intact.
+// applyToBalanceCache applies debit-positive amounts in each account type's natural sign.
 func applyToBalanceCache(ctx context.Context, qtx *db.Queries, lines []Line) error {
 	ids := make([]pgtype.UUID, 0, len(lines))
 	seen := make(map[uuid.UUID]bool, len(lines))
