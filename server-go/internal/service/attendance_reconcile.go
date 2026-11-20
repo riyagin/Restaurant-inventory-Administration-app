@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"inventory-app/server-go/internal/db"
@@ -75,29 +77,33 @@ func ReconcileAbsent(ctx context.Context, q *db.Queries, date time.Time) (*Recon
 		return nil, err
 	}
 
-	// Cache per-branch schedules to avoid repeated lookups.
-	schedCache := map[string]Schedule{}
-	getSched := func(branchID pgtype.UUID) Schedule {
-		key := branchID.Bytes
-		ks := string(key[:])
-		if s, ok := schedCache[ks]; ok {
-			return s
+	// Cache per-branch schedules to avoid repeated lookups. A branch with no
+	// schedule row uses DefaultSchedule; any other read error aborts the run,
+	// because judging a day against the wrong schedule marks people absent.
+	schedCache := map[[16]byte]Schedule{}
+	getSched := func(branchID pgtype.UUID) (Schedule, error) {
+		if s, ok := schedCache[branchID.Bytes]; ok {
+			return s, nil
 		}
+		s := DefaultSchedule()
 		ws, err := q.GetWorkScheduleByBranch(ctx, branchID)
-		var s Schedule
-		if err != nil || ws == nil {
-			s = DefaultSchedule()
-		} else {
+		switch {
+		case err == nil && ws != nil:
 			s = ScheduleFromRow(ws)
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return Schedule{}, err
 		}
-		schedCache[ks] = s
-		return s
+		schedCache[branchID.Bytes] = s
+		return s, nil
 	}
 
 	weekday := isoWeekday(dateOnly)
 
 	for _, e := range employees {
-		sched := getSched(e.BranchID)
+		sched, err := getSched(e.BranchID)
+		if err != nil {
+			return nil, err
+		}
 
 		// Does a record already exist for this employee+date?
 		hasRecord := true
@@ -106,10 +112,13 @@ func ReconcileAbsent(ctx context.Context, q *db.Queries, date time.Time) (*Recon
 			EmployeeID: e.ID,
 			Date:       pgDate,
 		})
-		if err != nil {
-			// pgx.ErrNoRows (or any read miss) => treat as no record.
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
 			hasRecord = false
-		} else {
+		case err != nil:
+			// A failed read is not evidence of absence.
+			return nil, err
+		default:
 			existingStatus = rec.Status
 		}
 
