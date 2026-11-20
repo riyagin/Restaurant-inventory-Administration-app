@@ -35,18 +35,29 @@ func (h *RecipesHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	type recipeWithIngredients struct {
 		*db.ListRecipesRow
-		Ingredients []*db.GetRecipeIngredientsRow `json:"ingredients"`
+		Ingredients []*db.ListRecipeIngredientsForRecipesRow `json:"ingredients"`
+	}
+
+	// One query for every recipe's ingredients, grouped here.
+	ids := make([]pgtype.UUID, len(recipes))
+	for i, rec := range recipes {
+		ids[i] = rec.ID
+	}
+	all, err := h.queries.ListRecipeIngredientsForRecipes(ctx, ids)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil bahan resep")
+		return
+	}
+	byRecipe := make(map[[16]byte][]*db.ListRecipeIngredientsForRecipesRow, len(recipes))
+	for _, ing := range all {
+		byRecipe[ing.RecipeID.Bytes] = append(byRecipe[ing.RecipeID.Bytes], ing)
 	}
 
 	result := make([]recipeWithIngredients, 0, len(recipes))
 	for _, rec := range recipes {
-		ings, err := h.queries.GetRecipeIngredients(ctx, rec.ID)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal mengambil bahan resep")
-			return
-		}
+		ings := byRecipe[rec.ID.Bytes]
 		if ings == nil {
-			ings = []*db.GetRecipeIngredientsRow{}
+			ings = []*db.ListRecipeIngredientsForRecipesRow{}
 		}
 		result = append(result, recipeWithIngredients{ListRecipesRow: rec, Ingredients: ings})
 	}

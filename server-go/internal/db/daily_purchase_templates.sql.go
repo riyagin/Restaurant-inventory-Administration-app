@@ -157,6 +157,61 @@ func (q *Queries) GetDailyPurchaseTemplateItems(ctx context.Context, templateID 
 	return items, nil
 }
 
+const listDailyPurchaseTemplateItemsForTemplates = `-- name: ListDailyPurchaseTemplateItemsForTemplates :many
+SELECT
+    ti.id, ti.template_id, ti.item_id, ti.description, ti.unit_index, ti.sort_order,
+    i.name AS item_name, i.code AS item_code, i.units AS item_units, i.is_stock
+FROM daily_purchase_template_items ti
+LEFT JOIN items i ON i.id = ti.item_id
+WHERE ti.template_id = ANY($1::uuid[])
+ORDER BY ti.template_id, ti.sort_order
+`
+
+type ListDailyPurchaseTemplateItemsForTemplatesRow struct {
+	ID          pgtype.UUID `json:"id"`
+	TemplateID  pgtype.UUID `json:"template_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	Description string      `json:"description"`
+	UnitIndex   int32       `json:"unit_index"`
+	SortOrder   int32       `json:"sort_order"`
+	ItemName    pgtype.Text `json:"item_name"`
+	ItemCode    pgtype.Text `json:"item_code"`
+	ItemUnits   []byte      `json:"item_units"`
+	IsStock     pgtype.Bool `json:"is_stock"`
+}
+
+// GetDailyPurchaseTemplateItems for many templates in one round trip.
+func (q *Queries) ListDailyPurchaseTemplateItemsForTemplates(ctx context.Context, templateIds []pgtype.UUID) ([]*ListDailyPurchaseTemplateItemsForTemplatesRow, error) {
+	rows, err := q.db.Query(ctx, listDailyPurchaseTemplateItemsForTemplates, templateIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListDailyPurchaseTemplateItemsForTemplatesRow
+	for rows.Next() {
+		var i ListDailyPurchaseTemplateItemsForTemplatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TemplateID,
+			&i.ItemID,
+			&i.Description,
+			&i.UnitIndex,
+			&i.SortOrder,
+			&i.ItemName,
+			&i.ItemCode,
+			&i.ItemUnits,
+			&i.IsStock,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDailyPurchaseTemplates = `-- name: ListDailyPurchaseTemplates :many
 SELECT
     t.id, t.name, t.branch_id, t.division_id, t.warehouse_id, t.vendor_id,

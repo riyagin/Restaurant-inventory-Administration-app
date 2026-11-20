@@ -21,6 +21,16 @@ LEFT JOIN items i ON i.id = ti.item_id
 WHERE ti.template_id = $1
 ORDER BY ti.sort_order;
 
+-- name: ListDailyPurchaseTemplateItemsForTemplates :many
+-- GetDailyPurchaseTemplateItems for many templates in one round trip.
+SELECT
+    ti.id, ti.template_id, ti.item_id, ti.description, ti.unit_index, ti.sort_order,
+    i.name AS item_name, i.code AS item_code, i.units AS item_units, i.is_stock
+FROM daily_purchase_template_items ti
+LEFT JOIN items i ON i.id = ti.item_id
+WHERE ti.template_id = ANY(sqlc.arg(template_ids)::uuid[])
+ORDER BY ti.template_id, ti.sort_order;
+
 -- name: CreateDailyPurchaseTemplate :one
 INSERT INTO daily_purchase_templates (
     id, name, branch_id, division_id, warehouse_id, vendor_id,

@@ -187,6 +187,57 @@ func (q *Queries) GetRecipeIngredients(ctx context.Context, recipeID pgtype.UUID
 	return items, nil
 }
 
+const listRecipeIngredientsForRecipes = `-- name: ListRecipeIngredientsForRecipes :many
+SELECT
+    ri.id, ri.recipe_id, ri.item_id, ri.quantity, ri.unit_index,
+    i.name AS item_name, i.units AS item_units, i.code AS item_code
+FROM recipe_ingredients ri
+JOIN items i ON i.id = ri.item_id
+WHERE ri.recipe_id = ANY($1::uuid[])
+ORDER BY ri.recipe_id, i.name
+`
+
+type ListRecipeIngredientsForRecipesRow struct {
+	ID        pgtype.UUID    `json:"id"`
+	RecipeID  pgtype.UUID    `json:"recipe_id"`
+	ItemID    pgtype.UUID    `json:"item_id"`
+	Quantity  pgtype.Numeric `json:"quantity"`
+	UnitIndex int32          `json:"unit_index"`
+	ItemName  string         `json:"item_name"`
+	ItemUnits []byte         `json:"item_units"`
+	ItemCode  string         `json:"item_code"`
+}
+
+// GetRecipeIngredients for many recipes in one round trip (the recipe list).
+func (q *Queries) ListRecipeIngredientsForRecipes(ctx context.Context, recipeIds []pgtype.UUID) ([]*ListRecipeIngredientsForRecipesRow, error) {
+	rows, err := q.db.Query(ctx, listRecipeIngredientsForRecipes, recipeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListRecipeIngredientsForRecipesRow
+	for rows.Next() {
+		var i ListRecipeIngredientsForRecipesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RecipeID,
+			&i.ItemID,
+			&i.Quantity,
+			&i.UnitIndex,
+			&i.ItemName,
+			&i.ItemUnits,
+			&i.ItemCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecipes = `-- name: ListRecipes :many
 SELECT
     r.id, r.name, r.batch_size, r.batch_unit_index, r.created_at,

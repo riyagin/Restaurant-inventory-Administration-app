@@ -23,6 +23,16 @@ JOIN items i ON i.id = ri.item_id
 WHERE ri.recipe_id = $1
 ORDER BY i.name;
 
+-- name: ListRecipeIngredientsForRecipes :many
+-- GetRecipeIngredients for many recipes in one round trip (the recipe list).
+SELECT
+    ri.id, ri.recipe_id, ri.item_id, ri.quantity, ri.unit_index,
+    i.name AS item_name, i.units AS item_units, i.code AS item_code
+FROM recipe_ingredients ri
+JOIN items i ON i.id = ri.item_id
+WHERE ri.recipe_id = ANY(sqlc.arg(recipe_ids)::uuid[])
+ORDER BY ri.recipe_id, i.name;
+
 -- name: CreateRecipe :one
 INSERT INTO recipes (id, name, output_item_id, batch_size, batch_unit_index)
 VALUES (gen_random_uuid(), $1, $2, $3, $4)

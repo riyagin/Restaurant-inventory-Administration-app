@@ -55,18 +55,27 @@ func (h *DailyPurchasesHandler) ListTemplates(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Lines travel with the list. A template is a handful of rows and the page
-	// shows them inline, so fetching them per template on click would be a
-	// round trip for data we could have sent once.
+	// Lines travel with the list — the page shows them inline — and are fetched
+	// for every template in one query, then grouped here.
+	ids := make([]pgtype.UUID, len(templates))
+	for i, t := range templates {
+		ids[i] = t.ID
+	}
+	all, err := h.queries.ListDailyPurchaseTemplateItemsForTemplates(ctx, ids)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil baris template")
+		return
+	}
+	byTemplate := make(map[[16]byte][]*db.ListDailyPurchaseTemplateItemsForTemplatesRow, len(templates))
+	for _, l := range all {
+		byTemplate[l.TemplateID.Bytes] = append(byTemplate[l.TemplateID.Bytes], l)
+	}
+
 	out := make([]map[string]any, 0, len(templates))
 	for _, t := range templates {
-		lines, err := h.queries.GetDailyPurchaseTemplateItems(ctx, t.ID)
-		if err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal mengambil baris template")
-			return
-		}
+		lines := byTemplate[t.ID.Bytes]
 		if lines == nil {
-			lines = []*db.GetDailyPurchaseTemplateItemsRow{}
+			lines = []*db.ListDailyPurchaseTemplateItemsForTemplatesRow{}
 		}
 		out = append(out, map[string]any{"template": t, "items": lines})
 	}
