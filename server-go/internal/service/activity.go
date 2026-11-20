@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"strings"
 	"unicode"
 
@@ -20,15 +21,27 @@ type LogParams struct {
 	Description string
 }
 
-func LogActivity(ctx context.Context, qtx *db.Queries, p LogParams) error {
-	return qtx.InsertActivityLog(ctx, &db.InsertActivityLogParams{
-		UserID:      pgtype.UUID{Bytes: p.UserID, Valid: p.UserID != uuid.Nil},
-		Username:    p.Username,
-		Action:      NormalizeLogAction(p.Action),
-		EntityType:  NormalizeLogEntityType(p.EntityType),
-		EntityID:    pgtype.UUID{Bytes: p.EntityID, Valid: p.EntityID != uuid.Nil},
-		Description: p.Description,
+// LogActivity appends an audit row. It is best-effort by design: the audit
+// trail must never be the reason a mutation fails. Inside a transaction the
+// insert runs in a savepoint, so a failed insert cannot abort the caller's
+// transaction (which would otherwise fail at commit with an unrelated-looking
+// error). A failure is written to the server log and also returned, for the
+// few callers that want it; most discard it.
+func LogActivity(ctx context.Context, q *db.Queries, p LogParams) error {
+	err := q.Savepoint(ctx, func(sq *db.Queries) error {
+		return sq.InsertActivityLog(ctx, &db.InsertActivityLogParams{
+			UserID:      pgtype.UUID{Bytes: p.UserID, Valid: p.UserID != uuid.Nil},
+			Username:    p.Username,
+			Action:      NormalizeLogAction(p.Action),
+			EntityType:  NormalizeLogEntityType(p.EntityType),
+			EntityID:    pgtype.UUID{Bytes: p.EntityID, Valid: p.EntityID != uuid.Nil},
+			Description: p.Description,
+		})
 	})
+	if err != nil {
+		log.Printf("activity log: %s %s %q not recorded: %v", p.Action, p.EntityType, p.Description, err)
+	}
+	return err
 }
 
 // System-event constants for activity_log rows that no user triggered.
