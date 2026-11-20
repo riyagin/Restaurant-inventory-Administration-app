@@ -27,7 +27,6 @@ func TestBranchOperatorRoutes(t *testing.T) {
 		"GET /api/hr/kasbons/" + id,
 		"POST /api/hr/kasbons",
 		"POST /api/hr/overtime/" + id + "/cancel",
-		"POST /api/auth/logout",
 	}
 	deny := []string{
 		// Approvals, in every module.

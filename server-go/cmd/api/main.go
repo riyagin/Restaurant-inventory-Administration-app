@@ -257,7 +257,11 @@ func main() {
 		AllowedOrigins:   []string{"http://localhost:5173", "https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-		AllowCredentials: false,
+		// Credentials carry only the refresh cookie (SameSite=Strict, path
+		// /api/auth). Everything else authenticates with a Bearer header, so this
+		// widens nothing for the rest of the API; the auth handlers additionally
+		// refuse a cross-site Origin (middleware.SameSiteOrigin).
+		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 	r.Use(appmiddleware.APIRateLimit())
@@ -291,6 +295,7 @@ func main() {
 	// Public auth routes
 	r.With(appmiddleware.LoginRateLimit()).Post("/api/auth/login", authHandler.Login)
 	r.Post("/api/auth/refresh", authHandler.Refresh)
+	r.Post("/api/auth/logout", authHandler.Logout)
 
 	// Device API — NOT JWT. Authenticated by X-Device-Key, rate-limited per key.
 	// Lives OUTSIDE the JWT group so the Android face app can push events.
@@ -314,7 +319,6 @@ func main() {
 		// Same idea for branch_operator, which is additionally confined to one
 		// branch: handlers read it via middleware.BranchScopeFromCtx.
 		r.Use(appmiddleware.RestrictBranchOperator(queries))
-		r.Post("/api/auth/logout", authHandler.Logout)
 
 		// Users — all authenticated
 		r.Get("/api/users", usersHandler.List)

@@ -17,8 +17,16 @@ type Claims struct {
 	UserID   uuid.UUID `json:"uid"`
 	Username string    `json:"username"`
 	Role     string    `json:"role"`
+	// TokenType separates the two tokens signed with the same secret. Access
+	// tokens issued before the field existed carry no type and are still
+	// accepted as access tokens.
+	TokenType string `json:"typ,omitempty"`
 	jwt.RegisteredClaims
 }
+
+// TokenTypeRefresh marks a refresh token. It is only accepted by
+// POST /api/auth/refresh and never as a Bearer credential.
+const TokenTypeRefresh = "refresh"
 
 type contextKey string
 
@@ -67,7 +75,7 @@ func Authenticate(queries *db.Queries, jwtSecret string) func(http.Handler) http
 				}
 				return []byte(jwtSecret), nil
 			})
-			if err != nil || !token.Valid {
+			if err != nil || !token.Valid || claims.TokenType == TokenTypeRefresh {
 				writeAuthError(w, http.StatusUnauthorized, "token tidak valid atau sudah kedaluwarsa")
 				return
 			}
@@ -220,8 +228,7 @@ func RestrictHRRole(next http.Handler) http.Handler {
 // RequireManager as well, but an allowlist that never mentions them cannot be
 // the thing that drifts.
 var branchOperatorRoutes = []string{
-	// Session + the master data the HR screens read.
-	"POST /api/auth/logout",
+	// The master data the HR screens read.
 	"GET /api/branches",
 	"GET /api/notifications",
 	// The kasbon form picks its fund source from the chart of accounts.

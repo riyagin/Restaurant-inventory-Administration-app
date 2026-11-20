@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import ConnectionError from './pages/ConnectionError';
 import { subscribeConnection, getConnectionState } from './connection';
+import { logout as apiLogout } from './api';
 import Dashboard from './pages/Dashboard';
 import Items from './pages/Items';
 import ItemForm from './pages/ItemForm';
@@ -424,17 +425,7 @@ function Nav() {
   });
 
   const logout = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      if (token) {
-        await fetch('http://localhost:5000/api/auth/logout', {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      }
-    } catch { /* best-effort */ }
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    await apiLogout();
     navigate('/login');
   };
 

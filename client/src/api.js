@@ -49,6 +49,31 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// The refresh token lives in an httpOnly cookie scoped to /api/auth, so page
+// scripts never see it. Auth calls must send credentials: in development the
+// API is on another port, and without them the browser neither stores nor
+// sends the cookie.
+const authRequest = (path, data) =>
+  axios.post(`${apiBaseUrl}/auth/${path}`, data, { withCredentials: true });
+
+function clearSession() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+}
+
+// One retry covers the race between tabs: each refresh rotates the cookie, so a
+// tab whose request went out just before another tab's rotation landed is
+// refused. By the time it retries, the browser holds the new cookie.
+async function requestRefresh() {
+  try {
+    return await authRequest('refresh');
+  } catch (err) {
+    if (err.response?.status !== 401) throw err;
+    await new Promise(r => setTimeout(r, 400));
+    return authRequest('refresh');
+  }
+}
+
 let isRefreshing = false;
 let refreshQueue = [];
 
@@ -70,16 +95,8 @@ api.interceptors.response.use(
     }
 
     if (err.response?.status === 401 && !original._retry) {
-      // Don't try to refresh if the failing request was itself a refresh/logout
-      if (original.url?.includes('/auth/')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        window.location.href = '/login';
-        return Promise.reject(err);
-      }
-
       if (isRefreshing) {
-        // Queue this request to retry once refresh completes
+        // Queue this request to retry once the in-flight refresh completes.
         return new Promise((resolve, reject) => {
           refreshQueue.push({ resolve, reject });
         }).then(token => {
@@ -92,11 +109,10 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const res = await api.post('/auth/refresh');
+        const res = await requestRefresh();
         const { token, user } = res.data;
         localStorage.setItem('token', token);
         localStorage.setItem('user', JSON.stringify(user));
-        api.defaults.headers.common.Authorization = `Bearer ${token}`;
         refreshQueue.forEach(q => q.resolve(token));
         refreshQueue = [];
         original.headers.Authorization = `Bearer ${token}`;
@@ -104,8 +120,7 @@ api.interceptors.response.use(
       } catch {
         refreshQueue.forEach(q => q.reject(err));
         refreshQueue = [];
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
+        clearSession();
         window.location.href = '/login';
         return Promise.reject(err);
       } finally {
@@ -120,9 +135,22 @@ export function getUser() {
   try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
 }
 
-export const login   = (data) => api.post('/auth/login', data);
-export const logout  = ()     => api.post('/auth/logout');
-export const refresh = ()     => api.post('/auth/refresh');
+// Login and logout bypass the shared instance: a 401 from the login form is a
+// wrong password to show on the page, not an expired session to refresh.
+export const login = (data) => authRequest('login', data);
+
+// Best-effort: revokes the access token and the refresh cookie on the server.
+// The local session is cleared whatever the outcome.
+export async function logout() {
+  const token = localStorage.getItem('token');
+  try {
+    await axios.post(`${apiBaseUrl}/auth/logout`, null, {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  } catch { /* the session is cleared locally either way */ }
+  clearSession();
+}
 
 export const getUsers = () => api.get('/users');
 export const createUser = (data) => api.post('/users', data);
