@@ -150,10 +150,8 @@ func (h *AccountsHandler) accountOwners(r *http.Request) (map[string]string, err
 // Ledger — GET /api/accounts/{id}/ledger?branch_id=&from=&to=&limit=
 //
 // Every posting that ever touched one account, newest first, each tagged with the
-// branch it is traceable to. This is the drill-down the chart of accounts never
-// had: until now a balance could be checked against the trial balance but never
-// explained, and "why is Kas Kecil - Cimanggu at this number" had no answer short
-// of querying the database by hand.
+// branch it is traceable to — the drill-down that explains a balance, where the
+// trial balance can only check it.
 //
 // The running balance is computed oldest-first over the *unfiltered* account and
 // then the rows are reversed for display, so it always reads as the account's

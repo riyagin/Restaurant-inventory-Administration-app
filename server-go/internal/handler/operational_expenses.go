@@ -23,9 +23,9 @@ import (
 // Beban Operasional — the standing bills of keeping a branch open.
 //
 // Listrik, air, sewa, iuran keamanan: costs that are not goods, arrive as a bill
-// rather than a delivery, and are settled the moment they are recorded. They
-// were previously booked straight onto a branch's "Operasional" division expense
-// account, which made the total visible and the composition invisible.
+// rather than a delivery, and are settled the moment they are recorded. Each
+// category has its own sub-account so the composition is visible, not just the
+// total.
 //
 // Each posted row is one balanced entry — Dr the category's sub-account, Cr
 // whatever paid it — and nothing here touches stock, units or payables. Which

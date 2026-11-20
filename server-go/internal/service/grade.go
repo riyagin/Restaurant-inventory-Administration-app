@@ -20,10 +20,9 @@ import (
 // paid: e.g. A ≥ 90 → 100%, B ≥ 80 → 75%, C ≥ 70 → 50%, D ≥ 0 → 0%. The tier
 // used is the one with the highest min_score the score reaches — exactly one.
 //
-// It replaces the old per-component min_score gate, which paid all or nothing.
 // Components that are not grade-linked are unaffected, and a missing score
-// (evaluation not run yet) pays in full, as the gate did: pay is never withheld
-// silently on account of a missing evaluation.
+// (evaluation not run yet) pays in full: pay is never withheld silently on
+// account of a missing evaluation.
 
 // GradeTier is one row of the scale. PayPercent is the tier's default share;
 // ComponentPercents overrides it for individual grade-linked components, keyed

@@ -567,8 +567,8 @@ func (h *InvoicesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Post to the journal — Dr inventory (purchase) or expense, Cr payable.
 	// An account that cannot be resolved is left as uuid.Nil and lands in the
-	// suspense account; it is never skipped, which is what used to leave the
-	// entry one-sided.
+	// suspense account; it is never skipped, since skipping leaves the entry
+	// one-sided.
 	if !body.IsDistributed {
 		var debitAcctID uuid.UUID
 		if invoiceType == "purchase" {
@@ -927,8 +927,8 @@ func (h *InvoicesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	//
 	// It is dated with the invoice's *old* date, not the new one: it has to
 	// cancel the original in the period the original landed in. Dated on the new
-	// date, an edit that moves the invoice to another month left the old month
-	// carrying the full original amount and the new month short by the same.
+	// date, an edit that moves the invoice to another month would leave the old
+	// month carrying the full original amount and the new month short by the same.
 	reversalDate := invoiceDate
 	if oldHeader.Date.Valid {
 		reversalDate = oldHeader.Date.Time

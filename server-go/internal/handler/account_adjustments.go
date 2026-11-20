@@ -135,8 +135,8 @@ func (h *AccountAdjustmentsHandler) Create(w http.ResponseWriter, r *http.Reques
 	}
 
 	// A single-account adjustment has no counterparty by construction, so the
-	// balancing leg goes to equity. Previously only the target account moved,
-	// which unbalanced the books by the adjustment amount every time.
+	// balancing leg goes to equity; moving the target alone would unbalance the
+	// books by the adjustment amount.
 	equityAcct, err := qtx.GetSystemAccountByNumber(ctx, pgtype.Int4{Int32: service.ManualAdjustmentEquityNumber, Valid: true})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "akun penyesuaian saldo tidak ditemukan")

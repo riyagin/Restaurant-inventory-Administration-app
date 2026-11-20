@@ -662,12 +662,10 @@ func ClosePeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollPeriod)
 		}
 	}
 
-	// Queue the ledger posting instead of writing it here. This used to debit each
-	// branch's expense account with gross_pay and nothing else — a one-sided entry —
-	// while an operator separately pressed "Proses ke Akuntansi", which posted a
-	// second, different figure for the same payroll. Now exactly one balanced entry
-	// is written, by the background poster, from this queue row. The row commits with
-	// the close, so the entry cannot be lost if the process dies before posting.
+	// Queue the ledger posting instead of writing it here: exactly one balanced
+	// entry is written, by the background poster, from this queue row. The row
+	// commits with the close, so the entry cannot be lost if the process dies
+	// before posting.
 	if err := QueuePayrollPosting(ctx, qtx, period.ID); err != nil {
 		return nil, err
 	}

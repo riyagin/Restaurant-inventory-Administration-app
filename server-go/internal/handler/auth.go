@@ -148,7 +148,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Blocklist the old refresh token
+	// Blocklist the presented refresh token.
 	if expAt := claims.RegisteredClaims.ExpiresAt; expAt != nil {
 		_ = h.queries.InsertTokenBlocklist(r.Context(), &db.InsertTokenBlocklistParams{
 			Jti:       jti,

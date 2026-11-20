@@ -80,16 +80,13 @@ FROM owned ORDER BY account_id, depth`
 // period, keyed by account id. An empty startDate/endDate reports all time.
 //
 // This is the single definition of "what a P&L account did in a period", shared
-// by the org-wide financial report and the per-branch split. They used to derive
-// it differently — the org-wide one summed the source tables (sales,
-// pos_import_lines, invoices, account_adjustments) while the branch split read
-// the journal — and the two therefore disagreed on the same period. Summing the
-// source tables cannot be made to agree: it misses everything that reaches a P&L
-// account without passing through them (payroll, Pembelanjaan Harian, opname
-// write-offs), values dispatch consumption at the mirror invoice's booked price
-// rather than FIFO cost, and counts cancelled invoices it never filtered out.
-// The journal has all of it, by construction, which is why both callers read it
-// here and nowhere else.
+// by the org-wide financial report and the per-branch split. It reads the
+// journal, not the source tables (sales, pos_import_lines, invoices,
+// account_adjustments): those miss everything that reaches a P&L account
+// without passing through them (payroll, Pembelanjaan Harian, opname
+// write-offs), value dispatch consumption at the mirror invoice's booked price
+// rather than FIFO cost, and include cancelled invoices. Both callers read it
+// here so they cannot disagree.
 //
 // plAmountSQL and plActivityFromSQL are the *one* definition of what a P&L
 // account did, split out so the periodic report can bucket the same numbers by

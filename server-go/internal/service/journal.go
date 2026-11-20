@@ -54,9 +54,9 @@ const DeliveryFeeReceivableNumber = 10400
 
 // SuspenseAccountNumber is where a leg lands when its account cannot be
 // resolved — an unconfigured warehouse inventory account, a branch with no
-// expense account. The old code skipped such legs, which silently unbalanced
-// the books. Parking them in a real, visibly-named account keeps the entry
-// balanced and turns a misconfiguration into something you can see in the CoA.
+// expense account. Skipping such legs would silently unbalance the books;
+// parking them in a real, visibly-named account keeps the entry balanced and
+// turns a misconfiguration into something you can see in the CoA.
 const SuspenseAccountNumber = 19999
 
 // ManualAdjustmentEquityNumber is the counter-leg for single-account manual

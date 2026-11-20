@@ -176,9 +176,7 @@ func CloseThrRun(ctx context.Context, qtx *db.Queries, run *db.ThrRun) (*db.ThrR
 	}
 
 	// Same shape as the payroll close (see payroll_posting.go): THR is paid out
-	// of cash, so the branch wage expense is debited and Kas is credited. This
-	// used to debit the expense and credit nothing, leaving the books out of
-	// balance by the full THR amount on every run.
+	// of cash, so the branch wage expense is debited and Kas is credited.
 	var lines []Line
 	var total int64
 	for _, bt := range branchTotals {

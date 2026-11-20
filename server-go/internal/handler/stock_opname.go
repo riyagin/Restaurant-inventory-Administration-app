@@ -423,8 +423,8 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// unrelated accounts:
 	//   loss    Dr Selisih Persediaan  Cr inventory
 	//   surplus Dr inventory           Cr Selisih Persediaan
-	// The surplus leg used to be posted alone, which added inventory value out
-	// of thin air; that is what overstated Persediaan.
+	// Posting either leg alone would create or destroy inventory value with no
+	// counterpart.
 	varianceAcctID := uuidFromPg(varianceAccountID)
 	invAcctID := uuidFromPg(wh.InventoryAccountID)
 
@@ -575,7 +575,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delete the draft now that the opname is finalised
+	// Best-effort: a leftover draft is harmless once the opname has committed.
 	if body.DraftID != "" {
 		_, _ = h.pool.Exec(ctx, `DELETE FROM stock_opname_drafts WHERE id = $1`, body.DraftID)
 	}

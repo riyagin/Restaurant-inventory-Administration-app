@@ -58,10 +58,9 @@ type LotSource struct {
 // Returns the total IDR value deducted. Must be called with a transaction-scoped *db.Queries.
 //
 // A fully consumed lot is stamped `depleted_at` and left at quantity 0 rather
-// than deleted. Deleting it destroyed the only record that the delivery ever
-// existed, which is why per-lot history was impossible before;
-// GetInventoryLotsForFIFO filters `quantity > 0`, so the surviving rows are
-// invisible to FIFO itself.
+// than deleted, because it is the only record that the delivery existed and
+// per-lot history depends on it. GetInventoryLotsForFIFO filters
+// `quantity > 0`, so the surviving rows are invisible to FIFO itself.
 func FIFODeduct(ctx context.Context, qtx *db.Queries, itemID, warehouseID uuid.UUID, qty float64, src ...LotSource) (int64, error) {
 	lots, err := qtx.GetInventoryLotsForFIFO(ctx, &db.GetInventoryLotsForFIFOParams{
 		ItemID:      pgtype.UUID{Bytes: itemID, Valid: true},

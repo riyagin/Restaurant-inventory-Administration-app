@@ -28,10 +28,9 @@ const (
 )
 
 // Movement labels for manual lot entry. A hand-entered lot is an adjustment, not
-// a purchase: it has no invoice, no vendor and no price behind it. Labelling it
-// 'purchase' (as Create used to) made it indistinguishable from real buying in
-// the per-type flow breakdown on the item detail page. 'manual_in'/'manual_out'
-// are the labels the legacy backend used and the ones already in the data.
+// a purchase: it has no invoice, no vendor and no price behind it, and the
+// per-type flow breakdown on the item detail page must keep it apart from real
+// buying. 'manual_in'/'manual_out' match the labels already in the data.
 const (
 	manualStockInType     = "manual_in"
 	manualStockOutType    = "manual_out"
@@ -42,11 +41,10 @@ const (
 // recordManualStockMove writes the stock_history row behind a manual lot change.
 //
 // Every other movement in the system leaves a stock_history row, which is what
-// lets the item history reconstruct on-hand and what the flow reports read.
-// Manual lot edits and deletions used to skip it entirely, so stock could change
-// with no movement to show for it — the quantity simply differed from the sum of
-// its own history. Quantity and value are signed the same way as everywhere
-// else: positive is stock (and value) coming in.
+// lets the item history reconstruct on-hand and what the flow reports read; a
+// manual change without one makes the quantity disagree with the sum of its own
+// history. Quantity and value are signed the same way as everywhere else:
+// positive is stock (and value) coming in.
 func recordManualStockMove(
 	ctx context.Context,
 	qtx *db.Queries,
@@ -191,7 +189,7 @@ func (h *InventoryHandler) Count(w http.ResponseWriter, r *http.Request) {
 
 // inventoryIncludeEmpty widens the list to depleted lots and stocked items that
 // have no lot at all. Default **on**: the item you are about to run out of is
-// the one worth seeing, and the old behaviour hid it precisely when it mattered.
+// the one worth seeing, and a stock-only list hides it precisely when it matters.
 // `?include_empty=false` restores the stock-only view.
 func inventoryIncludeEmpty(q url.Values) bool {
 	return q.Get("include_empty") != "false"
@@ -634,10 +632,10 @@ func getUnitName(unitsJSON []byte, idx int32) string {
 // appearing or disappearing outside a purchase or a dispatch — the same
 // "Selisih Persediaan" bucket stock opname posts its count differences to.
 //
-// Manual lot create/edit/delete used to move the warehouse inventory account on
-// its own, conjuring asset value with no counterpart. They now post against this
-// account, so a manual stock correction reads as what it is: a difference
-// charged to (or credited back from) shrinkage.
+// Manual lot create/edit/delete post against this account rather than moving the
+// warehouse inventory account alone, so a manual correction reads as what it
+// is — a difference charged to (or credited back from) shrinkage — instead of
+// asset value with no counterpart.
 func inventoryAdjustmentAccountID(ctx context.Context, qtx *db.Queries) uuid.UUID {
 	acctID, err := qtx.GetInventoryVarianceAccountID(ctx)
 	if err != nil {

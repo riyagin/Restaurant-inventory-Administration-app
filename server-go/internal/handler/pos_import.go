@@ -167,10 +167,9 @@ func (h *POSImportHandler) Confirm(w http.ResponseWriter, r *http.Request) {
 		//
 		// "ExpenseMappings" carries the POS "Biaya Tambahan" column, which is the
 		// delivery fee — revenue, despite the field name (kept for the client's
-		// payload shape). It used to be debited as an expense with no credit leg,
-		// which is where 7,128,062 of the drift came from. Net excludes it and so
-		// does the payment breakdown, so the money is earned but not yet in any
-		// cash account: it is a receivable until the platform settles.
+		// payload shape). Net excludes it and so does the payment breakdown, so
+		// the money is earned but not yet in any cash account: it is a receivable
+		// until the platform settles.
 		//
 		// With both pairs balanced, the only residual left is the POS's own
 		// rounding (a few rupiah per import), which still goes to the suspense

@@ -292,15 +292,10 @@ func (h *AccountsHandler) TrialBalance(w http.ResponseWriter, r *http.Request) {
 // CapitalInjection records money the owner puts into the business — including
 // the cash carried over when a previous system is replaced.
 //
-// This exists because its absence is what broke the books in the first place.
-// There was no legitimate way to record an owner's deposit, so opening balances
-// were typed straight into accounts.balance (the old Node backend let
-// POST /api/accounts set a balance directly) with nothing on the credit side.
-// That is not an error in the money — the cash was real — but the matching
-// capital entry was missing, and the books were out by that amount from day one.
-//
-// Here the entry is two-sided by construction: Dr the cash account, Cr "Modal
-// Pemilik". There is no way to record one without the other.
+// The entry is two-sided by construction: Dr the cash account, Cr "Modal
+// Pemilik". Writing an opening balance straight into accounts.balance would
+// leave the capital leg missing and the books out by that amount, so this is
+// the only way owner money enters.
 func (h *AccountsHandler) CapitalInjection(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AccountID   string `json:"account_id"`
