@@ -56,13 +56,31 @@ pm2 reload inventory-app
 
 ---
 
-## Production Cutover: Express → Go
+## Upgrading a server that still has the Node backend
 
-### Prerequisites
+The Express backend (`server/`) has been removed; Go on `:5000` is the only API.
+On a server set up before that:
 
-- Go binary deployed at `/var/www/inventory-app/server-go/api`
-- Both PM2 entries running: `inventory-app` on `:5000`, `inventory-app-legacy` on `:5001`
-- Nginx already proxies `/api/` to `:5000`
+1. **Uploads move automatically.** The next `deploy.sh` moves
+   `/var/www/inventory-app/server/uploads` to `/var/www/inventory-app/uploads` and
+   leaves a symlink at the old path, so nothing breaks in between. Then point the
+   live config at the new folder and reload:
+   ```bash
+   # PM2 env: UPLOADS_DIR: '/var/www/inventory-app/uploads'
+   nano /var/www/inventory-app/deploy/ecosystem.config.cjs
+   # Nginx: alias /var/www/inventory-app/uploads/;
+   sudo nano /etc/nginx/sites-available/inventory-app
+   sudo nginx -t && sudo systemctl reload nginx
+   bash /var/www/inventory-app/deploy/deploy.sh --no-pull --no-migrate --no-client
+   ```
+   Once both are updated, the symlink `server/uploads` can be removed. Update the
+   copy of `backup.sh` in cron too if it was copied rather than run in place.
+2. **Remove the legacy process** if it still exists:
+   ```bash
+   sudo pm2 delete inventory-app-legacy; sudo pm2 save
+   ```
+3. Whatever remains in `server/` (`node_modules`, `config.json`) is unused and
+   gitignored; delete it when convenient.
 
 > **PM2 runs as `root` here, not as the login user.** `/root/.pm2` owns the real
 > `inventory-app`; always check it with `sudo pm2 list`. A plain `pm2 list` talks
@@ -75,32 +93,12 @@ pm2 reload inventory-app
 > port holder looks like an untraceable ghost. Re-check with `sudo` before
 > concluding a process is orphaned.
 
-### Steps
+After any deploy, check health and run the smoke tests:
 
-1. Verify Go server is healthy:
-   ```bash
-   curl http://localhost:5000/api/health
-   ```
-2. Run smoke tests:
-   ```bash
-   bash /var/www/inventory-app/server-go/scripts/verify.sh
-   ```
-3. Monitor Go logs for at least 24 hours:
-   ```bash
-   pm2 logs inventory-app
-   ```
-4. **If issues found** — roll back to Express immediately:
-   ```bash
-   pm2 stop inventory-app
-   # temporarily route legacy to :5000 via Nginx upstream change, or:
-   pm2 restart inventory-app-legacy
-   ```
-5. After 3+ stable days, decommission the legacy process:
-   ```bash
-   pm2 stop inventory-app-legacy
-   pm2 delete inventory-app-legacy
-   pm2 save
-   ```
+```bash
+curl http://localhost:5000/api/health
+bash /var/www/inventory-app/server-go/scripts/verify.sh
+```
 
 ---
 
@@ -139,13 +137,15 @@ CREATE USER postgres WITH PASSWORD 'your-password';
 GRANT ALL PRIVILEGES ON DATABASE inventory_app TO postgres;
 \q
 ```
-```bash
-# Run schema (first-time setup only)
-psql -U postgres -d inventory_app -f /var/www/inventory-app/server/schema.sql
+The schema is built entirely by the migrations, once the application files are in
+place (step 3) and `server-go/.env` holds the DB credentials:
 
-# Run migrations (applies any changes on top of the base schema)
-cd /var/www/inventory-app/server
-npm run migrate
+```bash
+bash /var/www/inventory-app/deploy/migrate.sh        # applies 001_initial onward
+
+# No migration creates a user: create the first admin, then log in and change it
+cd /var/www/inventory-app/server-go
+go run ./cmd/reset-password -create-admin admin '<a-strong-password>'
 ```
 
 ## 3. Deploy application files
@@ -157,9 +157,9 @@ sudo chown $USER:$USER /var/www/inventory-app
 # Copy or git clone your project
 git clone <your-repo> /var/www/inventory-app
 
-# Install server dependencies
-cd /var/www/inventory-app/server
-npm install --omit=dev
+# Build the Go API
+cd /var/www/inventory-app/server-go
+go build -o api ./cmd/api
 
 # Build the React frontend
 cd /var/www/inventory-app/client
@@ -170,20 +170,20 @@ npm run build
 
 ## 4. Configure environment
 
-Copy the config template and fill in your values:
+Copy the PM2 template and fill in your values:
 
 ```bash
-cp /var/www/inventory-app/server/config.example.json /var/www/inventory-app/server/config.json
-nano /var/www/inventory-app/server/config.json
+cp /var/www/inventory-app/deploy/ecosystem.config.example.cjs /var/www/inventory-app/deploy/ecosystem.config.cjs
+nano /var/www/inventory-app/deploy/ecosystem.config.cjs
 ```
 
-Set `db.password` to your PostgreSQL password and `jwtSecret` to a long random string:
+Set `DB_PASSWORD` to your PostgreSQL password and `JWT_SECRET` to a long random string:
 
 ```bash
-node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+openssl rand -hex 48
 ```
 
-`config.json` is gitignored and never committed — it stays only on the server.
+`ecosystem.config.cjs` is gitignored and never committed — it stays only on the server.
 
 ## 5. Start the app with PM2
 
@@ -255,21 +255,12 @@ pm2 restart inventory-app
 
 ## First time running migrations on an existing database
 
-If your production DB already has the tables but was set up before the migration runner existed, mark all past migrations as already applied so the runner doesn't re-run them:
+If the database already has the tables but golang-migrate has never run against
+it, record the version the schema already matches instead of re-running it:
 
 ```bash
-cd /var/www/inventory-app/server
-node migrate.js   # creates the schema_migrations table
-
-# Then mark the migrations that were already applied manually:
-psql -U postgres -d inventory_app -c "
-  INSERT INTO schema_migrations (filename) VALUES
-    ('add_enumerations.sql'),
-    ('add_template_vendor_warehouse.sql')
-  ON CONFLICT DO NOTHING;
-"
-
-node migrate.js   # should now print: No pending migrations.
+bash /var/www/inventory-app/deploy/migrate.sh force <version>   # sets the version, runs no SQL
+bash /var/www/inventory-app/deploy/migrate.sh                   # applies everything after it
 ```
 
-From this point on, just run `npm run migrate` after every `git pull`.
+`deploy.sh` runs pending migrations on every deploy from then on.

@@ -1,10 +1,15 @@
+// reset-password sets a user's password from the command line, and with
+// -create-admin also bootstraps the first admin account on a fresh database
+// (no migration creates a user).
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -13,12 +18,18 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "Usage: reset-password <username> <new-password>\n")
+	createAdmin := flag.Bool("create-admin", false, "create the user with role admin if it does not exist")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: reset-password [-create-admin] <username> <new-password>\n")
+	}
+	flag.Parse()
+	if flag.NArg() != 2 {
+		flag.Usage()
 		os.Exit(1)
 	}
-	username := os.Args[1]
-	password := os.Args[2]
+	// Login lowercases the username before looking it up, so store it that way.
+	username := strings.ToLower(strings.TrimSpace(flag.Arg(0)))
+	password := flag.Arg(1)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -44,9 +55,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to update password: %v", err)
 	}
-	if tag.RowsAffected() == 0 {
-		log.Fatalf("user %q not found", username)
+	if tag.RowsAffected() > 0 {
+		fmt.Printf("Password for user %q updated successfully.\n", username)
+		return
+	}
+	if !*createAdmin {
+		log.Fatalf("user %q not found (pass -create-admin to create it)", username)
 	}
 
-	fmt.Printf("Password for user %q updated successfully.\n", username)
+	if _, err := pool.Exec(ctx,
+		"INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin')",
+		username, string(hash),
+	); err != nil {
+		log.Fatalf("failed to create user: %v", err)
+	}
+	fmt.Printf("Admin user %q created.\n", username)
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"inventory-app/server-go/internal/config"
 	"inventory-app/server-go/internal/db"
 	"inventory-app/server-go/internal/middleware"
 	"inventory-app/server-go/internal/service"
@@ -43,7 +44,7 @@ func (h *HREmployeesHandler) resolveUploadsDir() string {
 	if h.uploadsDir != "" {
 		return h.uploadsDir
 	}
-	return filepath.Join("..", "server", "uploads")
+	return config.DefaultUploadsDir
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

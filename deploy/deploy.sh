@@ -104,6 +104,33 @@ cd "$SERVER_GO_DIR"
 go build -o api ./cmd/api
 ok "Binary built: $(du -sh api | cut -f1)"
 
+# ── 5b. Uploads location ──────────────────────────────────────────────────────
+# Uploads moved from server/uploads (the removed Node backend's folder) to
+# uploads/ at the app root. Move them once, and leave a symlink at the old path
+# so an nginx alias or a PM2 UPLOADS_DIR that still names it keeps working until
+# the server config is updated (see DEPLOY.md). Nothing here deletes a file: if
+# both folders hold files, the old one is merged without overwriting and then
+# kept under a dated name.
+UPLOADS_DIR_NEW="$APP_DIR/uploads"
+UPLOADS_DIR_OLD="$APP_DIR/server/uploads"
+if [ -d "$UPLOADS_DIR_OLD" ] && [ ! -L "$UPLOADS_DIR_OLD" ]; then
+  if [ ! -e "$UPLOADS_DIR_NEW" ]; then
+    log "Moving uploads: server/uploads → uploads/"
+    mv "$UPLOADS_DIR_OLD" "$UPLOADS_DIR_NEW"
+  else
+    KEPT="$UPLOADS_DIR_OLD.migrated-$(date +%Y%m%d%H%M%S)"
+    log "Merging server/uploads into uploads/ (existing files kept; old folder kept as $KEPT)"
+    cp -an "$UPLOADS_DIR_OLD"/. "$UPLOADS_DIR_NEW"/
+    mv "$UPLOADS_DIR_OLD" "$KEPT"
+  fi
+  ln -s "$UPLOADS_DIR_NEW" "$UPLOADS_DIR_OLD"
+  ok "Uploads now in $UPLOADS_DIR_NEW (old path is a symlink)"
+fi
+mkdir -p "$UPLOADS_DIR_NEW"
+if grep -q "server/uploads" "$APP_DIR/deploy/ecosystem.config.cjs" 2>/dev/null; then
+  log "NOTE: ecosystem.config.cjs still sets UPLOADS_DIR to server/uploads — works via the symlink; change it to $UPLOADS_DIR_NEW"
+fi
+
 # ── 6. (Re)start PM2 ──────────────────────────────────────────────────────────
 # Use delete + start (NOT reload): reload reuses PM2's cached launch options, so
 # changes to ecosystem.config.cjs (interpreter, kill_timeout, env) would never

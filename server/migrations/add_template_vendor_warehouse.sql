@@ -1,3 +1,0 @@
-ALTER TABLE invoice_templates
-  ADD COLUMN IF NOT EXISTS vendor_id    UUID REFERENCES vendors(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS warehouse_id UUID REFERENCES warehouses(id) ON DELETE SET NULL;

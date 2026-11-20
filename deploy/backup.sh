@@ -10,7 +10,7 @@ DB_NAME="inventory_app"
 DB_USER="postgres"
 DB_PASSWORD="CHANGE_THIS_TO_YOUR_DB_PASSWORD"
 BACKUP_DIR="/var/backups/inventory-app"
-UPLOADS_DIR="/var/www/inventory-app/server/uploads"
+UPLOADS_DIR="/var/www/inventory-app/uploads"
 KEEP_DAYS=30   # delete backups older than this
 
 # ── Setup ─────────────────────────────────────────────────────────────────────

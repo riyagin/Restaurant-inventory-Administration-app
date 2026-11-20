@@ -50,7 +50,7 @@ module.exports = {
         DB_USER: 'postgres',
         DB_PASSWORD: 'CHANGE_THIS_TO_YOUR_DB_PASSWORD',
         JWT_SECRET: 'CHANGE_THIS_TO_A_LONG_RANDOM_STRING',
-        UPLOADS_DIR: '/var/www/inventory-app/server/uploads',
+        UPLOADS_DIR: '/var/www/inventory-app/uploads',
       },
 
       out_file: '/var/log/inventory-app/out.log',

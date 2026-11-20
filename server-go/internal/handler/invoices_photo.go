@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"inventory-app/server-go/internal/config"
 	"inventory-app/server-go/internal/db"
 	"inventory-app/server-go/internal/middleware"
 	"inventory-app/server-go/internal/service"
@@ -120,7 +121,7 @@ func (h *InvoicesHandler) UploadPhoto(w http.ResponseWriter, r *http.Request) {
 	filename := fmt.Sprintf("invoice-%s-%d%s", id.String(), time.Now().Unix(), ext)
 	uploadsDir := h.uploadsDir
 	if uploadsDir == "" {
-		uploadsDir = filepath.Join("..", "server", "uploads")
+		uploadsDir = config.DefaultUploadsDir
 	}
 
 	if err := os.MkdirAll(uploadsDir, 0755); err != nil {
@@ -195,7 +196,7 @@ func (h *InvoicesHandler) DeletePhoto(w http.ResponseWriter, r *http.Request) {
 
 	uploadsDir := h.uploadsDir
 	if uploadsDir == "" {
-		uploadsDir = filepath.Join("..", "server", "uploads")
+		uploadsDir = config.DefaultUploadsDir
 	}
 
 	_ = os.Remove(filepath.Join(uploadsDir, invoice.PhotoPath.String))

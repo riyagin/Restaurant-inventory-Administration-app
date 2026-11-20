@@ -8,6 +8,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// DefaultUploadsDir is where uploads live when UPLOADS_DIR is unset: the
+// repository's uploads/ folder, relative to the process's working directory
+// (server-go/) rather than the executable — `go run` compiles to a throwaway
+// temp dir, so os.Executable() would silently misdirect uploads there.
+var DefaultUploadsDir = filepath.Join("..", "uploads")
+
 type Config struct {
 	DBHost     string
 	DBPort     string
@@ -25,10 +31,7 @@ func Load() (*Config, error) {
 
 	uploadsDir := getEnv("UPLOADS_DIR", "")
 	if uploadsDir == "" {
-		// Relative to the process's working directory (server-go/), not the
-		// executable path — `go run` compiles to a throwaway temp dir, so
-		// os.Executable() would silently misdirect uploads there.
-		uploadsDir = filepath.Join("..", "server", "uploads")
+		uploadsDir = DefaultUploadsDir
 	}
 
 	cfg := &Config{

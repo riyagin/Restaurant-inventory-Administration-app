@@ -36,7 +36,7 @@ inventory-app/
 │   ├── migrations/    golang-migrate SQL files (001 → 080, up + down)
 │   ├── queries/       .sql files read by sqlc
 │   └── sqlc.yaml, go.mod
-├── server/            Legacy Node/Express backend (one ~3,300-line index.js). Reference only — no new work here
+├── uploads/           Uploaded files in development (gitignored; UPLOADS_DIR overrides)
 ├── deploy/            PM2 config, Nginx config, deploy/migrate/backup scripts, DEPLOY.md
 ├── docs/hr-system/    Design specs for the HR module (00-overview … 10-integration-qa, access-matrix)
 ├── start.bat          Windows: starts the dev servers
@@ -147,6 +147,6 @@ Registered devices and enrollment coverage are managed on the web at `/hr/face` 
 | Full architecture, every DB rule, every endpoint | [CLAUDE.md](CLAUDE.md) |
 | Production deployment | [deploy/DEPLOY.md](deploy/DEPLOY.md) |
 | HR module design specs | [docs/hr-system/](docs/hr-system/) |
-| Database schema | `server-go/migrations/` (the source of truth; `server/schema.sql` is legacy) |
+| Database schema | `server-go/migrations/` (the source of truth) |
 | API client functions | `client/src/api.js` |
 | Routes and page guards | `client/src/App.jsx` |

@@ -10,7 +10,7 @@ Generate Indonesian-language PDF payslips (Slip Gaji) per employee per payroll p
 
 1. **PDF library**: use a pure-Go PDF lib (e.g. `github.com/go-pdf/fpdf` or `github.com/johnfercher/maroto/v2` — pick one, justify in code comment). No external binaries (must run on the Ubuntu VPS under PM2).
 2. **Company header settings**: add `hr_settings` singleton (company name, address, logo path, payslip footer text) + small admin form (can live on `/hr/attendance/settings` page renamed to a general `/hr/settings`, or its own section — keep it simple).
-3. Payslips are **rendered on demand** from `payroll_lines` + `payroll_line_components` snapshots — no new stored documents (optionally cache to `server/uploads/payslips/` keyed by line id; invalidate never, since closed lines are immutable).
+3. Payslips are **rendered on demand** from `payroll_lines` + `payroll_line_components` snapshots — no new stored documents (optionally cache to `<UPLOADS_DIR>/payslips/` keyed by line id; invalidate never, since closed lines are immutable).
 
 ## Payslip Layout (A4)
 

@@ -2,7 +2,7 @@
 
 A full-stack inventory and business management system for small-to-medium businesses. Handles stock management, purchasing, sales, production, branch operations, and financial reporting — all in one place.
 
-Built with React, Node.js/Express, and PostgreSQL.
+Built with React, Go, and PostgreSQL.
 
 ---
 
@@ -56,10 +56,10 @@ Built with React, Node.js/Express, and PostgreSQL.
 | Layer | Technology |
 |-------|-----------|
 | Frontend | React 19, React Router 7, Vite |
-| Backend | Node.js, Express 5 |
+| Backend | Go (chi, pgx, sqlc) |
 | Database | PostgreSQL |
-| Auth | JWT (jsonwebtoken), bcrypt |
-| File uploads | Multer |
+| Auth | JWT (golang-jwt) — httpOnly refresh cookie, bcrypt |
+| File uploads | Go `multipart`, stored in `UPLOADS_DIR` |
 | Excel/POS import | xlsx |
 | Process manager | PM2 (production) |
 | Reverse proxy | Nginx (production) |
@@ -76,15 +76,16 @@ inventory-app/
 │   │   ├── api.js           # Axios API helpers
 │   │   └── App.jsx          # Router and layout
 │   └── package.json
-├── server/
-│   ├── index.js             # Express app and all API routes
-│   ├── schema.sql           # Database schema
-│   ├── seed.sql             # Seed data
-│   ├── reset-password.js    # CLI script for password recovery
-│   └── package.json
+├── server-go/               # Go API (chi + pgx + sqlc)
+│   ├── cmd/api/             # Server entry point
+│   ├── cmd/reset-password/  # Password reset / first-admin CLI
+│   ├── internal/            # handlers, services, generated queries
+│   ├── queries/             # SQL that sqlc compiles into internal/db
+│   └── migrations/          # golang-migrate schema history (the schema's source of truth)
+├── uploads/                 # Uploaded files in development (gitignored)
 ├── deploy/
 │   ├── nginx.conf           # Nginx reverse proxy config
-│   ├── ecosystem.config.cjs # PM2 process config
+│   ├── ecosystem.config.example.cjs # PM2 process config template
 │   ├── backup.sh            # Automated DB + uploads backup
 │   └── DEPLOY.md            # Step-by-step deployment guide
 └── start.bat                # Windows dev launcher
@@ -96,8 +97,10 @@ inventory-app/
 
 ### Prerequisites
 
-- Node.js 20+
+- Go (version in `server-go/go.mod`)
+- Node.js 20+ (frontend)
 - PostgreSQL 14+
+- [golang-migrate](https://github.com/golang-migrate/migrate) CLI
 
 ### 1. Clone the repository
 
@@ -110,13 +113,14 @@ cd inventory-app
 
 ```bash
 psql -U postgres -c "CREATE DATABASE inventory_app;"
-psql -U postgres -d inventory_app -f server/schema.sql
-psql -U postgres -d inventory_app -f server/seed.sql   # optional seed data
+cd server-go
+migrate -path migrations -database "postgres://postgres:<password>@localhost:5432/inventory_app?sslmode=disable" up
+go run ./cmd/reset-password -create-admin admin <password>   # first login
 ```
 
 ### 3. Configure the server
 
-Edit `server/index.js` and update the database connection, or set environment variables:
+Put the connection settings in `server-go/.env`:
 
 ```bash
 DB_HOST=localhost
@@ -130,8 +134,7 @@ JWT_SECRET=your_long_random_secret
 ### 4. Install dependencies
 
 ```bash
-cd server && npm install
-cd ../client && npm install
+cd client && npm install
 ```
 
 ### 5. Start the development servers
@@ -144,7 +147,7 @@ start.bat
 **Manual:**
 ```bash
 # Terminal 1 — backend (port 5000)
-cd server && npm run dev
+cd server-go && go run ./cmd/api
 
 # Terminal 2 — frontend (port 5173)
 cd client && npm run dev
@@ -156,14 +159,8 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ## Default Login
 
-After running the seed, log in with:
-
-| Field | Value |
-|-------|-------|
-| Username | `admin` |
-| Password | `admin123` |
-
-> Change the admin password immediately after first login.
+Log in with the admin account created in step 2, and change its password after
+the first login.
 
 ---
 
@@ -172,7 +169,7 @@ After running the seed, log in with:
 If an admin forgets their password, run this script directly on the server:
 
 ```bash
-node server/reset-password.js <username> <new-password>
+cd server-go && go run ./cmd/reset-password <username> <new-password>
 ```
 
 ---

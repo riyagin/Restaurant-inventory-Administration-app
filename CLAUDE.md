@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Inventory App** — a full-stack inventory and financial management system for a small F&B business. Built for Indonesian locale (IDR currency, `id-ID` formatting). The backend is being migrated from Node.js/Express to **Go**.
+**Inventory App** — a full-stack inventory and financial management system for a small F&B business. Built for Indonesian locale (IDR currency, `id-ID` formatting). React frontend, **Go** backend, PostgreSQL. (The original Node/Express backend has been removed; it survives only in git history.)
 
 ---
 
@@ -15,8 +15,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 inventory-app/
   client/          React 19 SPA (Vite)
-  server/          Node.js/Express legacy backend (being replaced)
-  server-go/       Go backend (new — migration target)
+  server-go/       Go backend
+  uploads/         Uploaded files in development (gitignored; UPLOADS_DIR overrides)
   deploy/          PM2 config, Nginx config, backup script
   start.bat        Windows: launches both dev servers
 ```
@@ -39,7 +39,7 @@ npm run lint       # ESLint (flat config, ESLint 9)
 npm run preview    # Preview production build
 ```
 
-### Go Backend (new)
+### Go Backend
 ```bash
 cd server-go
 go run ./cmd/api         # Dev server → http://localhost:5000
@@ -52,21 +52,13 @@ migrate -path migrations -database "$DATABASE_URL" down 1  # Roll back one
 migrate create -ext sql -dir migrations -seq <name>        # New migration
 ```
 
-### Legacy Node Backend (keep running during migration)
-```bash
-cd server
-npm run dev        # Node with --watch → http://localhost:5001 (shifted port)
-npm start          # Production
-```
-
 ### Database
 ```bash
-# Initial schema (legacy, use migrations going forward)
-psql -U postgres -d inventory_app -f server/schema.sql
+# A fresh database is built entirely by the migrations (001_initial onward)
+migrate -path server-go/migrations -database "$DATABASE_URL" up
 
 # Reset admin password
 go run ./server-go/cmd/reset-password <username> <new-password>
-# or legacy: node server/reset-password.js
 
 # Seed HR dev data (positions, employees, wage structures, work schedule, holidays, policy)
 go run ./server-go/cmd/seed-hr
@@ -84,7 +76,7 @@ go run ./server-go/cmd/seed-attendance-cuts -clean   # remove every SIM-CUT row
 
 ---
 
-## Architecture: Go Backend (Migration Target)
+## Architecture: Go Backend
 
 ### Stack
 | Layer | Tool |
@@ -183,19 +175,7 @@ React page → api.js (Axios + JWT) → Chi router (auth middleware) → handler
 
 ---
 
-## Architecture: Legacy Node Backend (Reference)
 
-The Express backend lives in `server/index.js` (~3271 lines). All routes, middleware, and business logic are in one file. **Do not add new features here** — all new work goes in the Go backend.
-
-### Key Patterns (replicate in Go)
-- **No ORM**: raw parameterized SQL (`$1, $2` placeholders) — same in Go via sqlc
-- **Transactions**: `pool.connect()` + BEGIN/COMMIT/ROLLBACK for multi-step ops
-- **Activity logging**: every mutation calls `logActivity()` — replicate with `logActivity()` helper in Go
-- **FIFO inventory**: lot-based consumption — logic lives in `service/inventory.go`
-- **CoA balance updates**: `accounts.balance` updated in real time on every transaction
-- **Token blocklist**: `token_blocklist` table + hourly `setInterval` cleanup → Go goroutine with `time.Ticker`
-
----
 
 ## Frontend (React)
 
@@ -598,7 +578,7 @@ Only per-letter fields live on the generator form. Everything that belongs to th
 
 ## Environment Variables
 
-`server-go/.env` (or `server/.env` for legacy):
+`server-go/.env`:
 ```
 DB_HOST=localhost
 DB_PORT=5432
@@ -616,13 +596,11 @@ For Go, build DATABASE_URL from these: `postgres://user:pass@host:port/dbname`
 ## Production Deployment (Ubuntu VPS)
 
 - **OS**: Ubuntu 22.04 LTS
-- **Process manager**: PM2 (`deploy/ecosystem.config.cjs`) → will point at Go binary after migration
+- **Process manager**: PM2 (`deploy/ecosystem.config.cjs`, untracked; copy `ecosystem.config.example.cjs`) running the Go binary `server-go/api`
 - **Web server**: Nginx (`deploy/nginx.conf`) — reverse proxy `/api/` to port 5000, serves `client/dist/` as static, `/uploads/` as file alias
 - **SSL**: Let's Encrypt (Certbot)
 - **Backups**: `deploy/backup.sh` — daily pg_dump + uploads tarball, 30-day retention
-- **Uploads dir**: `server/uploads/` (invoice photos) — persisted across deploys
-
-After Go migration, PM2 script changes from `./server/index.js` to `./server-go/api`.
+- **Uploads dir**: `/var/www/inventory-app/uploads` (`UPLOADS_DIR`) — persisted across deploys. It used to be `server/uploads`; `deploy.sh` moves an existing folder once and leaves a symlink at the old path, so a live nginx alias or PM2 env still naming it keeps working until updated
 
 ---
 

@@ -60,7 +60,7 @@ Indexes on `branch_id`, `position_id`, `status`, and `lower(full_name)`.
 | `GET /api/hr/employees/:id` | Full profile incl. branch + position names |
 | `PUT /api/hr/employees/:id` | |
 | `DELETE /api/hr/employees/:id` | Block if referenced by later HR tables (rely on FK RESTRICT); recommend setting status inactive instead |
-| `POST /api/hr/employees/:id/photo` / `DELETE .../photo` | Mirror the invoice photo upload pattern (multipart → `server/uploads/`) |
+| `POST /api/hr/employees/:id/photo` / `DELETE .../photo` | Mirror the invoice photo upload pattern (multipart → the uploads dir, `UPLOADS_DIR`) |
 | `GET /api/hr/positions`, `POST`, `PUT /:id`, `DELETE /:id` | Position master CRUD |
 
 Access: admin/manager full CRUD; staff read-only list+detail. Log all mutations via `logActivity` (entity_type `hr_employee`, `hr_position`).

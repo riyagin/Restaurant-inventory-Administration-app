@@ -17,13 +17,16 @@ pnpm-debug.log*
 .env
 .env.*
 !.env.example
-server/config.json
 # PM2 config holds the prod DB password + JWT secret — keep the real file
 # untracked; only ecosystem.config.example.cjs (placeholders) is committed.
 deploy/ecosystem.config.cjs
 
-# Uploaded files (server)
-server/uploads/
+# Uploaded files (UPLOADS_DIR defaults to this folder in development)
+/uploads/
+
+# Leftovers of the removed Node backend on existing checkouts: node_modules,
+# config.json (credentials) and, on the VPS, the server/uploads symlink.
+/server/
 
 # OS
 .DS_Store

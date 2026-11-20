@@ -30,7 +30,7 @@ Run these scenarios against a seeded dev database; fix anything broken:
 - No `console.log`/debug prints; all UI strings Indonesian; all money paths BigInt cents (grep for float math on amounts).
 
 ### 5. Deployment Updates
-- `deploy/backup.sh`: confirm pg_dump covers new tables (it does — full DB) and that `server/uploads/` subfolders (employee photos, kasbon evidence, payslip cache) are included in the tarball.
+- `deploy/backup.sh`: confirm pg_dump covers new tables (it does — full DB) and that the uploads dir's subfolders (employee photos, kasbon evidence, payslip cache) are included in the tarball.
 - `deploy/nginx.conf`: `/uploads/` alias serves the new subfolders; consider auth implications for sensitive payslip files (move payslip cache OUT of the public uploads alias — serve only through the authenticated API).
 - Update root `CLAUDE.md`: add HR tables, routes, pages, the `manager` role, and the device API to the relevant sections.
 

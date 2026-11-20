@@ -19,7 +19,7 @@
 //
 // Re-running is safe: earlier seeded photos are removed first. Seeded files are
 // named face-devseed-*.jpg and live in the normal uploads directory
-// (UPLOADS_DIR, default ../server/uploads), served at /uploads/ by the dev API.
+// (UPLOADS_DIR, default ../uploads), served at /uploads/ by the dev API.
 package main
 
 import (
