@@ -9,7 +9,10 @@ import { reportConnectionDown, reportConnectionUp, classifyConnectionError } fro
 let apiBaseUrl = '/api';
 try {
   const config = await fetch('/config.json').then(r => r.json());
-  if (config?.apiBaseUrl) apiBaseUrl = config.apiBaseUrl;
+  // Strip trailing slashes: several calls join paths by hand
+  // (`${apiBaseUrl}/auth/login`), and "…/api/" would yield "/api//auth/login",
+  // which the Go router answers with a plain 404.
+  if (config?.apiBaseUrl) apiBaseUrl = String(config.apiBaseUrl).replace(/\/+$/, '') || '/api';
 } catch (err) {
   reportConnectionDown('config', `Gagal memuat /config.json — ${err?.message || 'tidak dapat dijangkau'}`);
 }
