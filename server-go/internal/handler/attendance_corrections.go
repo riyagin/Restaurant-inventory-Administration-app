@@ -17,10 +17,7 @@ import (
 	"inventory-app/server-go/internal/service"
 )
 
-// ── Manual correction — PUT /api/hr/attendance/:id ───────────────────────────
-//
-// Body: { check_in?, check_out?, status?, note (REQUIRED) }. Source becomes
-// 'manual', anomalies are recomputed, and the change is logged.
+// Update — PUT /api/hr/attendance/:id (note required; source becomes manual)
 func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -130,9 +127,6 @@ func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Re-run performance evaluation for this record: drop its stale auto
-	// violations, re-evaluate against current policies, and recompute the
-	// employee's monthly score. Runs in the same transaction as the correction.
 	if err := service.DeleteAutoViolationsForRecord(ctx, qtx, updated); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menghitung ulang skor kinerja")
 		return
@@ -155,18 +149,7 @@ func (h *AttendanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// ── Half-day correction — POST /api/hr/attendance/:id/half-day ───────────────
-//
-// Reclassifies a day as a "half day". Two types:
-//   - "late":  arrived past the max late threshold. `start_time` becomes the
-//     check-in; lost minutes = scheduled start → entry.
-//   - "early": came in on time but left in the afternoon. `end_time` becomes the
-//     check-out; lost minutes = departure → scheduled work end.
-//
-// The wage is later reduced by the lost working hours and the performance score is
-// deducted by the matching 'half_day_late' / 'half_day_early' policy instead of the
-// normal late/early_leave rules. Manual manager action, no approval.
-// Body: { type ("late"|"early", default "late"), start_time?, end_time?, note (REQUIRED) }.
+// SetHalfDay — POST /api/hr/attendance/:id/half-day {type: late|early, start_time?, end_time?, note}
 func (h *AttendanceHandler) SetHalfDay(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -290,9 +273,7 @@ func parseHalfDayTime(w http.ResponseWriter, raw, field string) (time.Time, bool
 	return t, true
 }
 
-// ── Clear half-day — DELETE /api/hr/attendance/:id/half-day ───────────────────
-// Reverts a half-day correction: clears the flag and lost minutes and re-evaluates
-// performance (the normal late/early rules apply again). The check-in is left as-is.
+// ClearHalfDay — DELETE /api/hr/attendance/:id/half-day
 func (h *AttendanceHandler) ClearHalfDay(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -337,12 +318,7 @@ func (h *AttendanceHandler) ClearHalfDay(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// ── Present-without-scan — POST /api/hr/attendance/:id/present-no-punch ───────
-//
-// Marks a day the employee actually worked but forgot to check in AND check out.
-// Sets status=present with no punches (is_no_punch), which the performance engine
-// penalizes via the 'no_punch' policy. Typically applied to a record reconciliation
-// marked 'absent'. Manual manager action, no approval. Body: { note (REQUIRED) }.
+// MarkPresentNoPunch — POST /api/hr/attendance/:id/present-no-punch {note}
 func (h *AttendanceHandler) MarkPresentNoPunch(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -453,10 +429,6 @@ func (h *AttendanceHandler) ClearPresentNoPunch(w http.ResponseWriter, r *http.R
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// persistCorrection writes a corrected attendance state, re-runs performance
-// evaluation for the record and logs the change — the shared tail of the manual
-// half-day set/clear handlers. `note` is stored on the record; `logDesc` is the
-// activity-log description.
 func (h *AttendanceHandler) persistCorrection(ctx context.Context, existing *db.AttendanceRecord, state *service.AttendanceState, note, logDesc string) (*db.AttendanceRecord, error) {
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {

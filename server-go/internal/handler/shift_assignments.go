@@ -56,9 +56,7 @@ func optUUID(s *string) (pgtype.UUID, error) {
 	return pgUUID(id), nil
 }
 
-// resolveShiftEntry applies every rule a roster cell must satisfy, against the
-// state inside the caller's transaction. The date rule is checked by callers,
-// because approving a request and saving a cell treat "today" differently.
+// resolveShiftEntry checks a cell's rules; callers check the date rule.
 func resolveShiftEntry(ctx context.Context, q db.DBTX, e shiftAssignmentEntry) (*resolvedEntry, error) {
 	empID, err := parseUUID(e.EmployeeID)
 	if err != nil {
@@ -173,11 +171,7 @@ func applyShiftEntry(ctx context.Context, q db.DBTX, e *resolvedEntry, userID pg
 	return err
 }
 
-// recomputeTodayAttendance re-judges today's attendance after today's roster
-// changed. Lateness is measured against the shift, so a shift assigned, swapped
-// or removed after the employee checked in must move the flags now, not leave
-// the day judged against the shift (or the lack of one) in force at the punch.
-// Past days are read-only and future days hold no attendance yet.
+// recomputeTodayAttendance re-judges today, since lateness is measured against the shift.
 func recomputeTodayAttendance(ctx context.Context, q db.DBTX, employeeID pgtype.UUID, date time.Time) error {
 	if date.Format("2006-01-02") != service.TodayWIB().Format("2006-01-02") {
 		return nil
@@ -196,9 +190,7 @@ func currentAssignment(ctx context.Context, q db.DBTX, employeeID pgtype.UUID, d
 	return shiftID, divisionID, err
 }
 
-// SaveShiftAssignments — PUT /api/hr/shift-assignments
-// Body: {entries: [{employee_id, date, shift_id|null, division_id|null}], reason}
-// The batch is atomic: one rule failure rejects all of it, naming the cell.
+// SaveShiftAssignments — PUT /api/hr/shift-assignments (atomic: one bad cell rejects the batch)
 func (h *ShiftHandler) SaveShiftAssignments(w http.ResponseWriter, r *http.Request) {
 	var body shiftAssignmentsBody
 	if err := parseBody(r, &body); err != nil {

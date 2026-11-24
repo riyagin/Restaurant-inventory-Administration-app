@@ -27,17 +27,11 @@ func NewAttendanceHandler(pool *pgxpool.Pool, queries *db.Queries) *AttendanceHa
 	return &AttendanceHandler{
 		pool:    pool,
 		queries: queries,
-		parser: service.NewDATFingerprintParser(),
+		parser:  service.NewDATFingerprintParser(),
 	}
 }
 
-// ── List with filters — GET /api/hr/attendance ───────────────────────────────
-//
-// Query params: date_from, date_to, branch_id, employee_id, status, source,
-// anomaly_only (true/false). Returns records joined with employee name/code.
-// noShiftSQL is true for a present record whose employee has no rostered shift
-// that day. Read live from the roster: today's roster changes re-judge the day,
-// and past days' roster is read-only, so it always matches how the day was judged.
+// List — GET /api/hr/attendance?date_from=&date_to=&branch_id=&employee_id=&status=&source=&anomaly_only=
 const noShiftSQL = `(ar.status = 'present' AND NOT EXISTS (
 		SELECT 1 FROM shift_assignments sa WHERE sa.employee_id = ar.employee_id AND sa.date = ar.date))`
 
@@ -96,9 +90,7 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
-	// Opt-in pagination: when `page` is present we return a bounded slice plus a
-	// total count so the client can render page controls. Callers that omit `page`
-	// (dashboard, grid, employee detail) keep the legacy LIMIT 1000 behaviour.
+	// Paginated only when `page` is sent; otherwise LIMIT 1000.
 	paginate := strings.TrimSpace(q.Get("page")) != ""
 	var total int64
 	limit, offset := 1000, 0
@@ -158,20 +150,20 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type recordRow struct {
-		ID                pgtype.UUID        `json:"id"`
-		EmployeeID        pgtype.UUID        `json:"employee_id"`
-		Date              pgtype.Date        `json:"date"`
-		CheckIn           pgtype.Timestamptz `json:"check_in"`
-		CheckOut          pgtype.Timestamptz `json:"check_out"`
-		CheckInSource     pgtype.Text        `json:"check_in_source"`
-		CheckOutSource    pgtype.Text        `json:"check_out_source"`
-		CheckInPhotoPath  pgtype.Text        `json:"check_in_photo_path"`
-		DeviceID          pgtype.UUID        `json:"device_id"`
-		Status            string             `json:"status"`
-		IsLate            bool               `json:"is_late"`
-		LateMinutes       int32              `json:"late_minutes"`
-		IsEarlyLeave      bool               `json:"is_early_leave"`
-		EarlyLeaveMinutes int32              `json:"early_leave_minutes"`
+		ID                 pgtype.UUID        `json:"id"`
+		EmployeeID         pgtype.UUID        `json:"employee_id"`
+		Date               pgtype.Date        `json:"date"`
+		CheckIn            pgtype.Timestamptz `json:"check_in"`
+		CheckOut           pgtype.Timestamptz `json:"check_out"`
+		CheckInSource      pgtype.Text        `json:"check_in_source"`
+		CheckOutSource     pgtype.Text        `json:"check_out_source"`
+		CheckInPhotoPath   pgtype.Text        `json:"check_in_photo_path"`
+		DeviceID           pgtype.UUID        `json:"device_id"`
+		Status             string             `json:"status"`
+		IsLate             bool               `json:"is_late"`
+		LateMinutes        int32              `json:"late_minutes"`
+		IsEarlyLeave       bool               `json:"is_early_leave"`
+		EarlyLeaveMinutes  int32              `json:"early_leave_minutes"`
 		IsMissingCheckout  bool               `json:"is_missing_checkout"`
 		Note               pgtype.Text        `json:"note"`
 		IsHalfDay          bool               `json:"is_half_day"`
@@ -180,25 +172,21 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 		IsMissingCheckin   bool               `json:"is_missing_checkin"`
 		IsNoPunch          bool               `json:"is_no_punch"`
 		// is_leave_punch: punched on an approved leave day (status stays 'leave').
-		IsLeavePunch       bool               `json:"is_leave_punch"`
+		IsLeavePunch bool `json:"is_leave_punch"`
 		// excused_by: the approved permit that shaped the day (late_arrival |
 		// early_departure | off_site), null when none.
-		ExcusedBy          pgtype.Text        `json:"excused_by"`
-		FullName           string             `json:"full_name"`
-		EmployeeCode      string             `json:"employee_code"`
-		BranchID          pgtype.UUID        `json:"branch_id"`
-		BranchName        string             `json:"branch_name"`
-		// is_remote: the recording device's branch differs from the employee's
-		// home branch (a cross-branch / visitor check-in). clock_in_branch_name
-		// is where they actually clocked in (null for non-device records).
-		IsRemote          bool               `json:"is_remote"`
-		ClockInBranchName pgtype.Text        `json:"clock_in_branch_name"`
-		// no_shift: a present day with no rostered shift ("Tanpa shift"). Such a
-		// day is never judged late or early — lateness is measured against the
-		// shift — so this is the roster gap HR should see instead.
-		NoShift           bool               `json:"no_shift"`
+		ExcusedBy    pgtype.Text `json:"excused_by"`
+		FullName     string      `json:"full_name"`
+		EmployeeCode string      `json:"employee_code"`
+		BranchID     pgtype.UUID `json:"branch_id"`
+		BranchName   string      `json:"branch_name"`
+		// is_remote: clocked in at another branch's device.
+		IsRemote          bool        `json:"is_remote"`
+		ClockInBranchName pgtype.Text `json:"clock_in_branch_name"`
+		// no_shift: present without a rostered shift, so never judged late or early.
+		NoShift bool `json:"no_shift"`
 		// Latest face photo of the employee, for a small avatar on the card.
-		FacePhotoPath     pgtype.Text        `json:"face_photo_path"`
+		FacePhotoPath pgtype.Text `json:"face_photo_path"`
 	}
 
 	items := []recordRow{}
@@ -231,9 +219,6 @@ func (h *AttendanceHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
-// scheduleForEmployee resolves the branch schedule for an employee, falling back
-// to the default schedule, with the hours replaced by the employee's rostered
-// shift on that date when there is one.
 func (h *AttendanceHandler) scheduleForEmployee(ctx context.Context, employeeID pgtype.UUID, date time.Time) service.Schedule {
 	var branchID pgtype.UUID
 	row := h.pool.QueryRow(ctx, `SELECT branch_id FROM employees WHERE id = $1`, employeeID)
@@ -247,7 +232,6 @@ func (h *AttendanceHandler) scheduleForEmployee(ctx context.Context, employeeID 
 	return service.ScheduleWithShift(ctx, h.pool, sched, employeeID, date)
 }
 
-// ── Reconcile — POST /api/hr/attendance/reconcile?date=YYYY-MM-DD ─────────────
 func (h *AttendanceHandler) Reconcile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dateStr := strings.TrimSpace(r.URL.Query().Get("date"))

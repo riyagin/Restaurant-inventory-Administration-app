@@ -207,10 +207,7 @@ func (h *ShiftHandler) CreateShift(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusCreated, s)
 }
 
-// UpdateShift — PUT /api/hr/shifts/{id}
-// Changing a shift's hours also changes how attendance on already-rostered
-// future days is judged; past attendance keeps the flags it was computed with.
-// The branch is fixed: moving a shift would strand the assignments that use it.
+// UpdateShift — PUT /api/hr/shifts/{id} (branch is fixed)
 func (h *ShiftHandler) UpdateShift(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -263,9 +260,7 @@ func (h *ShiftHandler) UpdateShift(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, s)
 }
 
-// DeleteShift — DELETE /api/hr/shifts/{id}
-// A shift that has ever been rostered is deactivated instead of deleted: the
-// roster of past days must keep saying which shift people worked.
+// DeleteShift — DELETE /api/hr/shifts/{id} (deactivates a shift that was ever rostered)
 func (h *ShiftHandler) DeleteShift(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {

@@ -83,13 +83,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 		varianceAccountID = created.ID
 	}
 
-	// Both directions of a count difference post against the same pair, so an
-	// over-count nets against an under-count instead of accumulating in
-	// unrelated accounts:
-	//   loss    Dr Selisih Persediaan  Cr inventory
-	//   surplus Dr inventory           Cr Selisih Persediaan
-	// Posting either leg alone would create or destroy inventory value with no
-	// counterpart.
+	// Both directions post against the same pair so over- and under-counts net out.
 	varianceAcctID := uuidFromPg(varianceAccountID)
 	invAcctID := uuidFromPg(wh.InventoryAccountID)
 
@@ -140,15 +134,7 @@ func (h *StockOpnameHandler) Create(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Two different numbers, tracked separately on purpose:
-		//   wasteValue   — a magnitude, for stock_opname_items.waste_value and
-		//                  the waste journal; zero on a surplus.
-		//   historyValue — signed like quantity_change (positive = stock in,
-		//                  negative = stock out), for stock_history.value.
-		// Every other movement type already follows the signed convention, and
-		// the flow reports bucket on it (`value > 0` → masuk, `< 0` → keluar).
-		// Writing the waste magnitude here made a shrinkage count as inbound
-		// value, and leaving a surplus at 0 hid the added value entirely.
+		// wasteValue is a magnitude (zero on surplus); historyValue is signed like quantity_change.
 		var wasteValue, historyValue int64
 		if diff < 0 {
 			// Loss: FIFO deduct

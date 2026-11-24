@@ -112,11 +112,7 @@ type transferItemInput struct {
 	UnitName  string  `json:"unit_name"`
 }
 
-// postInventoryMove records value moving between two warehouse inventory
-// accounts — the shape every transfer, transfer edit and transfer cancellation
-// takes. Either side may be unset (a warehouse with no inventory account
-// configured); service.Post routes those legs to the suspense account so the
-// entry still balances instead of silently losing one side.
+// postInventoryMove: an unset side posts to suspense via service.Post.
 func postInventoryMove(
 	ctx context.Context,
 	qtx *db.Queries,

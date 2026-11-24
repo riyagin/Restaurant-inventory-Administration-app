@@ -14,12 +14,7 @@ import (
 	"inventory-app/server-go/internal/service"
 )
 
-// Delete — DELETE /api/stock-transfers/group/{groupId}
-//
-// Cancels a transfer group without erasing it: for every line the movement is
-// reversed (stock pulled back from destination via FIFO and returned to source),
-// both warehouses' inventory account balances are moved back, and the rows are
-// flagged 'cancelled' and kept for the audit trail.
+// Delete — DELETE /api/stock-transfers/group/{groupId} (reverses and flags cancelled)
 func (h *StockTransfersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	groupID, err := parseUUID(chi.URLParam(r, "groupId"))

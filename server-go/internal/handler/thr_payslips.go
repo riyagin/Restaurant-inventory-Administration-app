@@ -128,9 +128,7 @@ func (h *ThrHandler) DownloadPayslip(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(pdfBytes)
 }
 
-// DownloadRunPayslips — GET /api/hr/thr/runs/:id/payslips
-// One PDF holding every THR slip in the run, two per A4-landscape page so each
-// sheet cuts into two A5-portrait slips.
+// DownloadRunPayslips — GET /api/hr/thr/runs/:id/payslips (two slips per A4-landscape page)
 func (h *ThrHandler) DownloadRunPayslips(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {

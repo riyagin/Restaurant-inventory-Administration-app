@@ -148,9 +148,7 @@ func (h *ShiftHandler) decideShiftChange(w http.ResponseWriter, r *http.Request,
 	respondJSON(w, http.StatusOK, map[string]string{"status": newStatus})
 }
 
-// ApproveShiftChange — POST /api/hr/shift-change-requests/{id}/approve (manager)
-// Re-validates against today's state: a leave approved or a shift deactivated
-// after the request was made still wins.
+// ApproveShiftChange — POST /api/hr/shift-change-requests/{id}/approve (manager; re-validated)
 func (h *ShiftHandler) ApproveShiftChange(w http.ResponseWriter, r *http.Request) {
 	h.decideShiftChange(w, r, func(ctx context.Context, tx pgx.Tx, entry shiftAssignmentEntry) (string, string, error) {
 		e, err := resolveShiftEntry(ctx, tx, entry)

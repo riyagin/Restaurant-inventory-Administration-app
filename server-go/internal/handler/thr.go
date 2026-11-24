@@ -19,11 +19,7 @@ import (
 	"inventory-app/server-go/internal/service"
 )
 
-// ThrHandler serves the HR THR (Tunjangan Hari Raya) endpoints. It mirrors the
-// payroll handler: a run holds one snapshot line per active employee, lines must be
-// reviewed before the run can be closed, closing posts the total THR expense per
-// branch, and closed/paid runs are immutable. Payslip rendering reuses the shared
-// BuildPayslipPDF with a "SLIP THR" title.
+// ThrHandler mirrors payroll: lines are reviewed before close; closed/paid runs are immutable.
 type ThrHandler struct {
 	pool       *pgxpool.Pool
 	queries    *db.Queries
@@ -44,8 +40,6 @@ func (h *ThrHandler) resolveUploadsDir() string {
 	return filepath.Join("..", "server", "uploads")
 }
 
-// ── Runs ─────────────────────────────────────────────────────────────────────
-
 // ListRuns — GET /api/hr/thr/runs
 func (h *ThrHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.queries.ListThrRuns(r.Context())
@@ -64,9 +58,7 @@ type createThrRunBody struct {
 	PaymentDate string `json:"payment_date"` // "YYYY-MM-DD"
 }
 
-// CreateRun — POST /api/hr/thr/runs
-// Creates the run and generates a THR line for every active employee in one
-// transaction. Returns the run plus skipped-employee warnings.
+// CreateRun — POST /api/hr/thr/runs (also generates every active employee's line)
 func (h *ThrHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
 	var body createThrRunBody
 	if err := parseBody(r, &body); err != nil {
@@ -355,10 +347,6 @@ func (h *ThrHandler) MarkPaid(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, updated)
 }
-
-// ── Payslip rendering ──────────────────────────────────────────────────────────
-
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 // runLocked reports whether the run of the given id is closed/paid (immutable).
 func (h *ThrHandler) runLocked(ctx context.Context, runID pgtype.UUID) (bool, string) {

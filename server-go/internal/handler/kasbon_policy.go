@@ -56,9 +56,6 @@ func (h *KasbonHandler) checkKasbonPolicy(r *http.Request, emp *db.GetEmployeeBy
 }
 
 // Eligibility — GET /api/hr/kasbons/eligibility?employee_id=
-// Previews Kebijakan Kasbon for the form before the request is filed: the
-// settings, the employee's score this month, and the first rule that would
-// refuse a request today (amount and installments are judged on submit).
 func (h *KasbonHandler) Eligibility(w http.ResponseWriter, r *http.Request) {
 	empID, err := parseUUID(strings.TrimSpace(r.URL.Query().Get("employee_id")))
 	if err != nil {

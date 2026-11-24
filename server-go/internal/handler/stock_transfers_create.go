@@ -80,11 +80,11 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	today := time.Now()
 
 	type transferRecord struct {
-		ID        pgtype.UUID
-		GroupID   pgtype.UUID
-		ItemName  string
-		Quantity  float64
-		UnitName  string
+		ID       pgtype.UUID
+		GroupID  pgtype.UUID
+		ItemName string
+		Quantity float64
+		UnitName string
 	}
 	var records []transferRecord
 
@@ -102,7 +102,6 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 1. FIFO deduct from source
 		valueDeducted, err := service.FIFODeduct(ctx, qtx, itemID, fromID, it.Quantity,
 			service.LotSource{Type: service.SourceTransfer, ID: groupID, Date: today})
 		if err != nil {
@@ -115,13 +114,11 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 2. FIFO add to destination
 		if err := service.FIFOAdd(ctx, qtx, itemID, toID, it.Quantity, it.UnitIndex, valueDeducted, today); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menambah stok di tujuan")
 			return
 		}
 
-		// 3. Stock history for source
 		if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 			ItemID:         itemID,
 			WarehouseID:    fromID,
@@ -138,7 +135,6 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 4. Stock history for destination
 		if err := service.InsertStockHistory(ctx, qtx, service.StockHistoryParams{
 			ItemID:         itemID,
 			WarehouseID:    toID,
@@ -164,7 +160,6 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 8. Insert stock_transfer record
 		rec, err := qtx.InsertStockTransfer(ctx, &db.InsertStockTransferParams{
 			ItemID:          pgtype.UUID{Bytes: itemID, Valid: true},
 			FromWarehouseID: pgtype.UUID{Bytes: fromID, Valid: true},
@@ -195,7 +190,6 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 9. Log activity after commit
 	userID := middleware.UserIDFromCtx(ctx)
 	username := middleware.UsernameFromCtx(ctx)
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
@@ -207,7 +201,7 @@ func (h *StockTransfersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 
 	respondJSON(w, http.StatusCreated, map[string]any{
-		"group_id": groupID,
+		"group_id":  groupID,
 		"transfers": records,
 	})
 }

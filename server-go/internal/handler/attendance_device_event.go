@@ -31,37 +31,12 @@ func (h *AttendanceDeviceHandler) scheduleForBranch(r *http.Request, branchID pg
 	return service.ScheduleFromRow(ws)
 }
 
-// Event — POST /api/hr/attendance/device/event
-//
-// Request (multipart/form-data OR application/x-www-form-urlencoded):
-//
-//	employee_code    string  (required)
-//	event_type       string  check_in | check_out | auto   (required)
-//	age_ms           int     ms since the event was captured, on the device's
-//	                         monotonic clock. Present → the punch is timed by the
-//	                         server (received − age). See service/device_punch.go.
-//	timestamp        string  RFC3339 device wall clock. Only trusted (and flagged
-//	                         unverified) when age_ms is absent; otherwise kept
-//	                         for audit.
-//	client_event_id  uuid    optional; makes retries idempotent
-//	photo            file    optional (face check-in evidence)
-//
-// Response 200:
-//
-//	{
-//	  "greeting":    "Selamat pagi, Budi Santoso",
-//	  "status":      "present",
-//	  "event_type":  "check_in",
-//	  "timestamp":   "2026-06-09T07:58:00+07:00",  // the punch as the server recorded it
-//	  "time_source": "server" | "queued" | "device",
-//	  "time_verified": true,
-//	  "server_time": "...",
-//	  "check_in":    "2026-06-09T07:58:00+07:00" | null,
-//	  "check_out":   "..." | null,
-//	  "is_late":     false,
-//	  "late_minutes": 0,
-//	  "full_name":   "Budi Santoso"
-//	}
+// Event — POST /api/hr/attendance/device/event (form fields)
+//   employee_code, event_type (check_in|check_out|auto)  required
+//   age_ms           ms since capture on the monotonic clock; server times the punch
+//   timestamp        device clock, trusted (unverified) only without age_ms
+//   client_event_id  makes retries idempotent
+//   photo            optional face snapshot
 func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) {
 	// Taken before the body is read: age_ms was measured when the app sent the
 	// request, so the upload time must not be added to it.
@@ -79,9 +54,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	employeeCode := strings.TrimSpace(r.FormValue("employee_code"))
 	eventType := strings.TrimSpace(r.FormValue("event_type"))
 	rawTimestamp := strings.TrimSpace(r.FormValue("timestamp"))
-	// recorded_by is set only for manager-assisted manual entries (visitor help):
-	// it carries the operator's username for the audit trail. Its presence marks
-	// the event as a manual entry (source "manual") rather than a face check-in.
+	// recorded_by marks a manager-assisted manual entry.
 	recordedBy := strings.TrimSpace(r.FormValue("recorded_by"))
 	isManual := recordedBy != ""
 
@@ -140,10 +113,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// The branch where the employee checks in governs the schedule: a visitor
-	// called to another branch is judged by that branch's hours/work-days. For a
-	// normal same-branch check-in the device branch equals the home branch, so
-	// behaviour is unchanged.
+	// The check-in branch's schedule applies (visitors are judged by its hours).
 	scheduleBranch := emp.BranchID
 	if dev != nil && dev.BranchID.Valid {
 		scheduleBranch = dev.BranchID
@@ -159,10 +129,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	defer tx.Rollback(ctx)
 	qtx := h.queries.WithTx(tx)
 
-	// Optional photo. It is NOT kept as attendance evidence: attendance records
-	// only hold the times and the method. The photo is held in memory and, after
-	// the record is saved, used to refresh the employee's face photo when this is
-	// their first face check-in of the day. Otherwise it is discarded.
+	// The photo is not evidence: it only refreshes the profile photo on the day's first face check-in.
 	var photo []byte
 	if file, header, ferr := r.FormFile("photo"); ferr == nil {
 		ext := strings.ToLower(filepath.Ext(header.Filename))
@@ -190,19 +157,14 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		deviceID = dev.DeviceID
 	}
 
-	// One employee's punches can arrive from several kiosks at once; serialise
-	// them so each rebuild sees the others' punches (service/attendance_sync.go).
-	// Taken before the client_event_id lookup, so two copies of one retried
-	// event cannot both miss each other either.
+	// Serialise one employee's punches across kiosks; taken before the client_event_id lookup.
 	if err := service.LockEmployeeAttendance(ctx, tx, emp.ID); err != nil {
 		log.Printf("attendance device event: lock (emp=%s) failed: %v", employeeCode, err)
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan kehadiran")
 		return
 	}
 
-	// Log the punch on the work day its shift window places it in (a check-out
-	// at 00:20 after a late shift belongs to the previous day), then rebuild that
-	// day: first punch = check-in, last = check-out, by the rostered shift.
+	// Logged on the shift's work day (a 00:20 check-out belongs to the previous day).
 	logged, err := service.LogDevicePunch(ctx, qtx, tx, emp.ID,
 		service.Punch{At: punchTime.At, Source: source, Hint: hint}, punchTime, clientEventID, base, deviceID)
 	if errors.Is(err, service.ErrClientEventConflict) {
@@ -252,9 +214,6 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// The first face check-in of the day refreshes the employee's face photo,
-	// which HR sees on the profile. Best effort: the attendance is already saved.
-	// The photo's day is taken from the time's location, so pass it on WIB.
 	if !isManual && !logged.Duplicate && len(photo) > 0 {
 		if _, perr := service.RecordDailyCheckinPhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID, photo, service.InWIB(ts)); perr != nil {
 			log.Printf("attendance device event: daily face photo (emp=%s) failed: %v", employeeCode, perr)
@@ -262,9 +221,7 @@ func (h *AttendanceDeviceHandler) Event(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		// success/message mirror what the Android app parses (AttendanceEventResponse).
-		// direction ("check_in"/"check_out") is echoed as message so the app can show
-		// the resolved direction; the richer fields below are used by the web UI.
+		// success/message match the Android AttendanceEventResponse.
 		"success":    true,
 		"message":    direction,
 		"greeting":   greeting(ts, emp.FullName),

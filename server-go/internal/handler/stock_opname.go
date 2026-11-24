@@ -20,8 +20,6 @@ func NewStockOpnameHandler(pool *pgxpool.Pool, queries *db.Queries) *StockOpname
 	return &StockOpnameHandler{pool: pool, queries: queries}
 }
 
-// ─── List submitted opnames ───────────────────────────────────────────────────
-
 func (h *StockOpnameHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rows, err := h.queries.ListStockOpname(ctx)
@@ -128,19 +126,19 @@ func (h *StockOpnameHandler) Get(w http.ResponseWriter, r *http.Request) {
 // opnameItem is the item shape returned by Get, including the is_correction
 // flag (a column added after the sqlc query was generated, so read raw).
 type opnameItem struct {
-	ID               pgtype.UUID    `json:"id"`
-	OpnameID         pgtype.UUID    `json:"opname_id"`
-	ItemID           pgtype.UUID    `json:"item_id"`
-	UnitIndex        int32          `json:"unit_index"`
-	UnitName         string         `json:"unit_name"`
-	RecordedQuantity pgtype.Numeric `json:"recorded_quantity"`
-	ActualQuantity   pgtype.Numeric `json:"actual_quantity"`
-	Difference       pgtype.Numeric `json:"difference"`
-	WasteValue       int64          `json:"waste_value"`
-	IsCorrection     bool           `json:"is_correction"`
+	ID               pgtype.UUID        `json:"id"`
+	OpnameID         pgtype.UUID        `json:"opname_id"`
+	ItemID           pgtype.UUID        `json:"item_id"`
+	UnitIndex        int32              `json:"unit_index"`
+	UnitName         string             `json:"unit_name"`
+	RecordedQuantity pgtype.Numeric     `json:"recorded_quantity"`
+	ActualQuantity   pgtype.Numeric     `json:"actual_quantity"`
+	Difference       pgtype.Numeric     `json:"difference"`
+	WasteValue       int64              `json:"waste_value"`
+	IsCorrection     bool               `json:"is_correction"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	ItemName         string         `json:"item_name"`
-	ItemCode         pgtype.Text    `json:"item_code"`
+	ItemName         string             `json:"item_name"`
+	ItemCode         pgtype.Text        `json:"item_code"`
 }
 
 // fetchOpnameItems reads the items for an opname, original rows first then
@@ -173,10 +171,6 @@ func (h *StockOpnameHandler) fetchOpnameItems(ctx context.Context, opnameID pgty
 	}
 	return items, rows.Err()
 }
-
-// ─── Draft endpoints ──────────────────────────────────────────────────────────
-
-// ─── Create (submit final opname) ────────────────────────────────────────────
 
 // baseUnitFactor now lives in item_units.go, alongside the unit-rescale logic
 // that shares its interpretation of the units array.

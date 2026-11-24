@@ -37,9 +37,6 @@ type transferGroup struct {
 	lines         []*transferLine
 }
 
-// loadTransferGroup reads every stock_transfers row sharing groupID. The header
-// fields (warehouses, who/when, status) are identical across a group, so they
-// are taken from the first row. Returns pgx.ErrNoRows when the group is empty.
 func (h *StockTransfersHandler) loadTransferGroup(ctx context.Context, tx pgx.Tx, groupID uuid.UUID) (*transferGroup, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT item_id, from_warehouse_id, to_warehouse_id, quantity, unit_index, unit_name,
@@ -99,13 +96,7 @@ func (g *transferGroup) netByKey() map[string]*transferLine {
 	return out
 }
 
-// Update — PUT /api/stock-transfers/group/{groupId}
-//
-// Edits an active transfer group. Each quantity change is reconciled physically
-// as a delta: extra qty is moved source→destination (FIFO), reduced qty is moved
-// back destination→source, and both warehouses' inventory account balances shift
-// by the value moved. The group's rows are then rewritten to the new state,
-// keeping the original group_id and timestamp for the audit trail.
+// Update — PUT /api/stock-transfers/group/{groupId} (quantity changes moved as FIFO deltas)
 func (h *StockTransfersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	groupID, err := parseUUID(chi.URLParam(r, "groupId"))
@@ -194,9 +185,7 @@ func (h *StockTransfersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	// rows carry it and the group's rows are refreshed to it at the end.
 	notes := pgtype.Text{String: strings.TrimSpace(body.Notes), Valid: strings.TrimSpace(body.Notes) != ""}
 
-	// appendCorrection records a signed quantity delta as a NEW stock_transfers
-	// row (positive = extra transferred, negative = returned) rather than
-	// rewriting the originals, so the full movement history is preserved.
+	// Corrections are appended as signed rows; originals are never rewritten.
 	appendCorrection := func(itemID uuid.UUID, unitIndex int32, unitName string, qty float64) error {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO stock_transfers
@@ -320,9 +309,6 @@ func (h *StockTransfersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Refresh the descriptive note across the group's rows. Quantity/movement rows
-	// are never rewritten — corrections were appended as new rows above — so the
-	// full history is preserved for the audit trail.
 	if _, err := tx.Exec(ctx,
 		`UPDATE stock_transfers SET notes = $1, updated_at = now() WHERE group_id = $2`,
 		notes, pgUUID(groupID)); err != nil {

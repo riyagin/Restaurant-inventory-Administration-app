@@ -16,17 +16,8 @@ import (
 	"inventory-app/server-go/internal/service"
 )
 
-// Shift system — per-branch shift definitions and the daily roster.
-//
-// The roster is edited from manpower planning under one date rule, enforced
-// here rather than in the UI:
-//
-//   - a day before today is read-only for everyone — the roster that was in
-//     force is history, and attendance was already judged against it;
-//   - today's roster changes only with a manager's approval: an edit by anyone
-//     else becomes a shift_change_requests row and the approved roster stays in
-//     force until it is decided (a manager's own edit applies directly);
-//   - future days apply directly.
+// Roster date rule (enforced here, not in the UI): past days are read-only, today
+// needs a manager (others file a change request), future days apply directly.
 type ShiftHandler struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
@@ -59,8 +50,6 @@ func respondShiftErr(w http.ResponseWriter, err error, fallback string) {
 
 func fmtIndoDate(t time.Time) string { return t.Format("02/01/2006") }
 
-// ── Shift definitions ────────────────────────────────────────────────────────
-
 const shiftDefinitionSelect = `
 SELECT sd.id::text, sd.branch_id::text, b.name, sd.code, sd.name,
        to_char(sd.start1, 'HH24:MI'), to_char(sd.end1, 'HH24:MI'),
@@ -71,21 +60,13 @@ SELECT sd.id::text, sd.branch_id::text, b.name, sd.code, sd.name,
 FROM shift_definitions sd
 JOIN branches b ON b.id = sd.branch_id`
 
-// ── Roster ───────────────────────────────────────────────────────────────────
-
-// ── Change requests (today's roster) ─────────────────────────────────────────
-
-// ── Employee shift profile ───────────────────────────────────────────────────
-
 type shiftProfileBody struct {
 	DivisionID      *string `json:"division_id"`
 	IsDeliveryStaff bool    `json:"is_delivery_staff"`
 }
 
 // UpdateEmployeeShiftProfile — PUT /api/hr/employees/{id}/shift-profile
-// Sets the home division and the delivery-order flag. Un-flagging someone who
-// is still rostered on a delivery-only shift from today on is refused: the
-// roster would then hold an assignment its own rule forbids.
+// Un-flagging DO staff still rostered on a delivery-only shift is refused.
 func (h *ShiftHandler) UpdateEmployeeShiftProfile(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {

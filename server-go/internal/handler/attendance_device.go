@@ -40,10 +40,7 @@ func (h *AttendanceDeviceHandler) resolveUploadsDir() string {
 	return config.DefaultUploadsDir
 }
 
-// deviceEmployeeDTO is the wire shape the Android app parses (EmployeeDto). The
-// embedding is base64-encoded so it travels as a plain JSON string, and
-// face_enrolled_at is epoch milliseconds. Face fields are omitted when the
-// employee has no server-side enrollment yet.
+// deviceEmployeeDTO matches the Android EmployeeDto: embedding base64, enrolled_at epoch ms.
 type deviceEmployeeDTO struct {
 	EmployeeCode         string  `json:"employee_code"`
 	FullName             string  `json:"full_name"`
@@ -51,11 +48,7 @@ type deviceEmployeeDTO struct {
 	FaceEmbedding        *string `json:"face_embedding,omitempty"`
 	FaceEmbeddingVersion *string `json:"face_embedding_version,omitempty"`
 	FaceEnrolledAt       *int64  `json:"face_enrolled_at,omitempty"`
-	// FacePhotoURL is the face the kiosk shows for this employee: the latest
-	// photo from an attendance device, else the HR profile photo. A path under
-	// /uploads/ (same host as the API). Deliberately not "photo_url": the app's
-	// roster sync derives an embedding from photo_url when no enrollment exists,
-	// and a check-in snapshot must not silently become someone's enrollment.
+	// Not "photo_url": the app would derive an enrollment from it.
 	FacePhotoURL *string `json:"face_photo_url,omitempty"`
 }
 
@@ -96,11 +89,7 @@ func (h *AttendanceDeviceHandler) latestFacePhotosByCode(ctx context.Context, br
 	return out, rows.Err()
 }
 
-// Employees — GET /api/hr/attendance/device/employees
-//
-// Returns the active roster for the device's branch so the app can sync faces,
-// including any server-stored face embedding so recognition can run locally on
-// every device without re-enrolling per device.
+// Employees — GET /api/hr/attendance/device/employees (roster + stored embeddings)
 func (h *AttendanceDeviceHandler) Employees(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dev, ok := middleware.DeviceFromCtx(ctx)
@@ -166,12 +155,7 @@ type EnrollDeviceRequest struct {
 }
 
 // Enroll — POST /api/hr/attendance/device/enroll
-//
-// JWT-authenticated self-service device registration. The app sends the user's
-// bearer token plus a device_name; the server mints a device key, stores only
-// its hash, and returns the raw key once. This replaces the old "paste the key
-// from the web dashboard" flow. Lives in the JWT group, NOT the device-key
-// group, because the device has no key yet.
+// JWT route (the device has no key yet); returns the raw key once, stores only its hash.
 func (h *AttendanceDeviceHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -228,8 +212,6 @@ func (h *AttendanceDeviceHandler) Enroll(w http.ResponseWriter, r *http.Request)
 // maxFacePhotoBytes caps the decoded enrollment photo. The app sends an aligned
 // face crop (a few KB), so this is generous.
 const maxFacePhotoBytes = 5 << 20
-
-// ── Face sync diff ───────────────────────────────────────────────────────────
 
 func tsString(t *time.Time) any {
 	if t == nil {

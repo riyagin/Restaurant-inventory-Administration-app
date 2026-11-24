@@ -16,8 +16,6 @@ import (
 )
 
 // ReviewAll — POST /api/hr/thr/runs/:id/review-all
-// Marks every still-unreviewed line in an OPEN run as reviewed, keeping the computed
-// amounts as-is. Lines can still be reopened while the run is open.
 func (h *ThrHandler) ReviewAll(w http.ResponseWriter, r *http.Request) {
 	id, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -200,9 +198,7 @@ func (h *ThrHandler) UnreviewLine(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, updated)
 }
 
-// RegenerateLine — POST /api/hr/thr/runs/:id/regenerate-line/:employeeId
-// Re-snapshots a single employee's THR line from their current wage + tenure (loses
-// any prior review/adjustment). Run must be open.
+// RegenerateLine — POST /api/hr/thr/runs/:id/regenerate-line/:employeeId (drops any review)
 func (h *ThrHandler) RegenerateLine(w http.ResponseWriter, r *http.Request) {
 	runID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {

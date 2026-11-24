@@ -19,14 +19,7 @@ import (
 )
 
 // Update — PUT /api/stock-opname/{id}
-//
-// Edits (corrects) a submitted opname. Instead of rewriting the already-posted
-// rows, every corrected item is reconciled against the CURRENT system quantity
-// and the difference is appended as a NEW stock_opname_items row
-// (is_correction = true) plus a matching stock_history row, with the waste and
-// inventory account balances moved by the difference. The original rows stay
-// intact as the audit trail, and reports net correctly because they sum the
-// rows. See the accounting-edit convention (dispatches Update is the reference).
+// Corrections are appended (is_correction) against the current quantity; originals stay.
 func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id, err := parseUUID(chi.URLParam(r, "id"))
@@ -137,13 +130,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 			wasteValue = deducted
 			historyValue = -deducted
 		} else {
-			// A correction that puts stock back is first of all a reversal of what
-			// THIS opname took away — most often an item mistakenly counted to 0,
-			// which deletes its lots and makes it vanish from the warehouse.
-			// Valuing that at the latest purchase price would leave a residue in
-			// Selisih Persediaan, because the write-off and its reversal would use
-			// different costs. So restore at the cost written off, and treat only
-			// the quantity beyond it as a genuine surplus.
+			// Restore at the cost this opname wrote off; only quantity beyond it is a real surplus.
 			removedQty, removedValue := opnameNetWaste(ctx, tx, id, itemID)
 			reverseQty := 0.0
 			if removedQty > 0 && removedValue > 0 {
@@ -163,9 +150,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			historyValue = surplusValue
-			// Booking the restoration as negative waste nets this opname's recorded
-			// loss back down, so every report that sums waste_value — and the next
-			// reversal's own arithmetic — sees what is actually still written off.
+			// Negative waste nets this opname's recorded loss back down.
 			wasteValue = -reversedValue
 			if surplusValue > 0 {
 				if _, err := service.Post(ctx, qtx, service.Entry{
@@ -270,13 +255,7 @@ func (h *StockOpnameHandler) Update(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// opnameNetWaste reports how much of an item this opname has written off and
-// not yet put back: the net quantity removed and the net rupiah value behind it.
-//
-// Both figures net across the original rows AND every later correction, which is
-// what makes repeated corrections safe — a restoration is booked as a correction
-// row carrying a positive difference and a negative waste_value, so it cancels
-// out of these sums instead of being reversible twice.
+// opnameNetWaste nets originals and corrections, so a restoration is never reversed twice.
 func opnameNetWaste(ctx context.Context, tx pgx.Tx, opnameID, itemID uuid.UUID) (qty float64, value int64) {
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(SUM(-difference), 0)::float8, COALESCE(SUM(waste_value), 0)::bigint
@@ -288,17 +267,7 @@ func opnameNetWaste(ctx context.Context, tx pgx.Tx, opnameID, itemID uuid.UUID) 
 	return qty, value
 }
 
-// latestItemValue returns the total IDR value to assign to `qty` surplus units,
-// priced from the item's most recent purchase. Returns 0 if unknown.
-//
-// `qty` is a base-unit quantity (inventory lots are stored at the item's lowest
-// unit), but the last purchase may have been priced at any unit — a carton
-// rather than a can. The price is therefore converted down to the base unit
-// before it is applied.
-//
-// Skipping that conversion is a real overstatement, not a theoretical one: an
-// item bought by the dus at 24 cans per dus had its surplus valued at the dus
-// price for every single can.
+// latestItemValue prices base-unit qty from the last purchase, converted to the base unit; 0 if unknown.
 func latestItemValue(ctx context.Context, qtx *db.Queries, itemID uuid.UUID, unitIndex int32, qty float64) int64 {
 	row, err := qtx.GetItemLastPrice(ctx, pgtype.UUID{Bytes: itemID, Valid: true})
 	if err != nil {

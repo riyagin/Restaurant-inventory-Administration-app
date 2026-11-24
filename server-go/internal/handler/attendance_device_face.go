@@ -29,12 +29,7 @@ type FaceEnrollRequest struct {
 	Photo string `json:"photo,omitempty"`
 }
 
-// EnrollFace — POST /api/hr/attendance/device/face
-//
-// Stores (or replaces) the server-side face enrollment for an employee. The
-// device computes the embedding locally and uploads it here so every other
-// device can sync it down. Device-key authenticated; a device may only enroll
-// employees that belong to its own branch.
+// EnrollFace — POST /api/hr/attendance/device/face (own-branch employees only)
 func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dev, ok := middleware.DeviceFromCtx(ctx)
@@ -109,9 +104,7 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// The embedding is the part recognition depends on, so a photo that fails to
-	// save is logged rather than failing the request (the device would otherwise
-	// keep retrying an enrollment that is already stored).
+	// A failed photo save is logged, not fatal: the embedding is what matters.
 	if len(photo) > 0 {
 		if _, perr := service.SaveFacePhoto(ctx, h.pool, h.resolveUploadsDir(), emp.ID,
 			bytes.NewReader(photo), service.FacePhotoSourceEnroll, time.Now()); perr != nil {
@@ -119,9 +112,6 @@ func (h *AttendanceDeviceHandler) EnrollFace(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Device-key authenticated, so there is no JWT user to attribute this to —
-	// the device name stands in as the actor. Enrolling a face changes who the
-	// terminal will accept as this employee, which is worth an audit trail.
 	_ = service.LogActivity(ctx, h.queries, service.LogParams{
 		Username:   "perangkat: " + dev.Name,
 		Action:     "UPDATE",
@@ -145,10 +135,7 @@ type FaceSyncEntry struct {
 	EnrolledAt       int64  `json:"enrolled_at"` // epoch ms; 0 when unknown
 }
 
-// FaceSyncRequest is what a device posts to reconcile its local face store
-// against the server. ModelVersion is the embedding space the device can
-// actually match in; server enrollments in any other space are unusable to it
-// and are reported under to_reenroll rather than to_download.
+// Enrollments in another embedding space than ModelVersion go to to_reenroll.
 type FaceSyncRequest struct {
 	ModelVersion string          `json:"model_version"`
 	Entries      []FaceSyncEntry `json:"entries"`
@@ -174,24 +161,8 @@ type faceSyncMismatch struct {
 }
 
 // FaceSync — POST /api/hr/attendance/device/face/sync
-//
-// Diffs a device's local face store against the server's stored enrollments for
-// the device's branch and tells it exactly what to change. The server cannot
-// know a device's local state, so the device sends its manifest (employee_code +
-// embedding_version + enrolled_at, no embeddings) and gets back four buckets:
-//
-//	to_download  — server has an enrollment the device lacks or holds an older
-//	               copy of; embeddings are included so this is the only call needed.
-//	to_upload    — device holds an enrollment the server has none of; the device
-//	               should POST each to /api/hr/attendance/device/face so the rest
-//	               of the fleet can pick it up.
-//	to_delete    — device holds an entry that is no longer in its branch roster
-//	               (transferred, resigned, or enrollment cleared server-side).
-//	to_reenroll  — both sides have an enrollment but in different embedding
-//	               spaces, so neither can match the other; a human must re-capture.
-//	in_sync      — same employee, same version, device copy not older.
-//
-// Device-key authenticated; scoped to the device's own branch.
+// Buckets: to_download (with embeddings), to_upload, to_delete (left the roster),
+// to_reenroll (different embedding space), in_sync.
 func (h *AttendanceDeviceHandler) FaceSync(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	dev, ok := middleware.DeviceFromCtx(ctx)
