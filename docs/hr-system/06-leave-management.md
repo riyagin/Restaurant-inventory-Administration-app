@@ -13,7 +13,7 @@ Migration `hr_leave`:
 ```sql
 leave_types (
   id UUID PK,
-  name TEXT NOT NULL UNIQUE,          -- seed: 'Cuti Tahunan', 'Sakit', 'Izin Tanpa Gaji'
+  name TEXT NOT NULL UNIQUE,          -- seed: 'Cuti Bulanan' (renamed from 'Cuti Tahunan', migration 093), 'Sakit', 'Izin Tanpa Gaji'
   is_paid BOOLEAN NOT NULL,
   uses_quota BOOLEAN NOT NULL,        -- true only for annual leave
   is_active BOOLEAN NOT NULL DEFAULT true

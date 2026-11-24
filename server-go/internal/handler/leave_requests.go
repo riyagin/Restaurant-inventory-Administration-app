@@ -97,7 +97,8 @@ func (h *LeaveHandler) ListLeaveRequests(w http.ResponseWriter, r *http.Request)
 }
 
 // CreateLeaveRequest — POST /api/hr/leave-requests
-// A start before today (server date) needs confirm_backdated and is then approved individually.
+// Quota types (Cuti) are approved on save or refused when short; others stay pending.
+// A start before today (server date) needs confirm_backdated.
 func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request) {
 	var body createLeaveRequestBody
 	if err := parseBody(r, &body); err != nil {
@@ -135,7 +136,7 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	isBackdated := startDate.Before(today())
 	if isBackdated && !body.ConfirmBackdated {
 		respondJSON(w, http.StatusConflict, map[string]string{
-			"error": "tanggal mulai sudah lewat — pengajuan mundur tanggal memerlukan persetujuan manajer/pemilik",
+			"error": "tanggal mulai sudah lewat — konfirmasi pengajuan mundur tanggal terlebih dahulu",
 			"code":  codeBackdatedNeedsConfirm,
 		})
 		return
@@ -155,7 +156,8 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if _, err := h.queries.GetLeaveTypeByID(ctx, pgTypeID); err != nil {
+	leaveType, err := h.queries.GetLeaveTypeByID(ctx, pgTypeID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "jenis libur tidak ditemukan")
 			return
@@ -196,15 +198,24 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		reason = pgtype.Text{String: s, Valid: true}
 	}
 	createdBy := middleware.UserIDFromCtx(ctx)
+	pgCreatedBy := pgtype.UUID{Bytes: createdBy, Valid: createdBy != [16]byte{}}
 
-	req, err := h.queries.CreateLeaveRequest(ctx, &db.CreateLeaveRequestParams{
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
+		return
+	}
+	defer tx.Rollback(ctx)
+	qtx := h.queries.WithTx(tx)
+
+	req, err := qtx.CreateLeaveRequest(ctx, &db.CreateLeaveRequestParams{
 		EmployeeID:  pgEmpID,
 		LeaveTypeID: pgTypeID,
 		StartDate:   pgStart,
 		EndDate:     pgEnd,
 		DayCount:    int32(dayCount),
 		Reason:      reason,
-		CreatedBy:   pgtype.UUID{Bytes: createdBy, Valid: createdBy != [16]byte{}},
+		CreatedBy:   pgCreatedBy,
 		IsBackdated: isBackdated,
 	})
 	if err != nil {
@@ -212,19 +223,37 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if body.HasDoctorNote {
-		if err := h.queries.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
+		if err := qtx.SetLeaveRequestDoctorNote(ctx, &db.SetLeaveRequestDoctorNoteParams{
 			ID: req.ID, HasDoctorNote: true,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
 			return
 		}
+		req.HasDoctorNote = true
 	}
 
 	desc := fmt.Sprintf("Mengajukan libur %s (%s s/d %s, %d hari)", emp.FullName, body.StartDate, body.EndDate, dayCount)
-	if isBackdated {
+	if leaveType.UsesQuota {
+		res, err := service.ApproveLeave(ctx, qtx, req, leaveType, pgCreatedBy,
+			pgtype.Text{String: "Disetujui otomatis (jatah libur bulanan)", Valid: true})
+		if err != nil {
+			if errors.Is(err, service.ErrQuotaExceeded) {
+				respondError(w, http.StatusConflict, err.Error())
+				return
+			}
+			respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
+			return
+		}
+		req = res.Request
+		desc = fmt.Sprintf("Mencatat libur %s (%s s/d %s, %d hari) — disetujui otomatis, %d hari kehadiran ditandai libur",
+			emp.FullName, body.StartDate, body.EndDate, dayCount, res.CoveredDays)
+		if isBackdated {
+			desc += " — MUNDUR TANGGAL"
+		}
+	} else if isBackdated {
 		desc += " — MUNDUR TANGGAL, menunggu persetujuan manajer/pemilik"
 	}
-	_ = service.LogActivity(ctx, h.queries, service.LogParams{
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
 		UserID:      createdBy,
 		Username:    middleware.UsernameFromCtx(ctx),
 		Action:      "CREATE",
@@ -233,6 +262,10 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 		Description: desc,
 	})
 
+	if err := tx.Commit(ctx); err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal menyimpan pengajuan libur")
+		return
+	}
 	respondJSON(w, http.StatusCreated, req)
 }
 

@@ -138,21 +138,31 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	cutoff, err := service.LeaveCutoffDay(ctx, h.queries)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengaturan periode")
+		return
+	}
+	// The allowance periods (26th–25th with the default cut-off) the window touches.
 	var windowMonths []time.Time
-	for m := service.MonthStart(startDate); !m.After(endDate); m = m.AddDate(0, 1, 0) {
+	for m := service.LeavePeriodOf(startDate, cutoff); !m.After(service.LeavePeriodOf(endDate, cutoff)); m = m.AddDate(0, 1, 0) {
 		windowMonths = append(windowMonths, m)
 	}
 	now := today()
-	balanceBy := map[string][]service.MonthlyLeaveBalance{} // employee id → one per window month
-	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries,
-		windowMonths[0], windowMonths[len(windowMonths)-1].AddDate(0, 1, 0))
+	balanceBy := map[string][]service.MonthlyLeaveBalance{} // employee id → one per window period
+	alphaFrom, _ := service.LeavePeriodRange(windowMonths[0], cutoff)
+	_, alphaTo := service.LeavePeriodRange(windowMonths[len(windowMonths)-1], cutoff)
+	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries, alphaFrom, alphaTo, cutoff)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data alpha")
 		return
 	}
 	for _, m := range windowMonths {
+		pFrom, pTo := service.LeavePeriodRange(m, cutoff)
 		rows, err := h.queries.ListMonthlyLeaveBalances(ctx, &db.ListMonthlyLeaveBalancesParams{
 			Month:        pgtype.Date{Time: m, Valid: true},
+			FromDate:     pgtype.Date{Time: pFrom, Valid: true},
+			ToDate:       pgtype.Date{Time: pTo, Valid: true},
 			DefaultQuota: service.DefaultMonthlyLeaveQuota,
 		})
 		if err != nil {
@@ -162,7 +172,7 @@ func (h *LeaveHandler) GetManpowerPlanning(w http.ResponseWriter, r *http.Reques
 		for _, rr := range rows {
 			empID := uuid.UUID(rr.EmployeeID.Bytes).String()
 			balanceBy[empID] = append(balanceBy[empID], service.NewMonthlyLeaveBalance(
-				m, int(rr.QuotaDays), int(rr.UsedDays), rr.Overridden, now).WithAlpha(alpha[rr.EmployeeID.Bytes][m]))
+				m, int(rr.QuotaDays), int(rr.UsedDays), rr.Overridden, now, cutoff).WithAlpha(alpha[rr.EmployeeID.Bytes][m]))
 		}
 	}
 

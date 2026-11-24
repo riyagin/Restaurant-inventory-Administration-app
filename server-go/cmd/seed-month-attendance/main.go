@@ -416,7 +416,7 @@ func main() {
 		name            string
 		paid, usesQuota bool
 	}{
-		{"Cuti Tahunan", true, true},
+		{"Cuti Bulanan", true, true},
 		{"Sakit", true, false},
 		{"Izin Tanpa Gaji", false, false},
 	} {

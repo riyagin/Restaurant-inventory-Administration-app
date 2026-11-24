@@ -12,44 +12,37 @@ import (
 	"inventory-app/server-go/internal/db"
 )
 
-// Leave management business logic. The day-count and overlap helpers are DB-free
-// and unit-tested; ApproveLeave / GetUnpaidLeaveDays walk the DB and are shared by
-// the handler (approve endpoint) and prompt 08 payroll.
-
 // ErrQuotaExceeded is matched (errors.Is) by every *QuotaExceededError, which
 // ApproveLeave returns when a quota leave type would overdraw a month's allowance.
 var ErrQuotaExceeded = errors.New("quota libur tidak mencukupi")
 
-// Employees work seven days a week, and their days off are paid leave drawn from
-// a monthly allowance. A Saturday or Sunday off costs two days of it, because
-// those are the days the outlets most need people. Unused allowance does not
-// carry over; it is reported per month (MonthlyLeaveBalances) so evaluation can
-// convert it to cash.
+// Days off draw on a monthly allowance; a Saturday or Sunday costs two. No carry-over.
 const (
 	DefaultMonthlyLeaveQuota = 4
 	WeekendLeaveCost         = 2
 )
 
-// QuotaExceededError names the month that would be overdrawn and by how much.
+// QuotaExceededError names the allowance period that would be overdrawn and by
+// how much.
 type QuotaExceededError struct {
 	Month  time.Time
+	Cutoff int
 	Quota  int
 	Used   int
 	Needed int
 }
 
 func (e *QuotaExceededError) Error() string {
-	return fmt.Sprintf("jatah libur %s tidak mencukupi: sisa %d hari, dibutuhkan %d hari",
-		e.Month.Format("01/2006"), max(e.Quota-e.Used, 0), e.Needed)
+	from, to := LeavePeriodRange(e.Month, e.Cutoff)
+	return fmt.Sprintf("jatah libur periode %s – %s tidak mencukupi: sisa %d hari, dibutuhkan %d hari",
+		from.Format("02/01/2006"), to.AddDate(0, 0, -1).Format("02/01/2006"), max(e.Quota-e.Used, 0), e.Needed)
 }
 
 func (e *QuotaExceededError) Is(target error) bool { return target == ErrQuotaExceeded }
 
 // ── Pure helpers (DB-free, testable) ─────────────────────────────────────────
 
-// CountWorkingDays counts the days in [start, end] (inclusive) whose ISO weekday
-// (1=Mon..7=Sun) is in workDays AND that are not public holidays. holidays keys
-// are "YYYY-MM-DD" dates. Pure and deterministic for unit testing.
+// CountWorkingDays counts days in [start, end] on workDays that are not holidays.
 func CountWorkingDays(start, end time.Time, workDays []int, holidays map[string]bool) int {
 	start = dateOnlyUTC(start)
 	end = dateOnlyUTC(end)
@@ -118,18 +111,49 @@ func MonthStart(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
-// MonthCost is the allowance a set of leave days draws from one month.
+// Allowance periods follow the payroll cut-off C: period M runs C+1 of M-1 to C of M
+// (0 = calendar month), labelled by the first of M (the leave_monthly_quotas key).
+
+// LeavePeriodOf returns the allowance period (its month label) that d falls in.
+func LeavePeriodOf(d time.Time, cutoff int) time.Time {
+	m := MonthStart(d)
+	if cutoff > 0 && d.Day() > cutoff {
+		return m.AddDate(0, 1, 0)
+	}
+	return m
+}
+
+// LeavePeriodRange returns the dates [from, to) of the allowance period
+// labelled month.
+func LeavePeriodRange(month time.Time, cutoff int) (time.Time, time.Time) {
+	m := MonthStart(month)
+	if cutoff <= 0 {
+		return m, m.AddDate(0, 1, 0)
+	}
+	return m.AddDate(0, -1, cutoff), m.AddDate(0, 0, cutoff)
+}
+
+// LeaveCutoffDay is the configured cut-off the allowance periods follow.
+func LeaveCutoffDay(ctx context.Context, q *db.Queries) (int, error) {
+	s, err := LoadPolicySettings(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+	return int(s.PayrollCutoffDay), nil
+}
+
+// MonthCost is the allowance a set of leave days draws from one period.
 type MonthCost struct {
 	Month time.Time
 	Cost  int
 }
 
 // QuotaCostByMonth splits the cost of days (in ascending order) across the
-// months they fall in — a leave spanning month-end draws on both allowances.
-func QuotaCostByMonth(days []time.Time) []MonthCost {
+// allowance periods they fall in — a leave spanning the cut-off draws on both.
+func QuotaCostByMonth(days []time.Time, cutoff int) []MonthCost {
 	var out []MonthCost
 	for _, d := range days {
-		m := MonthStart(d)
+		m := LeavePeriodOf(d, cutoff)
 		if n := len(out); n > 0 && out[n-1].Month.Equal(m) {
 			out[n-1].Cost += LeaveDayCost(d)
 			continue
@@ -210,13 +234,13 @@ func MonthlyLeaveQuota(ctx context.Context, qtx *db.Queries, employeeID pgtype.U
 	return int(q), nil
 }
 
-// monthlyLeaveUsed sums the allowance already consumed in month.
-func monthlyLeaveUsed(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, month time.Time) (int, error) {
-	m := MonthStart(month)
+// monthlyLeaveUsed sums the allowance already consumed in the period labelled month.
+func monthlyLeaveUsed(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, month time.Time, cutoff int) (int, error) {
+	from, to := LeavePeriodRange(month, cutoff)
 	used, err := qtx.SumLeaveQuotaUsage(ctx, &db.SumLeaveQuotaUsageParams{
 		EmployeeID: employeeID,
-		FromDate:   pgtype.Date{Time: m, Valid: true},
-		ToDate:     pgtype.Date{Time: m.AddDate(0, 1, 0), Valid: true},
+		FromDate:   pgtype.Date{Time: from, Valid: true},
+		ToDate:     pgtype.Date{Time: to, Valid: true},
 	})
 	return int(used), err
 }
@@ -224,12 +248,14 @@ func monthlyLeaveUsed(ctx context.Context, qtx *db.Queries, employeeID pgtype.UU
 // MonthlyLeaveBalance is one month of an employee's paid-leave allowance.
 // UnusedDays is final once Closed (the month has ended) and provisional before.
 type MonthlyLeaveBalance struct {
-	Month      string `json:"month"` // YYYY-MM
-	QuotaDays  int    `json:"quota_days"`
-	UsedDays   int    `json:"used_days"` // leave + Alpha
-	UnusedDays int    `json:"unused_days"`
-	Closed     bool   `json:"closed"`
-	Overridden bool   `json:"overridden"`
+	Month       string `json:"month"`        // YYYY-MM, the period's label
+	PeriodStart string `json:"period_start"` // YYYY-MM-DD, first day of the period
+	PeriodEnd   string `json:"period_end"`   // YYYY-MM-DD, last day (inclusive)
+	QuotaDays   int    `json:"quota_days"`
+	UsedDays    int    `json:"used_days"` // leave + Alpha
+	UnusedDays  int    `json:"unused_days"`
+	Closed      bool   `json:"closed"`
+	Overridden  bool   `json:"overridden"`
 	// Breakdown of UsedDays, and Alpha days the allowance could not cover
 	// (those are cut from pay instead). See service/alpha.go.
 	LeaveUsedDays   int `json:"leave_used_days"`
@@ -251,8 +277,8 @@ func (b MonthlyLeaveBalance) WithAlpha(alphaDates []time.Time) MonthlyLeaveBalan
 }
 
 // AbsentDatesByEmployeeMonth groups every employee's absent dates in
-// [from, to) by employee id and month — the input WithAlpha needs.
-func AbsentDatesByEmployeeMonth(ctx context.Context, qtx *db.Queries, from, to time.Time) (map[[16]byte]map[time.Time][]time.Time, error) {
+// [from, to) by employee id and allowance period — the input WithAlpha needs.
+func AbsentDatesByEmployeeMonth(ctx context.Context, qtx *db.Queries, from, to time.Time, cutoff int) (map[[16]byte]map[time.Time][]time.Time, error) {
 	rows, err := qtx.ListAbsentDatesInRange(ctx, &db.ListAbsentDatesInRangeParams{
 		DateFrom: pgtype.Date{Time: dateOnlyUTC(from), Valid: true},
 		DateTo:   pgtype.Date{Time: dateOnlyUTC(to), Valid: true},
@@ -267,75 +293,94 @@ func AbsentDatesByEmployeeMonth(ctx context.Context, qtx *db.Queries, from, to t
 			byMonth = map[time.Time][]time.Time{}
 			out[r.EmployeeID.Bytes] = byMonth
 		}
-		m := MonthStart(r.Date.Time)
+		m := LeavePeriodOf(r.Date.Time, cutoff)
 		byMonth[m] = append(byMonth[m], r.Date.Time)
 	}
 	return out, nil
 }
 
-// NewMonthlyLeaveBalance derives the unused/closed fields for one month.
-func NewMonthlyLeaveBalance(month time.Time, quota, used int, overridden bool, today time.Time) MonthlyLeaveBalance {
+// NewMonthlyLeaveBalance derives the unused/closed fields for one period.
+func NewMonthlyLeaveBalance(month time.Time, quota, used int, overridden bool, today time.Time, cutoff int) MonthlyLeaveBalance {
 	m := MonthStart(month)
+	from, to := LeavePeriodRange(m, cutoff)
 	return MonthlyLeaveBalance{
 		Month:         m.Format("2006-01"),
+		PeriodStart:   from.Format("2006-01-02"),
+		PeriodEnd:     to.AddDate(0, 0, -1).Format("2006-01-02"),
 		QuotaDays:     quota,
 		UsedDays:      used,
 		UnusedDays:    max(quota-used, 0),
-		Closed:        m.Before(MonthStart(dateOnlyUTC(today))),
+		Closed:        m.Before(LeavePeriodOf(dateOnlyUTC(today), cutoff)),
 		Overridden:    overridden,
 		LeaveUsedDays: used,
 	}
 }
 
-// MonthlyLeaveBalances returns all twelve months of year for the employee.
-// today decides which months are closed.
+// MonthlyLeaveBalances returns the twelve allowance periods labelled January to
+// December of year for the employee. today decides which periods are closed.
 func MonthlyLeaveBalances(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, year int, today time.Time) ([]MonthlyLeaveBalance, error) {
-	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
-	rows, err := qtx.ListLeaveQuotaMonths(ctx, &db.ListLeaveQuotaMonthsParams{
+	cutoff, err := LeaveCutoffDay(ctx, qtx)
+	if err != nil {
+		return nil, err
+	}
+	jan := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	from, _ := LeavePeriodRange(jan, cutoff)
+	_, to := LeavePeriodRange(jan.AddDate(0, 11, 0), cutoff)
+
+	// Overrides are keyed by the period label, so the calendar-year bounds apply.
+	overrides, err := qtx.ListLeaveQuotaMonths(ctx, &db.ListLeaveQuotaMonthsParams{
 		EmployeeID: employeeID,
-		FromDate:   pgtype.Date{Time: from, Valid: true},
-		ToDate:     pgtype.Date{Time: from.AddDate(1, 0, 0), Valid: true},
+		FromDate:   pgtype.Date{Time: jan, Valid: true},
+		ToDate:     pgtype.Date{Time: jan.AddDate(1, 0, 0), Valid: true},
 	})
 	if err != nil {
 		return nil, err
 	}
-	byMonth := map[time.Month]*db.ListLeaveQuotaMonthsRow{}
-	for _, r := range rows {
-		byMonth[r.Month.Time.Month()] = r
+	quotaBy := map[time.Time]int{}
+	for _, r := range overrides {
+		if r.QuotaDays.Valid {
+			quotaBy[MonthStart(r.Month.Time)] = int(r.QuotaDays.Int32)
+		}
+	}
+	usage, err := qtx.ListLeaveQuotaUsage(ctx, &db.ListLeaveQuotaUsageParams{
+		EmployeeID: employeeID,
+		FromDate:   pgtype.Date{Time: from, Valid: true},
+		ToDate:     pgtype.Date{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	usedBy := map[time.Time]int{}
+	for _, u := range usage {
+		usedBy[LeavePeriodOf(u.Date.Time, cutoff)] += int(u.Cost)
 	}
 	absent, err := qtx.ListAbsentDatesForEmployee(ctx, &db.ListAbsentDatesForEmployeeParams{
 		EmployeeID: employeeID,
 		DateFrom:   pgtype.Date{Time: from, Valid: true},
-		DateTo:     pgtype.Date{Time: from.AddDate(1, 0, 0), Valid: true},
+		DateTo:     pgtype.Date{Time: to, Valid: true},
 	})
 	if err != nil {
 		return nil, err
 	}
-	alphaBy := map[time.Month][]time.Time{}
+	alphaBy := map[time.Time][]time.Time{}
 	for _, d := range absent {
-		alphaBy[d.Time.Month()] = append(alphaBy[d.Time.Month()], d.Time)
+		m := LeavePeriodOf(d.Time, cutoff)
+		alphaBy[m] = append(alphaBy[m], d.Time)
 	}
 	out := make([]MonthlyLeaveBalance, 12)
 	for i := range out {
-		m := from.AddDate(0, i, 0)
-		quota, used, overridden := DefaultMonthlyLeaveQuota, 0, false
-		if r := byMonth[m.Month()]; r != nil {
-			used = int(r.UsedDays)
-			if r.QuotaDays.Valid {
-				quota, overridden = int(r.QuotaDays.Int32), true
-			}
+		m := jan.AddDate(0, i, 0)
+		quota, overridden := DefaultMonthlyLeaveQuota, false
+		if q, ok := quotaBy[m]; ok {
+			quota, overridden = q, true
 		}
-		out[i] = NewMonthlyLeaveBalance(m, quota, used, overridden, today).WithAlpha(alphaBy[m.Month()])
+		out[i] = NewMonthlyLeaveBalance(m, quota, usedBy[m], overridden, today, cutoff).WithAlpha(alphaBy[m])
 	}
 	return out, nil
 }
 
-// ApproveLeave sets the request to approved and upserts 'leave' attendance rows
-// for each covered work day — skipping days that already carry a check-in (their
-// dates are returned). For a quota leave type it first checks every month the
-// covered days fall in against that month's allowance, then records the per-day
-// cost in leave_quota_usage. A day the employee turned up for is not charged.
-// Must run inside a transaction (qtx).
+// ApproveLeave writes leave attendance (skipping checked-in days) and, for quota
+// types, checks and records the allowance per period. Requires a transaction.
 func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, leaveType *db.LeaveType, deciderID pgtype.UUID, note pgtype.Text) (*ApproveResult, error) {
 	start := req.StartDate.Time
 	end := req.EndDate.Time
@@ -364,7 +409,11 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 	}
 
 	if leaveType.UsesQuota {
-		for _, mc := range QuotaCostByMonth(covered) {
+		cutoff, err := LeaveCutoffDay(ctx, qtx)
+		if err != nil {
+			return nil, err
+		}
+		for _, mc := range QuotaCostByMonth(covered, cutoff) {
 			quota, err := MonthlyLeaveQuota(ctx, qtx, req.EmployeeID, mc.Month)
 			if err != nil {
 				return nil, err
@@ -377,7 +426,7 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 			}
 			used := am.LeaveUsed + am.AlphaUsed()
 			if !QuotaSufficient(quota, used, mc.Cost) {
-				return nil, &QuotaExceededError{Month: mc.Month, Quota: quota, Used: used, Needed: mc.Cost}
+				return nil, &QuotaExceededError{Month: mc.Month, Cutoff: cutoff, Quota: quota, Used: used, Needed: mc.Cost}
 			}
 		}
 	}
@@ -414,9 +463,7 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 		res.CoveredDays++
 	}
 
-	// Days already judged (a backdated or late approval) were scored as absent;
-	// re-judge them as leave now so the Alpha penalty is lifted and the leave
-	// rules (Izin Satu Hari, sakit tanpa surat dokter) apply.
+	// Re-judge days already scored as absent so leave rules replace the Alpha penalty.
 	if err := ReevaluatePastDays(ctx, qtx, req.EmployeeID, covered); err != nil {
 		return nil, err
 	}
@@ -424,9 +471,7 @@ func ApproveLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, le
 	return res, nil
 }
 
-// ReevaluatePastDays rebuilds the automatic violations of an employee's days
-// that are already over (before today, WIB). Days still ahead are judged by the
-// nightly evaluation when they come.
+// ReevaluatePastDays rebuilds violations for days before today (WIB).
 func ReevaluatePastDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, days []time.Time) error {
 	today := TodayWIB()
 	for _, d := range days {
@@ -461,12 +506,8 @@ func ReevaluateLeaveRequest(ctx context.Context, qtx *db.Queries, req *db.LeaveR
 	return ReevaluatePastDays(ctx, qtx, req.EmployeeID, WorkingDaysInRange(req.StartDate.Time, req.EndDate.Time, workDays, holidays))
 }
 
-// CancelApprovedLeave reverses an approved leave for the days still ahead: it
-// refunds their allowance and removes the 'leave' attendance rows it created for
-// them (those without a check-in). Days up to and including today stay consumed
-// and keep their attendance history — otherwise cancelling old leave would
-// inflate the unused balance that evaluation pays out. today is the reference
-// "now" date (UTC). Must run inside a transaction.
+// CancelApprovedLeave refunds only days after today; past days stay consumed.
+// Requires a transaction.
 func CancelApprovedLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequest, leaveType *db.LeaveType, today time.Time) error {
 	start := req.StartDate.Time
 	end := req.EndDate.Time
@@ -501,9 +542,7 @@ func CancelApprovedLeave(ctx context.Context, qtx *db.Queries, req *db.LeaveRequ
 	return nil
 }
 
-// GetUnpaidLeaveDays counts approved unpaid-leave (leave_type.is_paid=false)
-// working days that overlap [from, to] for the employee. Prompt 08 payroll calls
-// this to deduct daily_rate × days. from/to are inclusive period bounds.
+// GetUnpaidLeaveDays counts approved unpaid-leave working days in [from, to].
 func GetUnpaidLeaveDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time) (int, error) {
 	from = dateOnlyUTC(from)
 	to = dateOnlyUTC(to)

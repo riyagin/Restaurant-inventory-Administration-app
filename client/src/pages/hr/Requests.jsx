@@ -243,7 +243,7 @@ function LeaveCreateModal({ onClose, onSaved }) {
     if (!form.leave_type_id) { setError('Pilih jenis libur.'); return; }
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
-    try { if (await submitLeaveRequest(form)) onSaved(); }
+    try { if (await submitLeaveRequest(form, { autoApproved: usesQuota })) onSaved(); }
     catch (err) { setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.'); }
     finally { setSaving(false); }
   };
@@ -282,7 +282,7 @@ function LeaveCreateModal({ onClose, onSaved }) {
         <div style={{ display: 'flex', gap: '1rem', margin: '0.5rem 0', fontSize: '0.85rem', color: '#445' }}>
           <span>Rentang: <strong>{calendarDays}</strong> hari kalender</span>
         </div>
-        <BackdatedNotice startDate={form.start_date} />
+        <BackdatedNotice startDate={form.start_date} autoApproved={usesQuota} />
         {usesQuota && <QuotaPreview employeeId={form.employee_id} startDate={form.start_date} endDate={form.end_date} />}
         <p style={{ fontSize: '0.78rem', color: '#888', margin: '0 0 0.5rem' }}>
           Jumlah hari dihitung otomatis oleh sistem (hari libur nasional tidak dihitung).

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getLeaveBalance, getEmployeeLeaveRequests } from '../../../api';
-import { todayLocal, fmtMonth } from '../leaveRules';
+import { todayLocal, fmtMonth, fmtPeriodRange, periodOf } from '../leaveRules';
 import { BackdatedBadge } from '../LeaveRuleWidgets';
 import { UnusedChip, UsedDaysCell } from '../LeaveBalancesPanel';
 import { fmtDateShort } from './shared';
@@ -21,7 +21,6 @@ function LeaveStatusChip({ status }) {
 
 export function CutiTab({ employeeId }) {
   const thisYear = new Date().getFullYear();
-  const thisMonth = todayLocal().slice(0, 7);
   const [year, setYear] = useState(thisYear);
   const [balance, setBalance] = useState(null);
   const [requests, setRequests] = useState([]);
@@ -38,20 +37,24 @@ export function CutiTab({ employeeId }) {
   }, [employeeId]);
 
   const months = balance?.months || [];
+  // The running allowance period (26th–25th with the default cut-off).
+  const thisMonth = periodOf(todayLocal(), balance?.cutoff_day ?? 0);
   const current = months.find(m => m.month === thisMonth);
 
   return (
     <div>
       {current && (
         <div className="card" style={{ marginBottom: '1rem' }}>
-          <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Jatah Libur {fmtMonth(thisMonth)}</h3>
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem' }}>Jatah Libur {fmtMonth(thisMonth)}
+            {fmtPeriodRange(current) && <span style={{ fontWeight: 400, fontSize: '0.85rem', color: '#667' }}> · {fmtPeriodRange(current)}</span>}
+          </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
             <BalanceStat label="Jatah" value={current.quota_days} color="#2563eb" />
             <BalanceStat label="Terpakai" value={current.used_days} color="#a06800" />
             <BalanceStat label="Sisa" value={current.unused_days} color={current.unused_days > 0 ? '#1e7e34' : '#c5221f'} />
           </div>
           <p style={{ fontSize: '0.78rem', color: '#888', margin: '0.6rem 0 0' }}>
-            {balance.default_quota} hari libur berbayar per bulan; Sabtu/Minggu dihitung {balance.weekend_cost} hari. Sisa tidak terbawa ke bulan berikutnya.
+            {balance.default_quota} hari libur berbayar per bulan; Sabtu/Minggu dihitung {balance.weekend_cost} hari. Periode mengikuti tanggal tutup gaji. Sisa tidak terbawa ke periode berikutnya.
             {' '}Alpha (tidak masuk tanpa izin) memakai jatah yang sama; bila jatah tidak cukup, hari itu tidak dibayar.
           </p>
           {current.alpha_days > 0 && (
@@ -84,7 +87,7 @@ export function CutiTab({ employeeId }) {
             <tbody>
               {months.map(m => (
                 <tr key={m.month}>
-                  <td>{fmtMonth(m.month)}</td>
+                  <td>{fmtMonth(m.month)}{fmtPeriodRange(m) && <div style={{ fontSize: '0.74rem', color: '#889' }}>{fmtPeriodRange(m)}</div>}</td>
                   <td style={{ textAlign: 'center' }}>{m.quota_days}{m.overridden && <span title="Jatah bulan ini diatur khusus" style={{ color: '#889' }}> *</span>}</td>
                   <td style={{ textAlign: 'center' }}><UsedDaysCell balance={m} /></td>
                   <td style={{ textAlign: 'center' }}><UnusedChip days={m.unused_days} closed={m.closed} /></td>

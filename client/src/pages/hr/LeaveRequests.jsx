@@ -65,7 +65,7 @@ function CreateModal({ onClose, onSaved }) {
     if (new Date(form.end_date) < new Date(form.start_date)) { setError('Tanggal selesai harus setelah atau sama dengan tanggal mulai.'); return; }
     setSaving(true);
     try {
-      const created = await submitLeaveRequest(form);
+      const created = await submitLeaveRequest(form, { autoApproved: usesQuota });
       if (created) onSaved(created);
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.');
@@ -108,7 +108,7 @@ function CreateModal({ onClose, onSaved }) {
         <div style={{ display: 'flex', gap: '1rem', margin: '0.5rem 0', fontSize: '0.85rem', color: '#445' }}>
           <span>Rentang: <strong>{calendarDays}</strong> hari kalender</span>
         </div>
-        <BackdatedNotice startDate={form.start_date} />
+        <BackdatedNotice startDate={form.start_date} autoApproved={usesQuota} />
         {usesQuota && <QuotaPreview employeeId={form.employee_id} startDate={form.start_date} endDate={form.end_date} />}
         <p style={{ fontSize: '0.78rem', color: '#888', margin: '0 0 0.5rem' }}>
           Jumlah hari dihitung otomatis oleh sistem (hari libur nasional tidak dihitung).

@@ -115,7 +115,7 @@ func TestLeaveDayCostWeekendCountsDouble(t *testing.T) {
 func TestQuotaCostByMonthSplitsAtMonthEnd(t *testing.T) {
 	// Fri 30 Oct (1) + Sat 31 Oct (2) | Sun 1 Nov (2) + Mon 2 Nov (1).
 	days := WorkingDaysInRange(d("2026-10-30"), d("2026-11-02"), []int{1, 2, 3, 4, 5, 6, 7}, nil)
-	got := QuotaCostByMonth(days)
+	got := QuotaCostByMonth(days, 0)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 months, got %+v", got)
 	}
@@ -139,22 +139,72 @@ func TestFourDayQuotaAllowsTwoWeekendDays(t *testing.T) {
 
 func TestNewMonthlyLeaveBalance(t *testing.T) {
 	today := d("2026-10-22")
-	sep := NewMonthlyLeaveBalance(d("2026-09-01"), 4, 1, false, today)
+	sep := NewMonthlyLeaveBalance(d("2026-09-01"), 4, 1, false, today, 0)
 	if !sep.Closed || sep.UnusedDays != 3 || sep.Month != "2026-09" {
 		t.Errorf("September = %+v, want closed with 3 unused", sep)
 	}
-	oct := NewMonthlyLeaveBalance(d("2026-10-01"), 4, 6, true, today)
+	oct := NewMonthlyLeaveBalance(d("2026-10-01"), 4, 6, true, today, 0)
 	if oct.Closed || oct.UnusedDays != 0 {
 		t.Errorf("October = %+v, want open and unused clamped at 0", oct)
 	}
 }
 
 func TestQuotaExceededErrorMatchesSentinel(t *testing.T) {
-	var err error = &QuotaExceededError{Month: d("2026-10-01"), Quota: 4, Used: 3, Needed: 2}
+	var err error = &QuotaExceededError{Month: d("2026-10-01"), Cutoff: 25, Quota: 4, Used: 3, Needed: 2}
 	if !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatal("QuotaExceededError should match ErrQuotaExceeded")
 	}
-	if want := "jatah libur 10/2026 tidak mencukupi: sisa 1 hari, dibutuhkan 2 hari"; err.Error() != want {
+	if want := "jatah libur periode 26/09/2026 – 25/10/2026 tidak mencukupi: sisa 1 hari, dibutuhkan 2 hari"; err.Error() != want {
 		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+}
+
+// With the default cut-off 25 the allowance period labelled M runs 26 (M-1) –
+// 25 M: the 25th closes a period and the 26th opens the next one.
+func TestLeavePeriodFollowsCutoff(t *testing.T) {
+	for date, want := range map[string]string{
+		"2026-11-25": "2026-11-01", "2026-11-26": "2026-12-01", "2026-11-01": "2026-11-01",
+		"2026-10-26": "2026-11-01", "2026-12-31": "2027-01-01", "2026-02-25": "2026-02-01",
+	} {
+		if got := LeavePeriodOf(d(date), 25); !got.Equal(d(want)) {
+			t.Errorf("LeavePeriodOf(%s, 25) = %s, want %s", date, got.Format("2006-01-02"), want)
+		}
+	}
+	if got := LeavePeriodOf(d("2026-11-30"), 0); !got.Equal(d("2026-11-01")) {
+		t.Errorf("cut-off 0 should be the calendar month, got %s", got.Format("2006-01-02"))
+	}
+	from, to := LeavePeriodRange(d("2026-11-01"), 25)
+	if !from.Equal(d("2026-10-26")) || !to.Equal(d("2026-11-26")) {
+		t.Errorf("range = %s..%s, want 2026-10-26..2026-11-26", from.Format("2006-01-02"), to.Format("2006-01-02"))
+	}
+	from, to = LeavePeriodRange(d("2027-01-01"), 25)
+	if !from.Equal(d("2026-12-26")) || !to.Equal(d("2027-01-26")) {
+		t.Errorf("January range = %s..%s", from.Format("2006-01-02"), to.Format("2006-01-02"))
+	}
+}
+
+func TestQuotaCostByMonthSplitsAtCutoff(t *testing.T) {
+	// Tue 24 Nov (1) + Wed 25 Nov (1) | Thu 26 Nov (1) + Fri 27 Nov (1).
+	days := WorkingDaysInRange(d("2026-11-24"), d("2026-11-27"), []int{1, 2, 3, 4, 5, 6, 7}, nil)
+	got := QuotaCostByMonth(days, 25)
+	if len(got) != 2 || !got[0].Month.Equal(d("2026-11-01")) || got[0].Cost != 2 ||
+		!got[1].Month.Equal(d("2026-12-01")) || got[1].Cost != 2 {
+		t.Fatalf("got %+v, want Nov period 2 + Dec period 2", got)
+	}
+	// 30 Oct – 2 Nov sits inside one period (26 Oct – 25 Nov).
+	days = WorkingDaysInRange(d("2026-10-30"), d("2026-11-02"), []int{1, 2, 3, 4, 5, 6, 7}, nil)
+	if got := QuotaCostByMonth(days, 25); len(got) != 1 || got[0].Cost != 6 {
+		t.Fatalf("got %+v, want one period costing 6", got)
+	}
+}
+
+func TestNewMonthlyLeaveBalanceCutoff(t *testing.T) {
+	// On 26 Nov the November period (26 Oct – 25 Nov) is over.
+	b := NewMonthlyLeaveBalance(d("2026-11-01"), 4, 1, false, d("2026-11-26"), 25)
+	if !b.Closed || b.PeriodStart != "2026-10-26" || b.PeriodEnd != "2026-11-25" {
+		t.Errorf("got %+v, want closed 2026-10-26..2026-11-25", b)
+	}
+	if b := NewMonthlyLeaveBalance(d("2026-11-01"), 4, 1, false, d("2026-11-25"), 25); b.Closed {
+		t.Errorf("November period should still be open on the 25th")
 	}
 }

@@ -48,7 +48,7 @@ func TestMonthlyLeaveBalanceWithAlpha(t *testing.T) {
 	today := time.Date(2026, 11, 17, 0, 0, 0, 0, time.UTC)
 	// Quota 4, approved leave used 3; Alpha on Sat 7th (cost 2, can't fit) and
 	// Mon 9th (cost 1, fits).
-	b := NewMonthlyLeaveBalance(m, 4, 3, false, today).WithAlpha([]time.Time{
+	b := NewMonthlyLeaveBalance(m, 4, 3, false, today, 0).WithAlpha([]time.Time{
 		time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC),
 	})
@@ -57,7 +57,7 @@ func TestMonthlyLeaveBalanceWithAlpha(t *testing.T) {
 		t.Fatalf("got %+v", b)
 	}
 	// No Alpha: unchanged from the leave-only balance.
-	plain := NewMonthlyLeaveBalance(m, 4, 1, false, today)
+	plain := NewMonthlyLeaveBalance(m, 4, 1, false, today, 0)
 	if got := plain.WithAlpha(nil); got != plain {
 		t.Fatalf("WithAlpha(nil) changed the balance: %+v vs %+v", got, plain)
 	}

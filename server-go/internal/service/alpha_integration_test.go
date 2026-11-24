@@ -50,7 +50,7 @@ func TestAlphaAgainstAttendanceRecords(t *testing.T) {
 	for date, status := range map[string]string{
 		"2026-11-02": "absent", "2026-11-07": "absent", "2026-11-09": "absent",
 		"2026-11-10": "present", "2026-11-11": "leave",
-		"2026-10-31": "absent", // previous month: outside the window below
+		"2026-10-25": "absent", // previous period (calendar or 26–25): outside the window below
 	} {
 		if _, err := tx.Exec(ctx, `INSERT INTO attendance_records (employee_id, date, status) VALUES ($1, $2, $3)`,
 			empID, date, status); err != nil {
@@ -89,11 +89,16 @@ func TestAlphaAgainstAttendanceRecords(t *testing.T) {
 	}
 
 	// The all-employee balance path sees the same three days.
-	by, err := service.AbsentDatesByEmployeeMonth(ctx, q, nov, nov.AddDate(0, 1, 0))
+	cutoff, err := service.LeaveCutoffDay(ctx, q)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := service.NewMonthlyLeaveBalance(nov, 2, 0, true, nov.AddDate(0, 0, 16)).WithAlpha(by[empID][nov])
+	from, to := service.LeavePeriodRange(nov, cutoff)
+	by, err := service.AbsentDatesByEmployeeMonth(ctx, q, from, to, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := service.NewMonthlyLeaveBalance(nov, 2, 0, true, nov.AddDate(0, 0, 16), cutoff).WithAlpha(by[empID][nov])
 	if b.UsedDays != 2 || b.UnusedDays != 0 || b.AlphaUnpaidDays != 1 {
 		t.Fatalf("balance %+v", b)
 	}

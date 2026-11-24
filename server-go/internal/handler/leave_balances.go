@@ -60,8 +60,14 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 			unusedClosed += m.UnusedDays
 		}
 	}
+	cutoff, err := service.LeaveCutoffDay(ctx, h.queries)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengaturan periode")
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"year":                year,
+		"cutoff_day":          cutoff,
 		"default_quota":       service.DefaultMonthlyLeaveQuota,
 		"weekend_cost":        service.WeekendLeaveCost,
 		"months":              months,
@@ -71,7 +77,14 @@ func (h *LeaveHandler) GetLeaveBalance(w http.ResponseWriter, r *http.Request) {
 
 // ListMonthlyLeaveBalances — GET /api/hr/leave-balances?month=YYYY-MM
 func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.Request) {
-	month := service.MonthStart(today())
+	ctx := r.Context()
+	cutoff, err := service.LeaveCutoffDay(ctx, h.queries)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "gagal mengambil pengaturan periode")
+		return
+	}
+	current := service.LeavePeriodOf(today(), cutoff)
+	month := current
 	if v := strings.TrimSpace(r.URL.Query().Get("month")); v != "" {
 		m, err := time.Parse("2006-01", v)
 		if err != nil {
@@ -81,9 +94,11 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 		month = m
 	}
 
-	ctx := r.Context()
+	from, to := service.LeavePeriodRange(month, cutoff)
 	rows, err := h.queries.ListMonthlyLeaveBalances(ctx, &db.ListMonthlyLeaveBalancesParams{
 		Month:        pgtype.Date{Time: month, Valid: true},
+		FromDate:     pgtype.Date{Time: from, Valid: true},
+		ToDate:       pgtype.Date{Time: to, Valid: true},
 		DefaultQuota: service.DefaultMonthlyLeaveQuota,
 	})
 	if err != nil {
@@ -91,7 +106,7 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries, month, month.AddDate(0, 1, 0))
+	alpha, err := service.AbsentDatesByEmployeeMonth(ctx, h.queries, from, to, cutoff)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal mengambil data alpha")
 		return
@@ -112,12 +127,16 @@ func (h *LeaveHandler) ListMonthlyLeaveBalances(w http.ResponseWriter, r *http.R
 			EmployeeCode: rr.EmployeeCode,
 			BranchName:   rr.BranchName,
 			MonthlyLeaveBalance: service.NewMonthlyLeaveBalance(month, int(rr.QuotaDays), int(rr.UsedDays),
-				rr.Overridden, today()).WithAlpha(alpha[rr.EmployeeID.Bytes][month]),
+				rr.Overridden, today(), cutoff).WithAlpha(alpha[rr.EmployeeID.Bytes][month]),
 		})
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
 		"month":         month.Format("2006-01"),
-		"closed":        month.Before(service.MonthStart(today())),
+		"current_month": current.Format("2006-01"),
+		"cutoff_day":    cutoff,
+		"period_start":  from.Format("2006-01-02"),
+		"period_end":    to.AddDate(0, 0, -1).Format("2006-01-02"),
+		"closed":        month.Before(current),
 		"default_quota": service.DefaultMonthlyLeaveQuota,
 		"weekend_cost":  service.WeekendLeaveCost,
 		"employees":     out,

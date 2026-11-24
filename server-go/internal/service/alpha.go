@@ -89,7 +89,7 @@ type AlphaMonth struct {
 // AlphaUsed is the allowance Alpha used this month.
 func (m *AlphaMonth) AlphaUsed() int { return AlphaQuotaUsed(m.Days) }
 
-// AlphaForMonth derives the month's Alpha days and how each was paid for.
+// AlphaForMonth derives the allowance period's (LeavePeriodRange) Alpha days and how each was paid for.
 // Dates in exclude are left out: a leave request being approved over an Alpha
 // day turns it into leave, so it must not be counted as both.
 func AlphaForMonth(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, month time.Time, exclude ...time.Time) (*AlphaMonth, error) {
@@ -98,18 +98,23 @@ func AlphaForMonth(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID,
 		skip[dateOnlyUTC(d)] = true
 	}
 	m := MonthStart(month)
+	cutoff, err := LeaveCutoffDay(ctx, qtx)
+	if err != nil {
+		return nil, err
+	}
 	quota, err := MonthlyLeaveQuota(ctx, qtx, employeeID, m)
 	if err != nil {
 		return nil, err
 	}
-	leaveUsed, err := monthlyLeaveUsed(ctx, qtx, employeeID, m)
+	leaveUsed, err := monthlyLeaveUsed(ctx, qtx, employeeID, m, cutoff)
 	if err != nil {
 		return nil, err
 	}
+	from, to := LeavePeriodRange(m, cutoff)
 	rows, err := qtx.ListAbsentDatesForEmployee(ctx, &db.ListAbsentDatesForEmployeeParams{
 		EmployeeID: employeeID,
-		DateFrom:   pgtype.Date{Time: m, Valid: true},
-		DateTo:     pgtype.Date{Time: m.AddDate(0, 1, 0), Valid: true},
+		DateFrom:   pgtype.Date{Time: from, Valid: true},
+		DateTo:     pgtype.Date{Time: to, Valid: true},
 	})
 	if err != nil {
 		return nil, err
@@ -141,8 +146,12 @@ func AlphaPayCut(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, f
 // the days AlphaPayCut charges (each costs Cost × daily rate).
 func AlphaPayCutDays(ctx context.Context, qtx *db.Queries, employeeID pgtype.UUID, from, to time.Time) ([]AlphaDay, error) {
 	from, to = dateOnlyUTC(from), dateOnlyUTC(to)
+	cutoff, err := LeaveCutoffDay(ctx, qtx)
+	if err != nil {
+		return nil, err
+	}
 	var out []AlphaDay
-	for m := MonthStart(from); !m.After(to); m = m.AddDate(0, 1, 0) {
+	for m := LeavePeriodOf(from, cutoff); !m.After(LeavePeriodOf(to, cutoff)); m = m.AddDate(0, 1, 0) {
 		am, err := AlphaForMonth(ctx, qtx, employeeID, m)
 		if err != nil {
 			return nil, err

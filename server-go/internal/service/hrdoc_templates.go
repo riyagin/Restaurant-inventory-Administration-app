@@ -177,7 +177,7 @@ func buildPKWTT(in HRDocInput) *HRDocument {
 
 		heading("Pasal 4 — Waktu Kerja, Hak, dan Kewajiban"),
 		clause("1.", fmt.Sprintf("Waktu kerja PIHAK KEDUA mengikuti ketentuan: %s, sesuai peraturan perusahaan dan peraturan perundang-undangan.", dash(in.WorkingHours))),
-		clause("2.", "PIHAK KEDUA berhak atas cuti tahunan, hari istirahat, Tunjangan Hari Raya (THR) keagamaan, serta kepesertaan BPJS Ketenagakerjaan dan BPJS Kesehatan sesuai ketentuan yang berlaku."),
+		clause("2.", "PIHAK KEDUA berhak atas jatah libur bulanan sesuai peraturan perusahaan, hari istirahat, Tunjangan Hari Raya (THR) keagamaan, serta kepesertaan BPJS Ketenagakerjaan dan BPJS Kesehatan sesuai ketentuan yang berlaku."),
 		clause("3.", "PIHAK KEDUA wajib menaati peraturan perusahaan, menjaga nama baik dan rahasia perusahaan, serta melaksanakan tugas dengan penuh tanggung jawab."),
 
 		heading("Pasal 5 — Pemutusan Hubungan Kerja"),

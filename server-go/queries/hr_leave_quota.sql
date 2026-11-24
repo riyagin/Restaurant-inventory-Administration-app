@@ -47,16 +47,25 @@ LEFT JOIN leave_monthly_quotas q ON q.employee_id = sqlc.arg(employee_id) AND q.
 ORDER BY m.month;
 
 -- name: ListMonthlyLeaveBalances :many
--- Every active employee's allowance and usage for the month starting $1;
--- $2 is the default allowance for employees without an override.
+-- Every active employee's allowance for the period labelled month, and their
+-- usage over that period's dates [from_date, to_date) — see LeavePeriodRange.
+-- default_quota is the allowance for employees without an override.
 SELECT e.id AS employee_id, e.full_name AS employee_name, e.employee_code, COALESCE(b.name, 'Tanpa Cabang')::text AS branch_name,
        COALESCE(q.quota_days, sqlc.arg(default_quota)::int)::int AS quota_days,
        (q.quota_days IS NOT NULL)::bool AS overridden,
        COALESCE((SELECT SUM(u.cost) FROM leave_quota_usage u
-                 WHERE u.employee_id = e.id AND u.date >= sqlc.arg(month)
-                   AND u.date < (sqlc.arg(month)::date + interval '1 month')), 0)::int AS used_days
+                 WHERE u.employee_id = e.id AND u.date >= sqlc.arg(from_date)
+                   AND u.date < sqlc.arg(to_date)), 0)::int AS used_days
 FROM employees e
 LEFT JOIN branches b ON b.id = e.branch_id
 LEFT JOIN leave_monthly_quotas q ON q.employee_id = e.id AND q.month = sqlc.arg(month)
 WHERE e.status = 'active'
 ORDER BY COALESCE(b.name, 'Tanpa Cabang'), e.full_name;
+
+-- name: ListLeaveQuotaUsage :many
+-- One employee's charged leave days in [from_date, to_date); the caller groups
+-- them into allowance periods (LeavePeriodOf).
+SELECT date, cost
+FROM leave_quota_usage
+WHERE employee_id = sqlc.arg(employee_id) AND date >= sqlc.arg(from_date) AND date < sqlc.arg(to_date)
+ORDER BY date;

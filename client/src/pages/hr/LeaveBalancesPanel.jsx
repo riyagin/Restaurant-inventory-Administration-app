@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getLeaveBalances } from '../../api';
-import { fmtMonth, todayLocal, WEEKEND_COST } from './leaveRules';
+import { fmtMonth, fmtPeriodRange, periodOf, todayLocal, WEEKEND_COST } from './leaveRules';
 
-// Unused-leave indicator: every active employee's paid-leave allowance for one
-// month. Unused days do not carry over; once the month has closed they are the
-// figure evaluation converts to cash.
+// Unused-leave indicator for one period; unused days do not carry over.
 export default function LeaveBalancesPanel() {
-  const [month, setMonth] = useState(todayLocal().slice(0, 7));
+  // Allowance periods follow the payroll cut-off (default 25): after the 25th the
+  // running period is next month's.
+  const [month, setMonth] = useState(periodOf(todayLocal(), 25));
   // The answer remembers which month it is for; loading is "not for this month yet".
   const [result, setResult] = useState({ month: null, data: null, error: '' });
 
@@ -33,14 +33,15 @@ export default function LeaveBalancesPanel() {
           style={{ padding: '0.4rem 0.5rem', border: '1px solid #d4d9e2', borderRadius: 6 }} />
         {data && (
           <span style={{ fontSize: '0.85rem', color: '#445' }}>
+            {fmtPeriodRange(data) && <>Periode {fmtPeriodRange(data)} — </>}
             {data.closed ? 'Bulan sudah ditutup — sisa bersifat final.' : 'Bulan berjalan — sisa masih dapat berubah.'}
           </span>
         )}
       </div>
 
       <p style={{ fontSize: '0.8rem', color: '#888', margin: '0 0 0.75rem' }}>
-        Jatah libur berbayar {data?.default_quota ?? 4} hari per bulan; Sabtu/Minggu dihitung {WEEKEND_COST} hari.
-        Sisa jatah tidak terbawa ke bulan berikutnya dan biasanya dikonversi menjadi uang saat evaluasi.
+        Jatah libur berbayar {data?.default_quota ?? 4} hari per periode gaji (tanggal {data?.cutoff_day ? data.cutoff_day + 1 : 26} s/d {data?.cutoff_day || 25}); Sabtu/Minggu dihitung {WEEKEND_COST} hari.
+        Sisa jatah tidak terbawa ke periode berikutnya dan biasanya dikonversi menjadi uang saat evaluasi.
       </p>
 
       {data && rows.length > 0 && (
@@ -85,9 +86,7 @@ export default function LeaveBalancesPanel() {
   );
 }
 
-// UsedDaysCell: allowance used, with the Alpha share spelled out. Alpha (absent
-// without permission) draws on the same allowance as a day off; an Alpha day
-// the allowance can't cover in full is cut from pay instead (service/alpha.go).
+// Alpha draws on the same allowance; an uncovered Alpha day is cut from pay.
 export function UsedDaysCell({ balance: b }) {
   if (!b.alpha_days) return <>{b.used_days}</>;
   const parts = [];

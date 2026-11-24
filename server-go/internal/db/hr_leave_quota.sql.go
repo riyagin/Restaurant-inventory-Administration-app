@@ -124,22 +124,64 @@ func (q *Queries) ListLeaveQuotaMonths(ctx context.Context, arg *ListLeaveQuotaM
 	return items, nil
 }
 
+const listLeaveQuotaUsage = `-- name: ListLeaveQuotaUsage :many
+SELECT date, cost
+FROM leave_quota_usage
+WHERE employee_id = $1 AND date >= $2 AND date < $3
+ORDER BY date
+`
+
+type ListLeaveQuotaUsageParams struct {
+	EmployeeID pgtype.UUID `json:"employee_id"`
+	FromDate   pgtype.Date `json:"from_date"`
+	ToDate     pgtype.Date `json:"to_date"`
+}
+
+type ListLeaveQuotaUsageRow struct {
+	Date pgtype.Date `json:"date"`
+	Cost int32       `json:"cost"`
+}
+
+// One employee's charged leave days in [from_date, to_date); the caller groups
+// them into allowance periods (LeavePeriodOf).
+func (q *Queries) ListLeaveQuotaUsage(ctx context.Context, arg *ListLeaveQuotaUsageParams) ([]*ListLeaveQuotaUsageRow, error) {
+	rows, err := q.db.Query(ctx, listLeaveQuotaUsage, arg.EmployeeID, arg.FromDate, arg.ToDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*ListLeaveQuotaUsageRow
+	for rows.Next() {
+		var i ListLeaveQuotaUsageRow
+		if err := rows.Scan(&i.Date, &i.Cost); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMonthlyLeaveBalances = `-- name: ListMonthlyLeaveBalances :many
 SELECT e.id AS employee_id, e.full_name AS employee_name, e.employee_code, COALESCE(b.name, 'Tanpa Cabang')::text AS branch_name,
        COALESCE(q.quota_days, $1::int)::int AS quota_days,
        (q.quota_days IS NOT NULL)::bool AS overridden,
        COALESCE((SELECT SUM(u.cost) FROM leave_quota_usage u
                  WHERE u.employee_id = e.id AND u.date >= $2
-                   AND u.date < ($2::date + interval '1 month')), 0)::int AS used_days
+                   AND u.date < $3), 0)::int AS used_days
 FROM employees e
 LEFT JOIN branches b ON b.id = e.branch_id
-LEFT JOIN leave_monthly_quotas q ON q.employee_id = e.id AND q.month = $2
+LEFT JOIN leave_monthly_quotas q ON q.employee_id = e.id AND q.month = $4
 WHERE e.status = 'active'
 ORDER BY COALESCE(b.name, 'Tanpa Cabang'), e.full_name
 `
 
 type ListMonthlyLeaveBalancesParams struct {
 	DefaultQuota int32       `json:"default_quota"`
+	FromDate     pgtype.Date `json:"from_date"`
+	ToDate       pgtype.Date `json:"to_date"`
 	Month        pgtype.Date `json:"month"`
 }
 
@@ -153,10 +195,16 @@ type ListMonthlyLeaveBalancesRow struct {
 	UsedDays     int32       `json:"used_days"`
 }
 
-// Every active employee's allowance and usage for the month starting $1;
-// $2 is the default allowance for employees without an override.
+// Every active employee's allowance for the period labelled month, and their
+// usage over that period's dates [from_date, to_date) — see LeavePeriodRange.
+// default_quota is the allowance for employees without an override.
 func (q *Queries) ListMonthlyLeaveBalances(ctx context.Context, arg *ListMonthlyLeaveBalancesParams) ([]*ListMonthlyLeaveBalancesRow, error) {
-	rows, err := q.db.Query(ctx, listMonthlyLeaveBalances, arg.DefaultQuota, arg.Month)
+	rows, err := q.db.Query(ctx, listMonthlyLeaveBalances,
+		arg.DefaultQuota,
+		arg.FromDate,
+		arg.ToDate,
+		arg.Month,
+	)
 	if err != nil {
 		return nil, err
 	}

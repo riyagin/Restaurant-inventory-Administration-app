@@ -151,9 +151,13 @@ func GetAttendanceHistory(ctx context.Context, conn db.DBTX, q *db.Queries, empl
 		return nil, err
 	}
 
-	// How each Alpha day was paid for (service/alpha.go), per calendar month.
+	// How each Alpha day was paid for (service/alpha.go), per allowance period.
+	cutoff, err := LeaveCutoffDay(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	alphaOutcome := map[string]string{}
-	for m := MonthStart(from); !m.After(to); m = m.AddDate(0, 1, 0) {
+	for m := LeavePeriodOf(from, cutoff); !m.After(LeavePeriodOf(to, cutoff)); m = m.AddDate(0, 1, 0) {
 		am, err := AlphaForMonth(ctx, q, employeeID, m)
 		if err != nil {
 			return nil, err
