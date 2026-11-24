@@ -76,7 +76,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'flex', justifyContent: 'flex-end', zIndex: 100 }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '50vw', minWidth: 360, maxWidth: '100%', background: '#fff', height: '100%', display: 'flex', flexDirection: 'column', boxShadow: '-2px 0 12px rgba(0,0,0,.15)' }}>
-        {/* scrollable body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h2 style={{ margin: 0, fontSize: 18 }}>Review Penggajian</h2>
@@ -87,7 +86,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
             <>
               {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 10, borderRadius: 6, marginBottom: 10 }}>{error}</div>}
 
-              {/* Attendance summary */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Ringkasan Absensi</h3>
                 <div style={{ display: 'flex', gap: 8, marginBottom: holidaysWorked.length > 0 ? 8 : 0 }}>
@@ -110,7 +108,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 )}
               </section>
 
-              {/* Performance */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Evaluasi</h3>
                 <div style={{ marginBottom: 6 }}>
@@ -133,7 +130,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 )}
               </section>
 
-              {/* Kasbon installments */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Cicilan Kasbon Jatuh Tempo</h3>
                 {(data.installments || []).length === 0 ? (
@@ -147,7 +143,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 )}
               </section>
 
-              {/* Overtime requests */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Permintaan Lembur</h3>
                 {overtimeRequests.length === 0 ? (
@@ -169,7 +164,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
                 )}
               </section>
 
-              {/* Editable fields */}
               <section style={{ marginBottom: 16 }}>
                 <h3 style={{ fontSize: 14, color: '#667', margin: '0 0 6px' }}>Penyesuaian</h3>
                 <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Hari Lembur</label>
@@ -272,7 +266,6 @@ export function ReviewDrawer({ lineId, locked, onClose, onSaved }) {
           )}
         </div>
 
-        {/* sticky footer — always visible */}
         {!loading && line && (
           <div style={{ borderTop: '1px solid #e6e8ee', padding: '12px 20px', background: '#fff' }}>
             <div style={{ background: '#f6f7fa', borderRadius: 8, padding: '10px 12px', marginBottom: 10, fontSize: 14 }}>

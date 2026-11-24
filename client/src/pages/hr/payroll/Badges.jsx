@@ -1,6 +1,5 @@
 
 
-// SortableTh is a table header that toggles the table's sort on click.
 export function SortableTh({ label, sortKey, sort, order, onSort, align = 'left' }) {
   const active = sort === sortKey;
   return (
@@ -29,8 +28,6 @@ export function ScoreBadge({ score }) {
   return <span style={{ background: bg, color, padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 700 }}>{s}</span>;
 }
 
-// The grade the line was paid at (frozen at generation): which share of every
-// grade-linked component it received.
 export function GradeBadge({ grade, percent }) {
   if (!grade) return null;
   const pct = Number(percent);
@@ -43,11 +40,7 @@ export function GradeBadge({ grade, percent }) {
   );
 }
 
-// Ledger posting status for a closed period. The posting itself is automatic —
-// queued inside the close transaction and written by a background worker — so this
-// only reports what happened. The retry button appears solely for the failed case,
-// where someone has fixed the cause (a missing account) and does not want to wait
-// for the next retry sweep.
+// Posting is automatic; retry is offered only after a failure.
 export function AccountingStatus({ posting, busy, onRetry }) {
   const base = { borderRadius: 8, padding: '10px 16px', fontWeight: 600, fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 8 };
 

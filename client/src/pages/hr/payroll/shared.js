@@ -1,6 +1,5 @@
 import { fmtTime as fmtWIBTime } from '../../../time';
 
-// Classify an employee's saved bank into an export bucket.
 export function classifyBank(name) {
   const s = (name || '').toLowerCase();
   if (s.includes('bca') || s.includes('central asia')) return 'BCA';
@@ -8,7 +7,6 @@ export function classifyBank(name) {
   return 'Lainnya';
 }
 
-// Trigger a browser download from an Axios blob response.
 export function saveBlob(data, filename) {
   const url = window.URL.createObjectURL(new Blob([data]));
   const a = document.createElement('a');
@@ -28,11 +26,7 @@ export const fmtDate = (d) => d ? new Date(d).toLocaleDateString('id-ID', { day:
 
 export const numVal = (n) => Number(n ?? 0);
 
-// Sortable columns of the payroll line table. `get` extracts the comparable value
-// (null = "no value", always sorted last); `numeric` picks the comparison and the
-// direction a first click applies — money/score columns open highest-first, text
-// columns A–Z. The whole line set is fetched in one request, so sorting happens
-// here rather than round-tripping to the server.
+// `get` returns null for no value (sorted last); `numeric` columns open highest-first.
 export const SORT_COLUMNS = {
   name:                   { numeric: false, get: (l) => l.employee_name || '' },
   position:               { numeric: false, get: (l) => l.position_name || '' },
@@ -49,9 +43,7 @@ export const SORT_COLUMNS = {
   reviewed:               { numeric: true,  get: (l) => (l.reviewed ? 1 : 0) },
 };
 
-// sortLines returns a sorted copy. Rows with no value for the active column sink
-// to the bottom in both directions, and employee name breaks every tie so the
-// order stays stable across re-sorts.
+// Empty values sink in both directions; employee name breaks ties.
 export function sortLines(lines, sort, order) {
   const col = SORT_COLUMNS[sort] || SORT_COLUMNS.name;
   const dir = order === 'desc' ? -1 : 1;
@@ -81,8 +73,7 @@ export function calcAmounts(line, mult, overtimeDays, overtimeHours, holidayDays
   const holidayAmt = Math.round(Number(holidayDays) * Number(line.daily_rate) * mult.holiday);
   const allowTotal = components.filter(c => c.type === 'allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const bonusTotal = components.filter(c => c.type === 'bonus').reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  // daily_allowance is handed out in cash during the month, so it stays out of gross/net
-  // and is only surfaced as a separate informational total.
+  // daily_allowance is paid in cash, outside gross/net.
   const dailyPaidTotal = components.filter(c => c.type === 'daily_allowance').reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const gross = Number(line.base_salary) + allowTotal + bonusTotal + overtimeAmt + overtimeHourlyAmt + holidayAmt;
   const net = gross - Number(line.component_deduction_total) - Number(line.kasbon_deduction) - Number(line.unpaid_leave_deduction) - Number(line.half_day_deduction || 0) - Number(line.attendance_cut_deduction || 0);

@@ -29,9 +29,7 @@ export default function PayrollPeriodDetail() {
   const [drawerLineId, setDrawerLineId] = useState(null);
   const [cutLineId, setCutLineId] = useState(null);
   const [showBonusModal, setShowBonusModal] = useState(false);
-  // Ledger posting status for this period, written by the background poster.
-  // null for periods closed before automatic posting existed (those were posted
-  // by hand through the old dialog).
+  // Background ledger posting status; null for periods posted by hand before it existed.
   const [posting, setPosting] = useState(null);
 
   const locked = period && period.status !== 'open';
@@ -47,8 +45,7 @@ export default function PayrollPeriodDetail() {
     }
   }, [id]);
 
-  // Search / position / branch stay server-side; ordering is applied on the client
-  // (see sortedLines) so clicking a header re-sorts instantly without a refetch.
+  // Filters are server-side; ordering is client-side (sortedLines).
   const loadLines = useCallback(async () => {
     try {
       const { data } = await getPayrollLines(id, {
@@ -77,8 +74,7 @@ export default function PayrollPeriodDetail() {
 
   const refreshAll = async () => { await loadPeriod(); await loadLines(); };
 
-  // The ledger posting runs in the background, so the page follows it instead of
-  // making the user reload. Polling stops as soon as it settles (posted/failed).
+  // Poll until the background posting settles.
   useEffect(() => {
     if (posting?.status !== 'pending') return undefined;
     const t = setInterval(() => { loadPeriod(); }, 3000);
@@ -100,8 +96,6 @@ export default function PayrollPeriodDetail() {
 
   const sortedLines = useMemo(() => sortLines(lines, sort, order), [lines, sort, order]);
 
-  // Clicking the active column flips direction; a new column starts in its natural
-  // direction — highest-first for money/score, A–Z for text.
   const toggleSort = (key) => {
     if (sort === key) {
       setOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
@@ -167,9 +161,7 @@ export default function PayrollPeriodDetail() {
     }
   };
 
-  // Export a bank-upload Excel: net pay per employee, one sheet per bank format
-  // (BCA / Mandiri / Bank Lain). Pulls the full unfiltered line set so the file
-  // is complete regardless of on-screen filters.
+  // Bank-upload Excel, one sheet per bank, always from the unfiltered line set.
   const doExportBankFiles = async () => {
     setBusy(true); setError('');
     try {
@@ -177,8 +169,6 @@ export default function PayrollPeriodDetail() {
       const rows = Array.isArray(allLines) ? allLines : [];
       if (rows.length === 0) { setError('Tidak ada baris untuk diekspor.'); return; }
 
-      // Bank details live on the employee record, not the payroll line — fetch them
-      // (limited concurrency) and index by employee id.
       const ids = [...new Set(rows.map((l) => l.employee_id))];
       const bankMap = {};
       const CHUNK = 8;
@@ -341,7 +331,6 @@ export default function PayrollPeriodDetail() {
 
       {error && <div style={{ background: '#fce8e6', color: '#c5221f', padding: 12, borderRadius: 8, marginBottom: 12 }}>{error}</div>}
 
-      {/* Filters */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         <input placeholder="Cari nama / kode…" value={q} onChange={(e) => setQ(e.target.value)}
           style={{ padding: 8, borderRadius: 6, border: '1px solid #ccd', minWidth: 200 }} />

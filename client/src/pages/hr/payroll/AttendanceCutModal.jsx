@@ -3,10 +3,7 @@ import { getPayrollLineAttendanceCuts } from '../../../api';
 import { fmtIDR } from '../../../format';
 import { fmtMin, fmtTime } from './shared';
 
-// Per-day breakdown of a line's late-arrival / early-departure cut. The line's
-// figure is frozen at generation; the days are recomputed from attendance now,
-// so a correction made since shows up here as a mismatch until the line is
-// regenerated.
+// Days are recomputed live; the line's figure is frozen, so a later correction shows as a mismatch.
 export function AttendanceCutModal({ lineId, onClose }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
