@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getManpowerPlanning, getLeaveTypes, getBranches } from '../../api';
 import { canApprove } from '../../roles';
-import { todayLocal, fmtMonth, submitLeaveRequest, WEEKEND_COST } from './leaveRules';
+import { todayLocal, fmtMonth, fmtPeriodRange, submitLeaveRequest, WEEKEND_COST } from './leaveRules';
 import { QuotaPreview, BackdatedNotice, DoctorNoteField } from './LeaveRuleWidgets';
-import { ShiftCellModal, ShiftProfileModal, ShiftSettingsModal, ShiftCoverageView } from './ShiftPlanning';
+import { ShiftCellModal, BulkShiftModal, ShiftProfileModal, ShiftSettingsModal, ShiftCoverageView } from './ShiftPlanning';
 import { groupByHomeDivision, shiftTimeLabel, shiftHoursLabel } from './shiftRules';
 
 import { fmtDateTime } from '../../time';
@@ -40,11 +40,25 @@ function escapeHtml(s) {
   ));
 }
 
-// Builds a self-contained printable HTML document for the manpower plan, opened
-// in a new window so it renders free of the app's nav/layout. One table per
-// branch, employees sectioned by division, one column per day; a cell shows the
-// rostered shift code in the shift's colour, or the leave status (colors print
-// via -webkit-print-color-adjust). Each branch ends with a headcount per shift.
+// Black or white text, whichever contrasts more with the shift colour (WCAG).
+function readableTextOn(color) {
+  let hex = String(color || '').trim().replace(/^#/, '');
+  if (/^[0-9a-f]{3,4}$/i.test(hex)) hex = hex.slice(0, 3).split('').map(c => c + c).join('');
+  if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex)) return '#111827';
+  const lin = (i) => {
+    const v = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  };
+  const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  // Contrast vs black is (L+0.05)/0.05, vs white 1.05/(L+0.05); equal at L≈0.179.
+  return L > 0.179 ? '#000000' : '#ffffff';
+}
+
+// Inline style for a cell filled with a shift's colour.
+const shiftFill = (color) =>
+  `background:${escapeHtml(color || '#ffffff')};color:${readableTextOn(color)}`;
+
+// Printable manpower plan, opened in its own window.
 function buildManpowerPrintHtml({ data, days }) {
   const printedAt = fmtDateTime(new Date(), { dateStyle: 'long', timeStyle: 'short' });
   const periodLabel = `${formatDateLabel(data.dates[0])} s/d ${formatDateLabel(data.dates[data.dates.length - 1])}`;
@@ -71,7 +85,7 @@ function buildManpowerPrintHtml({ data, days }) {
         }
         const s = shiftsById[day.shift_id];
         if (s) {
-          return `<td class="c" style="background:${escapeHtml(s.color)}">${escapeHtml(s.code)}${day.status === 'pending' ? '<sup>M</sup>' : ''}</td>`;
+          return `<td class="c" style="${shiftFill(s.color)}">${escapeHtml(s.code)}${day.status === 'pending' ? '<sup>M</sup>' : ''}</td>`;
         }
         if (day.status === 'pending') {
           return `<td class="c pending" title="${escapeHtml(day.leave_type || 'Libur')} (menunggu)">M</td>`;
@@ -90,7 +104,7 @@ function buildManpowerPrintHtml({ data, days }) {
     const countRows = branch.shifts.filter(s => s.is_active).map(s => {
       const cells = data.dates.map((_, i) =>
         `<td class="c">${branch.employees.filter(e => e.days[i].shift_id === s.id && e.days[i].status !== 'cuti').length || ''}</td>`).join('');
-      return `<tr class="cnt"><td class="emp" style="background:${escapeHtml(s.color)}">${escapeHtml(s.code)} · ${escapeHtml(s.name)}</td>${cells}</tr>`;
+      return `<tr class="cnt"><td class="emp" style="${shiftFill(s.color)}">${escapeHtml(s.code)} · ${escapeHtml(s.name)}</td>${cells}</tr>`;
     }).join('');
     const shiftLegend = branch.shifts.filter(s => s.is_active)
       .map(s => `<span><i style="background:${escapeHtml(s.color)}"></i> ${escapeHtml(s.code)} ${escapeHtml(s.name)} ${escapeHtml(shiftTimeLabel(s))} (${escapeHtml(shiftHoursLabel(s))})</span>`).join('');
@@ -102,50 +116,55 @@ function buildManpowerPrintHtml({ data, days }) {
       ${shiftLegend ? `<div class="legend" style="margin:0 0 4px">${shiftLegend}</div>` : ''}
       <table>
         <thead><tr><th class="emp">Karyawan</th>${headCols}</tr></thead>
-        <tbody>${rows || `<tr><td class="c" colspan="${colspan}" style="color:#888;padding:12px">Tidak ada karyawan.</td></tr>`}${countRows}</tbody>
+        <tbody>${rows || `<tr><td class="c" colspan="${colspan}" style="color:#4b5563;padding:12px">Tidak ada karyawan.</td></tr>`}${countRows}</tbody>
       </table>
     </div>`;
   }).join('');
 
   return `<!doctype html><html lang="id"><head><meta charset="utf-8">
+<meta name="color-scheme" content="light">
 <title>Rencana Tenaga Kerja — ${escapeHtml(periodLabel)}</title>
 <style>
   @page { size: A4 landscape; margin: 12mm; }
+  /* Always a white sheet with dark text, whatever the OS/browser theme. */
+  :root { color-scheme: light only; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1a1a2e; font-size: 11px; margin: 0; }
-  h1 { font-size: 17px; margin: 0 0 2px; }
-  .sub { color: #667; font-size: 11px; margin-bottom: 4px; }
+  html, body { background: #ffffff; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #111827; font-size: 11px; margin: 0; }
+  h1 { font-size: 17px; margin: 0 0 2px; color: #111827; }
+  .sub { color: #374151; font-size: 11px; margin-bottom: 4px; }
   .branch { margin-top: 14px; }
-  .bh { font-size: 12px; margin-bottom: 4px; page-break-after: avoid; }
-  .bh span { color: #667; font-weight: normal; margin-left: 6px; }
-  table { width: 100%; border-collapse: collapse; }
+  .bh { font-size: 12px; margin-bottom: 4px; page-break-after: avoid; color: #111827; }
+  .bh span { color: #374151; font-weight: normal; margin-left: 6px; }
+  table { width: 100%; border-collapse: collapse; background: #ffffff; }
   thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
-  th, td { border: 1px solid #cfd5df; padding: 3px 4px; font-size: 10px; }
-  th { background: #eef1f6; text-align: center; }
+  th, td { border: 1px solid #9ca3af; padding: 3px 4px; font-size: 10px; color: #111827; background: #ffffff; }
+  th { background: #e5e7eb; text-align: center; color: #111827; }
   th.day, td.c { text-align: center; width: 26px; font-weight: 600; }
-  th.we { background: #e2e6ee; }
+  th.we { background: #d1d5db; }
   th.emp, td.emp { text-align: left; width: ${nameWidth}px; min-width: ${nameWidth}px; }
   td.emp .en { font-weight: 600; }
-  td.emp .ep { color: #888; font-size: 9px; }
-  .do { color: #7c3aed; font-size: 8px; }
-  tr.sec td { background: #f3f4f6; font-weight: 700; font-size: 10px; }
+  td.emp .ep { color: #4b5563; font-size: 9px; }
+  .do { color: #5b21b6; font-size: 8px; font-weight: 700; }
+  tr.sec td { background: #f3f4f6; font-weight: 700; font-size: 10px; color: #111827; }
   tr.cnt td { font-size: 9px; }
-  td.none { color: #bbb; font-weight: 400; }
-  td.pending { background: #fed7aa; color: #9a3412; font-weight: 700; }
-  td.cuti { background: #1f2937; color: #f9fafb; font-weight: 600; font-size: 9px; }
-  sup { color: #c2410c; font-size: 7px; }
-  .legend { margin-top: 14px; font-size: 10px; color: #444; display: flex; gap: 14px; flex-wrap: wrap; }
+  td.none { color: #6b7280; font-weight: 400; }
+  td.pending { background: #fed7aa; color: #7c2d12; font-weight: 700; }
+  td.cuti { background: #1f2937; color: #ffffff; font-weight: 600; font-size: 9px; }
+  /* Inherits the cell's computed text colour, so it reads on any shift fill. */
+  sup { color: inherit; font-size: 7px; font-weight: 700; }
+  .legend { margin-top: 14px; font-size: 10px; color: #1f2937; display: flex; gap: 14px; flex-wrap: wrap; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
-  .legend i { width: 12px; height: 12px; border: 1px solid rgba(0,0,0,0.15); display: inline-block; }
-  .foot { margin-top: 16px; color: #999; font-size: 9px; }
+  .legend i { width: 12px; height: 12px; border: 1px solid #6b7280; display: inline-block; }
+  .foot { margin-top: 16px; color: #4b5563; font-size: 9px; }
   @media print { .noprint { display: none; } }
 </style></head>
 <body>
   <button class="noprint" onclick="window.print()" style="float:right;padding:8px 16px;cursor:pointer">Cetak</button>
   <h1>Rencana Tenaga Kerja</h1>
   <div class="sub">Periode: <b>${escapeHtml(periodLabel)}</b> (${days} hari) — ${totalEmployees} karyawan aktif</div>
-  ${branchTables || '<p style="color:#888">Tidak ada karyawan aktif.</p>'}
+  ${branchTables || '<p style="color:#4b5563">Tidak ada karyawan aktif.</p>'}
   <div class="legend">
     <span><i style="background:#fff"></i> – Belum ada shift</span>
     <span><i style="background:#fed7aa"></i> Libur menunggu persetujuan (M)</span>
@@ -204,7 +223,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
     }
     setSaving(true);
     try {
-      const created = await submitLeaveRequest(form);
+      const created = await submitLeaveRequest(form, { autoApproved: usesQuota });
       if (created) onSaved(created);
     } catch (err) {
       setError(err?.response?.data?.error || 'Gagal menyimpan pengajuan libur.');
@@ -270,7 +289,7 @@ function QuickLeaveModal({ employee, date, onClose, onSaved }) {
             {calendarDays} hari kalender
           </p>
         )}
-        <BackdatedNotice startDate={form.start_date} />
+        <BackdatedNotice startDate={form.start_date} autoApproved={usesQuota} />
         {usesQuota && <QuotaPreview employeeId={employee.id} startDate={form.start_date} endDate={form.end_date} />}
 
         {field('Keterangan (opsional)',
@@ -325,7 +344,15 @@ const cellStyle = {
   cursor: 'pointer',
   transition: 'filter 0.1s',
   position: 'relative',
+  userSelect: 'none', // dragging across cells selects cells, not text
 };
+
+// Cells inside the drag selection.
+const selectedCellStyle = { outline: '2px solid #2563eb', outlineOffset: -2, boxShadow: 'inset 0 0 0 999px rgba(37,99,235,0.18)', opacity: 1 };
+
+// Employees of a branch in the order the grid draws them, so a drag's row
+// indices map back to employees.
+const branchRows = (branch) => groupByHomeDivision(branch).flatMap(s => s.employees);
 
 const headerCellStyle = {
   padding: '8px 6px',
@@ -340,7 +367,7 @@ const headerCellStyle = {
   maxWidth: 110,
   position: 'sticky',
   top: 0,
-  zIndex: 1,
+  zIndex: 2, // above the body cells (position: relative) and the sticky name column
 };
 
 // Days already gone are history: read-only, so they read as faded.
@@ -370,7 +397,7 @@ const nameCellStyle = {
   position: 'sticky',
   left: 0,
   background: '#fff',
-  zIndex: 0,
+  zIndex: 1, // day cells are position: relative and would otherwise paint over it
 };
 
 const nameHeaderStyle = {
@@ -381,7 +408,7 @@ const nameHeaderStyle = {
   position: 'sticky',
   top: 0,
   left: 0,
-  zIndex: 2,
+  zIndex: 3, // corner cell: above both the date header and the name column
   fontSize: 12,
 };
 
@@ -394,6 +421,7 @@ const sectionRowStyle = {
   borderBottom: '1px solid #e5e7eb',
   position: 'sticky',
   left: 0,
+  zIndex: 1,
 };
 
 const countCellStyle = {
@@ -472,6 +500,55 @@ export default function ManpowerPlanning() {
   const clampDays = (v) => Math.min(MAX_DAYS, Math.max(MIN_DAYS, v));
 
   const openCell = (employee, day, branch) => setModal({ type: 'shift', employee, day, branch });
+
+  // A single-cell click opens the cell editor; a drag opens the bulk editor.
+  const [sel, setSel] = useState(null); // { branch, r0, c0, r1, c1 }
+  const dragRef = useRef(null);
+
+  const startDrag = (branch, r, c, e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const s = { branch, r0: r, c0: c, r1: r, c1: c };
+    dragRef.current = s;
+    setSel(s);
+  };
+  const extendDrag = (branch, r, c) => {
+    const d = dragRef.current;
+    if (!d || d.branch !== branch || (d.r1 === r && d.c1 === c)) return;
+    dragRef.current = { ...d, r1: r, c1: c };
+    setSel(dragRef.current);
+  };
+
+  useEffect(() => {
+    const onUp = () => {
+      const d = dragRef.current;
+      if (!d) return;
+      dragRef.current = null;
+      setSel(null);
+      const rows = branchRows(d.branch);
+      const [rA, rB] = [Math.min(d.r0, d.r1), Math.max(d.r0, d.r1)];
+      const [cA, cB] = [Math.min(d.c0, d.c1), Math.max(d.c0, d.c1)];
+      if (rA === rB && cA === cB) {
+        const emp = rows[rA];
+        setModal({ type: 'shift', employee: emp, day: emp.days[cA], branch: d.branch });
+        return;
+      }
+      const cells = [];
+      for (let r = rA; r <= rB; r++) {
+        for (let c = cA; c <= cB; c++) cells.push({ employee: rows[r], day: rows[r].days[c] });
+      }
+      setModal({ type: 'bulk', branch: d.branch, cells });
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape' && dragRef.current) { dragRef.current = null; setSel(null); }
+    };
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
 
   const handleSaved = (msg) => {
     setModal(null);
@@ -572,7 +649,8 @@ export default function ManpowerPlanning() {
       </div>
 
       <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 0.75rem' }}>
-        Klik kotak hari untuk mengatur shift atau mengajukan libur. Hari yang sudah lewat (pudar) tidak dapat diubah;
+        Klik kotak hari untuk mengatur shift atau mengajukan libur, atau <b>seret</b> melintasi beberapa karyawan/hari
+        untuk mengatur shift sekaligus. Hari yang sudah lewat (pudar) tidak dapat diubah;
         perubahan shift <b>hari ini</b> {approver ? 'langsung berlaku karena Anda manajer' : 'memerlukan persetujuan manajer'}.
         {' '}Jatah libur 4 hari/bulan, Sabtu/Minggu dihitung {WEEKEND_COST} hari.
       </p>
@@ -627,6 +705,11 @@ export default function ManpowerPlanning() {
             const shiftsById = Object.fromEntries(branch.shifts.map(s => [s.id, s]));
             const activeShifts = branch.shifts.filter(s => s.is_active);
             const colCount = data.dates.length + 1;
+            const rowIndex = Object.fromEntries(branchRows(branch).map((e, i) => [e.id, i]));
+            const selRect = sel && sel.branch === branch ? {
+              r0: Math.min(sel.r0, sel.r1), r1: Math.max(sel.r0, sel.r1),
+              c0: Math.min(sel.c0, sel.c1), c1: Math.max(sel.c0, sel.c1),
+            } : null;
             return (
               <div key={branch.id} style={{ marginBottom: '2rem' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -663,8 +746,14 @@ export default function ManpowerPlanning() {
                   </div>
                 )}
 
-                <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 6 }}>
-                  <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 600 }}>
+                {/* The wrapper is the scroll container in both directions, so the
+                    sticky date header and name column pin to it: dates stay on top
+                    while scrolling down a long roster, names stay left while
+                    scrolling across a long range. Capped to the viewport so the
+                    horizontal scrollbar is always on screen. */}
+                <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 140px)', minHeight: 200, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+                  {/* separate (not collapse): collapsed borders don't travel with sticky cells */}
+                  <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%', minWidth: 600 }}>
                     <thead>
                       <tr>
                         <th style={nameHeaderStyle}>Karyawan</th>
@@ -687,7 +776,10 @@ export default function ManpowerPlanning() {
                           shiftsById={shiftsById}
                           today={today}
                           compact={compact}
-                          onCell={(emp, day) => openCell(emp, day, branch)}
+                          rowIndex={rowIndex}
+                          selRect={selRect}
+                          onCellDown={(emp, c, e) => startDrag(branch, rowIndex[emp.id], c, e)}
+                          onCellEnter={(emp, c) => extendDrag(branch, rowIndex[emp.id], c)}
                           onProfile={(emp) => setModal({ type: 'profile', employee: emp, branch })}
                         />
                       ))}
@@ -747,6 +839,17 @@ export default function ManpowerPlanning() {
         />
       )}
 
+      {modal?.type === 'bulk' && (
+        <BulkShiftModal
+          branch={modal.branch}
+          cells={modal.cells}
+          today={today}
+          approver={approver}
+          onClose={() => setModal(null)}
+          onSaved={handleSaved}
+        />
+      )}
+
       {modal?.type === 'leave' && (
         <QuickLeaveModal
           employee={modal.employee}
@@ -776,7 +879,7 @@ export default function ManpowerPlanning() {
 }
 
 // One division section of a branch grid: a heading row, then its employees.
-function SectionRows({ section, colCount, shiftsById, today, compact, onCell, onProfile }) {
+function SectionRows({ section, colCount, shiftsById, today, compact, rowIndex, selRect, onCellDown, onCellEnter, onProfile }) {
   return (
     <>
       <tr>
@@ -807,13 +910,15 @@ function SectionRows({ section, colCount, shiftsById, today, compact, onCell, on
               const left = b.quota_days - b.used_days;
               return (
                 <div key={b.month} style={{ fontSize: 11, color: left > 0 ? '#15803d' : '#b91c1c' }}
-                  title={`Jatah libur ${fmtMonth(b.month)}: terpakai ${b.used_days} dari ${b.quota_days} hari`}>
+                  title={`Jatah libur ${fmtMonth(b.month)} (${fmtPeriodRange(b)}): terpakai ${b.used_days} dari ${b.quota_days} hari`}>
                   Sisa libur {shortMonth(b.month)}: {left}/{b.quota_days}
                 </div>
               );
             })}
           </td>
-          {emp.days.map(day => {
+          {emp.days.map((day, ci) => {
+            const r = rowIndex[emp.id];
+            const selected = selRect && r >= selRect.r0 && r <= selRect.r1 && ci >= selRect.c0 && ci <= selRect.c1;
             const shift = shiftsById[day.shift_id];
             const pendingShift = day.pending_request_id ? (shiftsById[day.pending_shift_id] || null) : undefined;
             const past = day.date < today;
@@ -824,18 +929,19 @@ function SectionRows({ section, colCount, shiftsById, today, compact, onCell, on
             if (day.status === 'pending') titleParts.push(`${day.leave_type} (libur menunggu persetujuan)`);
             if (pendingShift !== undefined) titleParts.push(`Menunggu persetujuan: ${pendingShift ? pendingShift.name : 'hapus shift'}`);
             if (!titleParts.length) titleParts.push('Belum ada shift');
-            titleParts.push(past ? 'sudah lewat — tidak dapat diubah' : 'klik untuk ubah');
+            titleParts.push(past ? 'sudah lewat — tidak dapat diubah' : 'klik untuk ubah, seret untuk memilih beberapa');
             return (
               <td
                 key={day.date}
                 title={titleParts.join(' · ')}
-                onClick={() => onCell(emp, day)}
+                onMouseDown={e => onCellDown(emp, ci, e)}
                 style={{
                   ...cellStyle, ...(compact ? compactCellStyle : null), ...look,
                   ...(past ? pastCellStyle : null),
                   ...(pendingShift !== undefined ? { outline: '2px dashed #c2410c', outlineOffset: -3 } : null),
+                  ...(selected ? selectedCellStyle : null),
                 }}
-                onMouseEnter={e => e.currentTarget.style.filter = 'brightness(0.93)'}
+                onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(0.93)'; onCellEnter(emp, ci); }}
                 onMouseLeave={e => e.currentTarget.style.filter = ''}
               >
                 {day.status === 'cuti' ? (

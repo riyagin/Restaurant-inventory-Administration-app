@@ -1,11 +1,5 @@
-// Shift pieces of manpower planning: shift settings per branch, the roster cell
-// editor, the employee shift profile (home division + delivery-order flag) and
-// the per-day coverage view (shift × division).
-//
-// The date rule lives on the server; the UI only explains it:
-//   - days before today are read-only,
-//   - today's changes by non-managers become a request a manager approves,
-//   - future days apply directly.
+// Shift settings, roster cell and bulk editors, shift profile and coverage view.
+// The date rule is enforced by the server; the UI only explains it.
 import { useEffect, useState } from 'react';
 import {
   getShifts, createShift, updateShift, deleteShift,
@@ -222,6 +216,145 @@ export function ShiftCellModal({ employee, day, branch, dates, today, approver, 
   );
 }
 
+// ── Bulk roster editor (drag-selected cells) ─────────────────────────────────
+
+// Skips cells the server would refuse (past days, leave, DO-only shifts), since the save is atomic.
+export function BulkShiftModal({ branch, cells, today, approver, onClose, onSaved }) {
+  const [shiftId, setShiftId] = useState('');
+  const [divisionId, setDivisionId] = useState('');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const selectable = branch.shifts.filter(s => s.is_active);
+  const shift = selectable.find(s => s.id === shiftId);
+  const employees = [...new Map(cells.map(c => [c.employee.id, c.employee])).values()];
+  const dates = [...new Set(cells.map(c => c.day.date))].sort();
+
+  const open = cells.filter(c => c.day.date >= today);
+  const pastCount = cells.length - open.length;
+  let leaveCount = 0, nonDOCount = 0;
+  const target = open.filter(c => {
+    if (!shiftId) return true; // removing a shift touches every open cell
+    if (c.day.status === 'cuti') { leaveCount++; return false; }
+    if (shift?.delivery_only && !c.employee.is_delivery_staff) { nonDOCount++; return false; }
+    return true;
+  });
+  const needsApproval = !approver && target.some(c => c.day.date === today);
+
+  const submit = async () => {
+    setError('');
+    if (target.length === 0) { setError('Tidak ada kotak yang dapat diubah dalam pilihan ini.'); return; }
+    setSaving(true);
+    try {
+      const { data } = await saveShiftAssignments({
+        reason,
+        entries: target.map(c => ({
+          employee_id: c.employee.id, date: c.day.date,
+          shift_id: shiftId || null, division_id: (shiftId && divisionId) || null,
+        })),
+      });
+      const parts = [];
+      if (data.applied) parts.push(`${data.applied} kotak disimpan`);
+      if (data.pending) parts.push(`${data.pending} kotak menunggu persetujuan manajer`);
+      const skipped = cells.length - target.length;
+      if (skipped) parts.push(`${skipped} kotak dilewati`);
+      onSaved(parts.join(', ') || 'Tidak ada perubahan');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Gagal menyimpan jadwal shift.');
+      setSaving(false);
+    }
+  };
+
+  const dateRange = dates.length === 1
+    ? formatDateLabel(dates[0])
+    : `${formatDateLabel(dates[0])} – ${formatDateLabel(dates[dates.length - 1])}`;
+  const skipNotes = [
+    pastCount && `${pastCount} kotak sudah lewat`,
+    leaveCount && `${leaveCount} kotak hari libur`,
+    nonDOCount && `${nonDOCount} kotak staf non-DO (shift khusus DO)`,
+  ].filter(Boolean);
+
+  return (
+    <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={modalBox}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15, fontWeight: 700 }}>Atur Shift Sekaligus</h3>
+        <p style={{ margin: '0 0 8px', fontSize: 13, color: '#6b7280' }}>
+          {branch.name} · {employees.length} karyawan × {dates.length} hari<br />
+          {dateRange}
+        </p>
+        <div style={{ fontSize: 12, color: '#374151', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '6px 10px', marginBottom: 12, maxHeight: 84, overflowY: 'auto' }}>
+          {employees.map(e => e.name).join(', ')}
+        </div>
+
+        {needsApproval && (
+          <div style={{ background: '#fff7ed', color: '#9a3412', border: '1px solid #fdba74', borderRadius: 6, padding: '10px 12px', fontSize: 13, marginBottom: 12 }}>
+            Pilihan ini mencakup <b>hari ini</b> — perubahan untuk hari ini memerlukan persetujuan manajer.
+          </div>
+        )}
+
+        <label style={labelStyle}>Shift</label>
+        <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+          {selectable.map(s => (
+            <label key={s.id} style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+              border: shiftId === s.id ? '2px solid #2563eb' : '1px solid #e5e7eb',
+            }}>
+              <input type="radio" name="bulk-shift" checked={shiftId === s.id} onChange={() => setShiftId(s.id)} />
+              <ShiftChip shift={s} />
+              <span style={{ flex: 1 }}>
+                {s.name}
+                <span style={{ color: '#6b7280' }}> · {shiftTimeLabel(s)} · {shiftHoursLabel(s)}</span>
+                {s.delivery_only && <span style={{ color: '#7c3aed' }}> · khusus DO</span>}
+              </span>
+            </label>
+          ))}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+            border: shiftId === '' ? '2px solid #2563eb' : '1px solid #e5e7eb' }}>
+            <input type="radio" name="bulk-shift" checked={shiftId === ''} onChange={() => setShiftId('')} />
+            <span>Tanpa shift (hapus jadwal)</span>
+          </label>
+          {selectable.length === 0 && (
+            <p style={{ fontSize: 12, color: '#b45309', margin: 0 }}>Cabang ini belum punya shift. Tambahkan lewat tombol "Atur Shift".</p>
+          )}
+        </div>
+
+        {shiftId && (
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>Divisi</label>
+            <select style={inputStyle} value={divisionId} onChange={e => setDivisionId(e.target.value)}>
+              <option value="">Divisi utama masing-masing</option>
+              {branch.divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        {needsApproval && (
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>Alasan perubahan</label>
+            <textarea style={{ ...inputStyle, resize: 'vertical', minHeight: 50 }} value={reason}
+              onChange={e => setReason(e.target.value)} placeholder="Mis. tukar shift dengan rekan, sakit mendadak…" />
+          </div>
+        )}
+
+        <p style={{ fontSize: 12, color: '#374151', margin: '0 0 12px' }}>
+          Akan diubah: <b>{target.length} kotak</b>
+          {skipNotes.length > 0 && <span style={{ color: '#6b7280' }}> · dilewati: {skipNotes.join(', ')}</span>}
+        </p>
+
+        {error && <p style={errText}>{error}</p>}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button style={btn} onClick={onClose}>Batal</button>
+          <button style={{ ...btnPrimary, opacity: saving || target.length === 0 ? 0.7 : 1 }} disabled={saving || target.length === 0} onClick={submit}>
+            {saving ? 'Menyimpan…' : needsApproval ? 'Simpan & Ajukan' : 'Simpan'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Employee shift profile ───────────────────────────────────────────────────
 
 export function ShiftProfileModal({ employee, branch, onClose, onSaved }) {
@@ -423,11 +556,7 @@ export function ShiftSettingsModal({ branch, onClose }) {
 
 // ── Coverage view: one day, shift × division ─────────────────────────────────
 
-/**
- * For one date, every branch as a table: a row per division, a column per
- * shift, the names of who is rostered in each cell. A division nobody covers
- * that day is flagged — that is the question this view exists to answer.
- */
+// Coverage per division and shift for one date; uncovered divisions are flagged.
 export function ShiftCoverageView({ data, date, onCellClick }) {
   const idx = data.dates.indexOf(date);
   if (idx < 0) return null;
