@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -186,4 +187,8 @@ func (h *WelfareFundHandler) Payout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, res)
+}
+
+func parseISODate(s string) (time.Time, error) {
+	return time.Parse("2006-01-02", strings.TrimSpace(s))
 }

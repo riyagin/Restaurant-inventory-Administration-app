@@ -14,7 +14,6 @@ const TYPE_LABELS = {
   bonus: 'Bonus',
   deduction: 'Potongan',
   daily_allowance: 'Harian (Tunai)',
-  benefit_fund: 'Tunjangan Kesehatan',
   welfare_fund: 'Dana Kesejahteraan',
 };
 

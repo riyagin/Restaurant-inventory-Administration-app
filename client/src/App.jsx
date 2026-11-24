@@ -79,7 +79,6 @@ import PayrollDashboard from './pages/hr/PayrollDashboard';
 import PayrollPeriodDetail from './pages/hr/PayrollPeriodDetail';
 import AttendanceCutSimulator from './pages/hr/AttendanceCutSimulator';
 import ThrDashboard from './pages/hr/ThrDashboard';
-import BenefitFund from './pages/hr/BenefitFund';
 import ThrRunDetail from './pages/hr/ThrRunDetail';
 import Approvals from './pages/hr/Approvals';
 import HRSettings from './pages/hr/HRSettings';
@@ -240,7 +239,6 @@ const HR_GROUPS = [
   { label: 'Gaji & Tunjangan', links: [
     ['/hr/payroll', 'Penggajian'],
     ['/hr/thr', 'THR'],
-    ['/hr/benefit-fund', 'Tunjangan Kesehatan'],
     ['/hr/kasbon', 'Kasbon'],
   ] },
   { label: 'Kinerja', links: [
@@ -620,7 +618,6 @@ export default function App() {
                 <Route path="/hr/payroll/attendance-cut" element={<RequireHR><AttendanceCutSimulator /></RequireHR>} />
                 <Route path="/hr/payroll/:id" element={<RequireHR><PayrollPeriodDetail /></RequireHR>} />
                 <Route path="/hr/thr" element={<RequireHR><ThrDashboard /></RequireHR>} />
-                <Route path="/hr/benefit-fund" element={<RequireHR><BenefitFund /></RequireHR>} />
                 <Route path="/hr/thr/:id" element={<RequireHR><ThrRunDetail /></RequireHR>} />
                 <Route path="/hr/settings" element={<RequireHR><HRSettings /></RequireHR>} />
                 <Route path="/hr/kpi" element={<RequireHR><StaffKPI /></RequireHR>} />

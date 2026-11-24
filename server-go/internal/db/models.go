@@ -108,6 +108,7 @@ type AttendanceRecord struct {
 	ReviewResolved     bool               `json:"review_resolved"`
 }
 
+// ARSIP (migrasi 094): klaim Tunjangan Kesehatan sudah dihapus dari aplikasi. Hanya untuk referensi.
 type BenefitClaim struct {
 	ID                  pgtype.UUID        `json:"id"`
 	ClaimNumber         string             `json:"claim_number"`
@@ -132,6 +133,7 @@ type BenefitClaim struct {
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
+// ARSIP (migrasi 094): saldo dana pensiun per karyawan = SUM(amount) WHERE fund = 'pension'. Diselesaikan manual oleh akuntan.
 type BenefitFundMovement struct {
 	ID              pgtype.UUID        `json:"id"`
 	EmployeeID      pgtype.UUID        `json:"employee_id"`

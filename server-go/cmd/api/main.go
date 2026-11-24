@@ -243,7 +243,6 @@ func main() {
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 	thrHandler := handler.NewThrHandler(pool, queries)
-	benefitFundHandler := handler.NewBenefitFundHandler(pool, queries)
 	welfareFundHandler := handler.NewWelfareFundHandler(pool, queries)
 	thrHandler.SetUploadsDir(cfg.UploadsDir)
 	hrDocumentsHandler := handler.NewHRDocumentsHandler(pool, queries)
@@ -780,23 +779,8 @@ func main() {
 			r.Post("/api/hr/kasbons/{id}/process", kasbonHandler.Process)
 			r.Post("/api/hr/kasbons/{id}/cancel", kasbonHandler.Cancel)
 		})
-		// Tunjangan Kesehatan (health benefit + pension fund, migration 085).
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireHRAccess)
-			r.Get("/api/hr/benefit-fund/summary", benefitFundHandler.Summary)
-			r.Get("/api/hr/benefit-fund/employees/{id}", benefitFundHandler.EmployeeDetail)
-			r.Get("/api/hr/benefit-fund/claims", benefitFundHandler.ListClaims)
-			r.Get("/api/hr/benefit-fund/claims/preview", benefitFundHandler.PreviewClaim)
-			r.Post("/api/hr/benefit-fund/claims", benefitFundHandler.CreateClaim)
-			r.Post("/api/hr/benefit-fund/claims/{id}/cancel", benefitFundHandler.CancelClaim)
-		})
-		// Paying out a pension balance is a large one-off disbursement: manager only.
-		r.Group(func(r chi.Router) {
-			r.Use(appmiddleware.RequireManager)
-			r.Post("/api/hr/benefit-fund/employees/{id}/payout", benefitFundHandler.Payout)
-		})
 		// Dana Kesejahteraan Karyawan (retirement fund, migration 090): balance and
-		// ledger for the employee tab; the payout, like the pension's, is manager-only.
+		// ledger for the employee tab; the payout is manager-only.
 		r.Group(func(r chi.Router) {
 			r.Use(appmiddleware.RequireHRAccess)
 			r.Get("/api/hr/welfare-fund/employees/{id}", welfareFundHandler.EmployeeDetail)

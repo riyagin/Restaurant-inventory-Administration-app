@@ -7,7 +7,6 @@ const TYPE_LABELS = {
   bonus: 'Bonus',
   deduction: 'Potongan',
   daily_allowance: 'Harian (Tunai)',
-  benefit_fund: 'Tunjangan Kesehatan',
   welfare_fund: 'Dana Kesejahteraan',
 };
 
@@ -137,7 +136,6 @@ export default function WageComponents() {
               <option value="bonus">Bonus</option>
               <option value="deduction">Potongan</option>
               <option value="daily_allowance">Harian (Tunai)</option>
-              <option value="benefit_fund">Tunjangan Kesehatan</option>
               <option value="welfare_fund">Dana Kesejahteraan</option>
             </select>
           </div>
@@ -223,7 +221,6 @@ export default function WageComponents() {
                   <option value="bonus">Bonus</option>
                   <option value="deduction">Potongan</option>
                   <option value="daily_allowance">Harian (Tunai)</option>
-                  <option value="benefit_fund">Tunjangan Kesehatan</option>
                   <option value="welfare_fund">Dana Kesejahteraan</option>
                 </select>
               </div>

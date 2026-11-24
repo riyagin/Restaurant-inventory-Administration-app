@@ -676,16 +676,8 @@ export const setLeaveBalanceQuota   = (id, data) => api.put(`/hr/employees/${id}
 export const getLeaveBalances       = (month) => api.get('/hr/leave-balances', { params: { month } });
 export const getEmployeeLeaveRequests = (id) => api.get(`/hr/employees/${id}/leave-requests`);
 
-// ── HR: Tunjangan Kesehatan (health benefit + pension fund) ────────────────
-export const getBenefitFundSummary   = (month) => api.get('/hr/benefit-fund/summary', { params: { month } });
-export const getBenefitFundEmployee  = (id, month) => api.get(`/hr/benefit-fund/employees/${id}`, { params: { month } });
-export const getBenefitClaims        = (params) => api.get('/hr/benefit-fund/claims', { params });
-export const previewBenefitClaim     = (params) => api.get('/hr/benefit-fund/claims/preview', { params });
-export const createBenefitClaim      = (data) => api.post('/hr/benefit-fund/claims', data);
-export const cancelBenefitClaim      = (id, note) => api.post(`/hr/benefit-fund/claims/${id}/cancel`, { note });
-export const payoutBenefitPension    = (id, data) => api.post(`/hr/benefit-fund/employees/${id}/payout`, data);
 
-// ── HR: Dana Kesejahteraan (retirement fund, separate from health) ────────
+// ── HR: Dana Kesejahteraan (retirement fund) ───────────────────────────────
 export const getWelfareFundEmployee  = (id) => api.get(`/hr/welfare-fund/employees/${id}`);
 export const payoutWelfareFund       = (id, data) => api.post(`/hr/welfare-fund/employees/${id}/payout`, data);
 

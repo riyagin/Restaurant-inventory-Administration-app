@@ -42,7 +42,6 @@ const groups = (approver) => [
     items: [
       { to: '/hr/payroll', icon: '🧾', label: 'Penggajian', desc: 'Periode gaji & slip' },
       { to: '/hr/thr', icon: '🎁', label: 'THR', desc: 'Tunjangan Hari Raya' },
-      { to: '/hr/benefit-fund', icon: '🩺', label: 'Tunjangan Kesehatan', desc: 'Klaim sakit & dana pensiun' },
       { to: '/hr/kasbon', icon: '💵', label: 'Kasbon', desc: 'Pinjaman & cicilan karyawan' },
     ],
   },

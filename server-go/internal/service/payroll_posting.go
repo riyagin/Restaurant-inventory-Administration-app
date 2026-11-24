@@ -15,24 +15,13 @@ import (
 	"inventory-app/server-go/internal/db"
 )
 
-// Automatic payroll → ledger posting.
-//
-// Closing a period queues a payroll_postings row inside the close transaction;
-// a background worker then writes ONE balanced journal entry for the period and
-// marks the row posted. The close request itself returns as soon as the payroll
-// data is committed, so the operator is never left waiting on the ledger.
-//
-// The queue row is what makes "background" safe: it is committed with the close,
-// so a process that dies mid-post leaves durable evidence that the entry is still
-// owed, and SweepUnposted picks it up on the next start (and every tick after).
+// Payroll close queues a payroll_postings row in its transaction; a background
+// poster writes one balanced entry. The committed row makes a crash mid-post retryable.
 
 // CashAccountNumber is the system asset account ("Kas") payroll is paid out of.
 const CashAccountNumber = 11000
 
-// MaxPostingAttempts caps retries for one period. A posting that fails this many
-// times is stuck on something a retry cannot fix (a deleted account, a broken
-// migration), so it stops consuming sweep cycles and waits for a human — the
-// period shows as failed in the UI with the error text.
+// MaxPostingAttempts: after this many failures the period waits for a human.
 const MaxPostingAttempts = 5
 
 // PostingSweepInterval is how often the worker rechecks for unposted periods.
@@ -55,25 +44,11 @@ func QueuePayrollPosting(ctx context.Context, qtx *db.Queries, periodID pgtype.U
 	return qtx.UpsertPayrollPosting(ctx, periodID)
 }
 
-// branchExpenseAmount is the wage expense debited for one branch.
-//
-// The expense debited is net + kasbon, NOT gross. The difference between gross and
-// that figure is money the employee never receives and the company never pays out:
-//
-//	unpaid leave / half-day  → work not performed, so never an expense
-//	component deductions     → withheld from the employee (BPJS and friends)
-//	kasbon                   → not an expense here; it clears the employee
-//	                           receivable that the advance created, so it gets its
-//	                           own credit leg against Piutang Karyawan
-//
-// so: Dr Beban Gaji (net + kasbon), Cr Kas (net), Cr Piutang Karyawan (kasbon).
+// branchExpenseAmount is net + kasbon, not gross: Dr Beban Gaji (net + kasbon),
+// Cr Kas (net), Cr Piutang Karyawan (kasbon).
 func branchExpenseAmount(net, kasbon int64) int64 { return net + kasbon }
 
-// resolveWageAccount finds the account to debit for a branch: its dedicated
-// "Beban Gaji - <cabang>" account, falling back to the branch's generic expense
-// account. Returns uuid.Nil when neither exists — Post then parks the leg in the
-// suspense account rather than dropping it, so the entry still balances and the
-// misconfiguration is visible in the CoA.
+// resolveWageAccount: "Beban Gaji - <cabang>", else the branch expense account, else uuid.Nil (suspense).
 func resolveWageAccount(ctx context.Context, qtx *db.Queries, branchID pgtype.UUID, branchName string) uuid.UUID {
 	if branchName != "" {
 		if acct, err := qtx.GetAccountByName(ctx, WageAccountName(branchName)); err == nil && acct != nil {
@@ -88,9 +63,7 @@ func resolveWageAccount(ctx context.Context, qtx *db.Queries, branchID pgtype.UU
 	return uuid.Nil
 }
 
-// AlreadyPosted reports whether the journal already carries an entry for this
-// payroll period. Belt-and-braces alongside the payroll_postings PK: it makes a
-// double post impossible even if the queue row were lost or reset.
+// AlreadyPosted guards against a double post even if the queue row is lost.
 func AlreadyPosted(ctx context.Context, qtx *db.Queries, periodID pgtype.UUID) (bool, error) {
 	entries, err := qtx.ListJournalEntriesBySource(ctx, &db.ListJournalEntriesBySourceParams{
 		SourceType: SourcePayroll,
@@ -102,9 +75,7 @@ func AlreadyPosted(ctx context.Context, qtx *db.Queries, periodID pgtype.UUID) (
 	return len(entries) > 0, nil
 }
 
-// PostPayrollPeriod writes the period's single balanced journal entry. Idempotent:
-// a period that already has a 'payroll' entry is marked posted and left alone.
-// Must run inside a transaction.
+// PostPayrollPeriod is idempotent. Requires a transaction.
 func PostPayrollPeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollPeriod, actor uuid.UUID) (uuid.UUID, error) {
 	posted, err := AlreadyPosted(ctx, qtx, period.ID)
 	if err != nil {
@@ -174,9 +145,6 @@ func PostPayrollPeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollP
 
 // ── Background worker ────────────────────────────────────────────────────────
 
-// PayrollPoster runs payroll postings off the request path. Enqueue fires one
-// immediately after a close commits; SweepUnposted catches anything that failed
-// or was interrupted, which is what makes the async path safe to rely on.
 type PayrollPoster struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
@@ -186,9 +154,7 @@ func NewPayrollPoster(pool *pgxpool.Pool, queries *db.Queries) *PayrollPoster {
 	return &PayrollPoster{pool: pool, queries: queries}
 }
 
-// Enqueue posts a period in the background. The caller's request context is
-// deliberately NOT used: it is cancelled the moment the HTTP response is written,
-// which would kill the posting we just promised to do.
+// Enqueue uses its own context: the request's is cancelled when the response is written.
 func (p *PayrollPoster) Enqueue(periodID pgtype.UUID, actor uuid.UUID) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -199,13 +165,9 @@ func (p *PayrollPoster) Enqueue(periodID pgtype.UUID, actor uuid.UUID) {
 	}()
 }
 
-// PostOne runs one period's posting in its own transaction and records the
-// outcome on the queue row. A failure is recorded and returned, never swallowed:
-// the row stays unposted so the sweep retries it.
+// PostOne records failures on the queue row so the sweep retries them.
 func (p *PayrollPoster) PostOne(ctx context.Context, periodID pgtype.UUID, actor uuid.UUID) error {
-	// The attempt counter is bumped in its own transaction so it survives the
-	// rollback of a failed posting — otherwise a permanently broken period would
-	// retry forever.
+	// Bumped in its own transaction so it survives a failed posting's rollback.
 	if err := p.queries.MarkPayrollPostingAttempt(ctx, periodID); err != nil {
 		return err
 	}
@@ -249,15 +211,7 @@ func (p *PayrollPoster) post(ctx context.Context, periodID pgtype.UUID, actor uu
 		return err
 	}
 
-	// Benefit fund (migration 085): the month's employer contribution into Dana
-	// Kesehatan and the sweep of whatever claims left unused into Dana Pensiun.
-	// Same transaction, so a period is never marked posted with the fund missing.
-	if _, err := PostBenefitFundPeriod(ctx, qtx, period, actor); err != nil {
-		return fmt.Errorf("tunjangan kesehatan: %w", err)
-	}
-
-	// Dana Kesejahteraan (migration 090): the period's retirement-fund
-	// contributions, same transaction for the same reason.
+	// Same transaction, so a period is never posted without its fund contributions.
 	if _, err := PostWelfareFundPeriod(ctx, qtx, period, actor); err != nil {
 		return fmt.Errorf("dana kesejahteraan: %w", err)
 	}
@@ -276,9 +230,7 @@ func (p *PayrollPoster) post(ctx context.Context, periodID pgtype.UUID, actor uu
 	return tx.Commit(ctx)
 }
 
-// SweepUnposted retries every period that is queued or failed and still under the
-// attempt cap. Runs once at startup (catching anything a restart interrupted) and
-// then on every tick.
+// SweepUnposted retries queued or failed periods under the cap; runs at startup and every tick.
 func (p *PayrollPoster) SweepUnposted(ctx context.Context) {
 	rows, err := p.queries.ListUnpostedPayrollPostings(ctx, MaxPostingAttempts)
 	if err != nil {

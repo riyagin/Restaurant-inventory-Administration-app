@@ -12,18 +12,12 @@ import (
 	"inventory-app/server-go/internal/db"
 )
 
-// Dana Kesejahteraan Karyawan — an employer-funded retirement fund, separate from
-// the health benefit (Tunjangan Kesehatan, benefit_fund.go). See migration 090.
-//
-//	payroll close of P   Dr Beban Gaji - <cabang> / Cr Dana Kesejahteraan (contribution)
-//	retirement           Dr Dana Kesejahteraan / Cr <kas>               (whole balance)
-//
-// The contribution is the payroll line's 'welfare_fund' component snapshot, so it
-// follows whatever the reviewer saw on the line (grade-linked components included).
-// Per-employee balances are SUM(amount) over welfare_fund_movements.
+// Dana Kesejahteraan: employer retirement fund (migration 090).
+// Close: Dr Beban Gaji / Cr Dana Kesejahteraan; payout: Dr Dana Kesejahteraan / Cr kas.
+// Balances are SUM(amount) over welfare_fund_movements.
 
 // ComponentTypeWelfareFund is the wage_components.type of the per-period
-// contribution. Like benefit_fund it never enters gross/net pay.
+// contribution. It is an employer contribution and never enters gross/net pay.
 const ComponentTypeWelfareFund = "welfare_fund"
 
 // WelfareFundAccountNumber is the system liability account seeded by migration 090.
@@ -58,10 +52,7 @@ func welfareAccount(ctx context.Context, qtx *db.Queries) (uuid.UUID, error) {
 	return a.ID.Bytes, nil
 }
 
-// PostWelfareFundPeriod books a closed payroll period's welfare contributions as
-// one balanced journal entry (expense per branch) plus one movement per employee.
-// Idempotent; called by the payroll poster in the same transaction as the payroll
-// entry. Returns uuid.Nil when the period has nothing to book.
+// PostWelfareFundPeriod is idempotent and runs in the payroll poster's transaction.
 func PostWelfareFundPeriod(ctx context.Context, qtx *db.Queries, period *db.PayrollPeriod, actor uuid.UUID) (uuid.UUID, error) {
 	done, err := qtx.CountWelfareContributionsForPeriod(ctx, period.ID)
 	if err != nil {
@@ -169,10 +160,7 @@ type WelfarePayoutResult struct {
 	JournalEntryID uuid.UUID `json:"journal_entry_id"`
 }
 
-// PayoutWelfare pays out the full welfare balance. Refused while the employee is
-// still active, or while one of their payroll periods has not finished posting —
-// that period's contribution would otherwise land after the payout and leave a
-// balance nobody is reminded of. Must run inside a transaction.
+// PayoutWelfare: inactive employees only, once all their periods are posted. Requires a transaction.
 func PayoutWelfare(ctx context.Context, qtx *db.Queries, in WelfarePayoutInput) (*WelfarePayoutResult, error) {
 	if in.EmployeeStatus == "active" {
 		return nil, ErrWelfareStillEmployed
@@ -225,3 +213,7 @@ func PayoutWelfare(ctx context.Context, qtx *db.Queries, in WelfarePayoutInput) 
 	}
 	return &WelfarePayoutResult{Amount: bal, JournalEntryID: entryID}, nil
 }
+
+func pgDate(t time.Time) pgtype.Date { return pgtype.Date{Time: dateOnly(t), Valid: true} }
+
+func pgUUID(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: id != uuid.Nil} }

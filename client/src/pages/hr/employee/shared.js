@@ -1,7 +1,7 @@
 import { canUseHR } from '../../../roles';
 import { fmtDateTime } from '../../../time';
 
-export const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', benefit_fund: 'Tunjangan Kesehatan', welfare_fund: 'Dana Kesejahteraan' };
+export const TYPE_LABELS = { allowance: 'Tunjangan', bonus: 'Bonus', deduction: 'Potongan', daily_allowance: 'Harian (Tunai)', welfare_fund: 'Dana Kesejahteraan' };
 
 export const canEdit = canUseHR;
 

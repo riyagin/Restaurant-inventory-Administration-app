@@ -11,6 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUnsettledPayrollForEmployee = `-- name: CountUnsettledPayrollForEmployee :one
+SELECT COUNT(*)::int
+FROM payroll_lines pl
+JOIN payroll_periods pp ON pp.id = pl.payroll_period_id
+LEFT JOIN payroll_postings ps ON ps.period_id = pp.id
+WHERE pl.employee_id = $1
+  AND (pp.status = 'open' OR ps.status IS DISTINCT FROM 'posted')
+`
+
+// Payroll periods holding this employee whose fund contribution has not reached
+// the fund yet: still open, or closed but the ledger posting is not done.
+func (q *Queries) CountUnsettledPayrollForEmployee(ctx context.Context, employeeID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countUnsettledPayrollForEmployee, employeeID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countWelfareContributionsForPeriod = `-- name: CountWelfareContributionsForPeriod :one
 SELECT COUNT(*)::int FROM welfare_fund_movements
 WHERE payroll_period_id = $1 AND movement_type = 'contribution'

@@ -51,3 +51,13 @@ LEFT JOIN branches b ON b.id = e.branch_id
 JOIN payroll_line_components plc ON plc.payroll_line_id = pl.id AND plc.type = 'welfare_fund'
 WHERE pl.payroll_period_id = $1
 GROUP BY pl.employee_id, e.full_name, e.branch_id, b.name;
+
+-- name: CountUnsettledPayrollForEmployee :one
+-- Payroll periods holding this employee whose fund contribution has not reached
+-- the fund yet: still open, or closed but the ledger posting is not done.
+SELECT COUNT(*)::int
+FROM payroll_lines pl
+JOIN payroll_periods pp ON pp.id = pl.payroll_period_id
+LEFT JOIN payroll_postings ps ON ps.period_id = pp.id
+WHERE pl.employee_id = $1
+  AND (pp.status = 'open' OR ps.status IS DISTINCT FROM 'posted');
