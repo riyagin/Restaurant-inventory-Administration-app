@@ -1114,3 +1114,23 @@ tr.row-expanded td { background: var(--accent-soft) !important; }
   .op-kind-tile { transition: none; }
   .op-kind-tile:hover, .op-kind-tile:focus-visible { transform: none; }
 }
+
+/* Persetujuan: a request decided in this session stays in the queue, greyed
+   out, so the manager can see what they just did. A fresh decision flashes in
+   its outcome colour (--flash) before settling to grey. */
+tr.approval-row-done td { background: #f4f5f7; color: #8a909c; }
+tr.approval-row-done td:not(.approval-status-cell) > * { opacity: 0.55; }
+tr.approval-row-done:hover td { background: #eef0f3; }
+tr.approval-row-fresh td { animation: approval-flash 2.4s ease-out; }
+@keyframes approval-flash {
+  0%, 35% { background: var(--flash, #dcfce7); color: inherit; }
+  100%    { background: #f4f5f7; }
+}
+.approval-status-pill {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.15rem 0.55rem; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 600; white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  tr.approval-row-fresh td { animation: none; }
+}

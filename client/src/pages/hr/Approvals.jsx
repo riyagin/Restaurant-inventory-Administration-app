@@ -88,6 +88,29 @@ function normShift(c) {
 const APPROVE_FNS = { leave: approveLeaveRequest, overtime: approveOvertimeRequest, shift: approveShiftChange, permission: approveAttendancePermission };
 const REJECT_FNS = { leave: rejectLeaveRequest, overtime: rejectOvertimeRequest, shift: rejectShiftChange, permission: rejectAttendancePermission };
 
+// Same keys the norm* functions build, so a bulk result ({type, id}) can be
+// matched back to the row it came from.
+const KEY_PREFIX = { leave: 'leave', overtime: 'ot', shift: 'shift', permission: 'perm' };
+const rowKey = (type, id) => `${KEY_PREFIX[type]}-${id}`;
+
+const OUTCOME = {
+  approved: { label: 'Disetujui', bg: '#dcfce7', color: '#166534', flash: '#bbf7d0' },
+  rejected: { label: 'Ditolak',   bg: '#fee2e2', color: '#991b1b', flash: '#fecaca' },
+};
+const FRESH_MS = 2500; // how long a just-decided row stays highlighted
+
+function StatusPill({ status }) {
+  const o = OUTCOME[status];
+  return (
+    <span className="approval-status-pill" style={{ background: o.bg, color: o.color }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {status === 'approved' ? <path d="M20 6 9 17l-5-5" /> : <path d="M18 6 6 18M6 6l12 12" />}
+      </svg>
+      {o.label}
+    </span>
+  );
+}
+
 export default function Approvals() {
   const manager = isManager();
   const [rows, setRows] = useState([]);
@@ -97,6 +120,28 @@ export default function Approvals() {
   const [filters, setFilters] = useState({ type: '', branch_id: '' });
   const [decision, setDecision] = useState(null); // { action, request }
   const [bulkOpen, setBulkOpen] = useState(false);
+  // Requests decided on this page since it was opened: key → { row, status, at }.
+  // They drop out of the pending fetch, so they are merged back in, greyed.
+  const [decided, setDecided] = useState({});
+
+  const markDecided = useCallback((entries) => {
+    const at = Date.now();
+    const keys = entries.filter(e => e.row).map(e => e.row.key);
+    setDecided(prev => {
+      const next = { ...prev };
+      for (const { row, status } of entries) if (row) next[row.key] = { row, status, at, fresh: true };
+      return next;
+    });
+    // Take them out of the pending list now rather than waiting for the reload.
+    const gone = new Set(keys);
+    setRows(prev => prev.filter(r => !gone.has(r.key)));
+    // End the highlight so a later remount (filter change, reload) shows them plain grey.
+    setTimeout(() => setDecided(prev => {
+      const next = { ...prev };
+      for (const k of keys) if (next[k]?.at === at) next[k] = { ...next[k], fresh: false };
+      return next;
+    }), FRESH_MS);
+  }, []);
 
   useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => setBranches([])); }, []);
 
@@ -130,11 +175,24 @@ export default function Approvals() {
 
   useEffect(() => { load(); }, [load]);
 
+  const pendingKeys = new Set(rows.map(r => r.key));
+  const doneRows = Object.values(decided)
+    .filter(d => !pendingKeys.has(d.row.key))
+    .filter(d => (!filters.type || d.row.type === filters.type)
+      && (!filters.branch_id || d.row.branch_id === filters.branch_id))
+    .sort((a, b) => b.at - a.at); // most recent decision first
+  const doneCount = { approved: 0, rejected: 0 };
+  doneRows.forEach(d => { doneCount[d.status]++; });
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <h2 style={{ margin: 0 }}>Persetujuan</h2>
-        <span style={{ fontSize: '0.85rem', color: '#667' }}>{rows.length} menunggu</span>
+        <span style={{ fontSize: '0.85rem', color: '#667' }}>
+          {rows.length} menunggu
+          {doneCount.approved > 0 && <> · <span style={{ color: OUTCOME.approved.color }}>{doneCount.approved} disetujui</span></>}
+          {doneCount.rejected > 0 && <> · <span style={{ color: OUTCOME.rejected.color }}>{doneCount.rejected} ditolak</span></>}
+        </span>
       </div>
       <p style={{ color: '#667', marginTop: 0, fontSize: '0.88rem' }}>Pengajuan libur, lembur, izin, dan perubahan shift hari ini yang menunggu keputusan manajer.</p>
 
@@ -175,7 +233,7 @@ export default function Approvals() {
           </thead>
           <tbody>
             {loading && <tr><td colSpan={6} style={emptyCell}>Memuat…</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={6} style={emptyCell}>Tidak ada pengajuan menunggu.</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={6} style={emptyCell}>{doneRows.length > 0 ? 'Semua pengajuan sudah diputuskan.' : 'Tidak ada pengajuan menunggu.'}</td></tr>}
             {!loading && rows.map(r => (
               <tr key={r.key}>
                 <td><TypeBadge type={r.type} /></td>
@@ -197,13 +255,37 @@ export default function Approvals() {
                 </td>
               </tr>
             ))}
+            {!loading && doneRows.map(({ row: r, status, fresh }) => {
+              return (
+                <tr key={r.key}
+                  className={`approval-row-done${fresh ? ' approval-row-fresh' : ''}`}
+                  style={{ '--flash': OUTCOME[status].flash }}>
+                  <td><TypeBadge type={r.type} /></td>
+                  <td>{r.employee_name}<div style={{ fontSize: '0.78rem' }}>{r.employee_code}</div></td>
+                  <td style={{ fontSize: '0.88rem' }}><span>{r.subtitle}</span></td>
+                  <td style={{ whiteSpace: 'nowrap', fontSize: '0.88rem' }}><span>{r.periodLabel}</span></td>
+                  <td style={{ textAlign: 'center' }}><span>{r.detail}</span></td>
+                  <td className="approval-status-cell" style={{ whiteSpace: 'nowrap' }}><StatusPill status={status} /></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {decision && <DecisionModal {...decision} onClose={() => setDecision(null)} onDone={() => { setDecision(null); load(); }} />}
+      {decision && (
+        <DecisionModal {...decision} onClose={() => setDecision(null)}
+          onDone={() => {
+            markDecided([{ row: decision.request, status: decision.action === 'approve' ? 'approved' : 'rejected' }]);
+            setDecision(null); load();
+          }} />
+      )}
       {bulkOpen && (
         <BulkApproveModal
+          onApproved={(items) => {
+            const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
+            markDecided(items.map(it => ({ row: byKey[rowKey(it.type, it.id)], status: 'approved' })));
+          }}
           filters={filters}
           branchName={branches.find(b => b.id === filters.branch_id)?.name}
           onClose={(changed) => { setBulkOpen(false); if (changed) load(); }}
@@ -219,7 +301,7 @@ const CHUNK = 50;
 // server-side dry run (changes nothing) that reports, per request, whether it
 // would be approved and why not. Step 2 approves exactly the previewed items,
 // in the same order, 50 per call.
-function BulkApproveModal({ filters, branchName, onClose }) {
+function BulkApproveModal({ filters, branchName, onClose, onApproved }) {
   const [includeBackdated, setIncludeBackdated] = useState(false);
   const [note, setNote] = useState('');
   const [preview, setPreview] = useState(null);   // { items, summary, truncated }
@@ -257,6 +339,7 @@ function BulkApproveModal({ filters, branchName, onClose }) {
       try {
         const { data } = await runBulkApproval(chunk, note, includeBackdated);
         done.push(...(data.results || []));
+        onApproved?.((data.results || []).filter(r => r.status === 'ok'));
       } catch (err) {
         // A failed call (network, timeout) stops here; what was approved stays approved.
         setError(`Berhenti setelah ${done.length} dari ${toApprove.length}: ${err?.response?.data?.error || err.message}. Tutup lalu buka lagi untuk melanjutkan sisanya.`);
