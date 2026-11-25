@@ -240,6 +240,7 @@ func main() {
 	overtimeHandler := handler.NewOvertimeHandler(pool, queries)
 	attendancePermissionHandler := handler.NewAttendancePermissionHandler(pool, queries)
 	shiftHandler := handler.NewShiftHandler(pool, queries)
+	bulkApprovalHandler := handler.NewBulkApprovalHandler(pool, queries, leaveHandler, shiftHandler)
 	payslipHandler := handler.NewPayslipHandler(pool, queries)
 	payslipHandler.SetUploadsDir(cfg.UploadsDir)
 	thrHandler := handler.NewThrHandler(pool, queries)
@@ -746,6 +747,10 @@ func main() {
 			r.Post("/api/hr/leave-requests/{id}/reject", leaveHandler.RejectLeaveRequest)
 			r.Post("/api/hr/leave-requests/bulk-approve", leaveHandler.BulkApproveLeaveRequests)
 			r.Post("/api/hr/leave-requests/bulk-reject", leaveHandler.BulkRejectLeaveRequests)
+			// Queue-wide bulk approval (leave, overtime, shift, permits): preview
+			// is a rolled-back dry run, approve takes the previewed ids in chunks.
+			r.Post("/api/hr/approvals/bulk-preview", bulkApprovalHandler.Preview)
+			r.Post("/api/hr/approvals/bulk-approve", bulkApprovalHandler.Approve)
 		})
 
 		// HR Shifts — per-branch shift definitions and the daily roster edited

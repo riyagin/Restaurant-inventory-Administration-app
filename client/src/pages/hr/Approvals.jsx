@@ -4,7 +4,7 @@ import {
   getOvertimeRequests, approveOvertimeRequest, rejectOvertimeRequest,
   getShiftChangeRequests, approveShiftChange, rejectShiftChange,
   getAttendancePermissions, approveAttendancePermission, rejectAttendancePermission,
-  getBranches,
+  getBranches, previewBulkApproval, runBulkApproval,
 } from '../../api';
 import { canApprove } from '../../roles';
 import { BackdatedBadge } from './LeaveRuleWidgets';
@@ -96,6 +96,7 @@ export default function Approvals() {
   const [branches, setBranches] = useState([]);
   const [filters, setFilters] = useState({ type: '', branch_id: '' });
   const [decision, setDecision] = useState(null); // { action, request }
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   useEffect(() => { getBranches().then(r => setBranches(r.data || [])).catch(() => setBranches([])); }, []);
 
@@ -156,6 +157,11 @@ export default function Approvals() {
           <option value="">Semua cabang</option>
           {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
+        {manager && rows.length > 0 && (
+          <button className="btn btn-primary" style={{ marginLeft: 'auto' }} onClick={() => setBulkOpen(true)}>
+            Setujui Semua…
+          </button>
+        )}
       </div>
 
       <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
@@ -196,9 +202,194 @@ export default function Approvals() {
       </div>
 
       {decision && <DecisionModal {...decision} onClose={() => setDecision(null)} onDone={() => { setDecision(null); load(); }} />}
+      {bulkOpen && (
+        <BulkApproveModal
+          filters={filters}
+          branchName={branches.find(b => b.id === filters.branch_id)?.name}
+          onClose={(changed) => { setBulkOpen(false); if (changed) load(); }}
+        />
+      )}
     </div>
   );
 }
+
+const CHUNK = 50;
+
+// Bulk approval of everything pending under the current filters. Step 1 is a
+// server-side dry run (changes nothing) that reports, per request, whether it
+// would be approved and why not. Step 2 approves exactly the previewed items,
+// in the same order, 50 per call.
+function BulkApproveModal({ filters, branchName, onClose }) {
+  const [includeBackdated, setIncludeBackdated] = useState(false);
+  const [note, setNote] = useState('');
+  const [preview, setPreview] = useState(null);   // { items, summary, truncated }
+  const [phase, setPhase] = useState('options');  // options | previewing | preview | running | done
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState([]);
+  const [error, setError] = useState('');
+
+  const scope = [
+    filters.type ? TYPE_META[filters.type].label : 'semua jenis',
+    branchName || 'semua cabang',
+  ].join(' · ');
+
+  const runPreview = async () => {
+    setPhase('previewing'); setError('');
+    try {
+      const { data } = await previewBulkApproval({
+        types: filters.type ? [filters.type] : [],
+        branch_id: filters.branch_id || '',
+        include_backdated: includeBackdated,
+      });
+      setPreview(data); setPhase('preview');
+    } catch (err) {
+      setError(err?.response?.data?.error || 'Gagal membuat pratinjau.'); setPhase('options');
+    }
+  };
+
+  const toApprove = (preview?.items || []).filter(it => it.status === 'ok');
+
+  const runApprove = async () => {
+    setPhase('running'); setProgress(0); setError('');
+    const done = [];
+    for (let i = 0; i < toApprove.length; i += CHUNK) {
+      const chunk = toApprove.slice(i, i + CHUNK).map(it => ({ type: it.type, id: it.id }));
+      try {
+        const { data } = await runBulkApproval(chunk, note, includeBackdated);
+        done.push(...(data.results || []));
+      } catch (err) {
+        // A failed call (network, timeout) stops here; what was approved stays approved.
+        setError(`Berhenti setelah ${done.length} dari ${toApprove.length}: ${err?.response?.data?.error || err.message}. Tutup lalu buka lagi untuk melanjutkan sisanya.`);
+        break;
+      }
+      setProgress(done.length);
+      setResults([...done]);
+    }
+    setResults(done);
+    setPhase('done');
+  };
+
+  const okCount = results.filter(r => r.status === 'ok').length;
+  const failed = (phase === 'done' ? results : preview?.items || []).filter(it => it.status === 'failed');
+  const skipped = (preview?.items || []).filter(it => it.status === 'skipped');
+  const byType = preview?.summary?.by_type || {};
+  const busy = phase === 'previewing' || phase === 'running';
+
+  return (
+    <div style={overlay} onClick={() => !busy && onClose(phase === 'done')}>
+      <div className="card" style={{ ...modal, width: 640 }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0 }}>Setujui Semua Pengajuan Menunggu</h3>
+        <p style={{ fontSize: '0.85rem', color: '#667', marginTop: 0 }}>Cakupan: <strong>{scope}</strong> (mengikuti filter halaman).</p>
+
+        {(phase === 'options' || phase === 'previewing') && (
+          <>
+            <p style={{ fontSize: '0.88rem', color: '#445' }}>
+              Langkah pertama adalah <strong>pratinjau</strong>: server mencoba menyetujui setiap pengajuan lalu membatalkan semuanya,
+              sehingga Anda melihat mana yang akan berhasil dan mana yang gagal (mis. jatah libur tidak cukup) sebelum ada yang diubah.
+            </p>
+            <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', fontSize: '0.88rem', marginTop: '0.5rem' }}>
+              <input type="checkbox" checked={includeBackdated} onChange={e => setIncludeBackdated(e.target.checked)} disabled={busy} />
+              <span>
+                Sertakan pengajuan <strong>MUNDUR TANGGAL</strong>
+                <div style={{ fontSize: '0.78rem', color: '#9a3412' }}>
+                  Biasanya disetujui satu per satu. Jika disertakan, tetap ditandai mundur tanggal dan tercatat di log aktivitas sebagai persetujuan massal.
+                </div>
+              </span>
+            </label>
+          </>
+        )}
+
+        {error && <div style={{ ...errBox, marginTop: '0.75rem' }}>{error}</div>}
+
+        {preview && phase !== 'options' && phase !== 'previewing' && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <table style={{ width: '100%', fontSize: '0.85rem' }}>
+              <thead><tr><th>Jenis</th><th style={num}>Disetujui</th><th style={num}>Gagal</th><th style={num}>Dilewati</th></tr></thead>
+              <tbody>
+                {Object.entries(byType).map(([t, c]) => (
+                  <tr key={t}><td><TypeBadge type={t} /></td><td style={num}>{c.ok}</td><td style={num}>{c.failed}</td><td style={num}>{c.skipped}</td></tr>
+                ))}
+              </tbody>
+            </table>
+            {preview.truncated && (
+              <div style={{ ...errBox, background: '#fff8e1', color: '#a06800', marginTop: '0.5rem' }}>
+                Daftar dibatasi {preview.items.length} pengajuan. Jalankan lagi setelah selesai untuk sisanya.
+              </div>
+            )}
+            {skipped.length > 0 && phase === 'preview' && (
+              <p style={{ fontSize: '0.8rem', color: '#667' }}>{skipped.length} pengajuan mundur tanggal dilewati — centang opsi di atas untuk menyertakannya.</p>
+            )}
+          </div>
+        )}
+
+        {phase === 'running' && (
+          <div style={{ marginTop: '0.75rem' }}>
+            <div style={{ fontSize: '0.85rem', marginBottom: 4 }}>Memproses {progress} / {toApprove.length}…</div>
+            <div style={{ height: 8, background: '#e5e7eb', borderRadius: 4 }}>
+              <div style={{ height: 8, width: `${toApprove.length ? (progress / toApprove.length) * 100 : 0}%`, background: '#2563eb', borderRadius: 4, transition: 'width .2s' }} />
+            </div>
+          </div>
+        )}
+
+        {phase === 'done' && (
+          <div style={{ ...errBox, background: '#e8f5e9', color: '#1b5e20', marginTop: '0.75rem' }}>
+            {okCount} pengajuan disetujui.{failed.length > 0 && ` ${failed.length} gagal — tetap menunggu dan dapat diputuskan satu per satu.`}
+          </div>
+        )}
+
+        {failed.length > 0 && phase !== 'running' && (
+          <details style={{ marginTop: '0.5rem' }} open={failed.length <= 10}>
+            <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: '#c5221f' }}>
+              {failed.length} pengajuan {phase === 'done' ? 'gagal' : 'akan gagal'} (tetap menunggu)
+            </summary>
+            <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: '0.35rem' }}>
+              <table style={{ width: '100%', fontSize: '0.8rem' }}>
+                <tbody>
+                  {failed.map(it => (
+                    <tr key={it.type + it.id}>
+                      <td style={{ whiteSpace: 'nowrap' }}><TypeBadge type={it.type} /></td>
+                      <td>{it.employee_name}<div style={{ color: '#889' }}>{it.detail} · {fmtDate(it.date)}</div></td>
+                      <td style={{ color: '#c5221f' }}>{it.error}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        )}
+
+        {phase === 'preview' && toApprove.length > 0 && (
+          <>
+            <label style={lbl}>Catatan untuk semua (opsional)</label>
+            <input value={note} onChange={e => setNote(e.target.value)} style={inp} placeholder="mis. Persetujuan antrian sebelum perubahan sistem" />
+          </>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+          <button className="btn btn-secondary" onClick={() => onClose(phase === 'done' || results.length > 0)} disabled={busy}>
+            {phase === 'done' ? 'Selesai' : 'Tutup'}
+          </button>
+          {(phase === 'options' || phase === 'previewing') && (
+            <button className="btn btn-primary" onClick={runPreview} disabled={busy}>{busy ? 'Memeriksa…' : 'Pratinjau'}</button>
+          )}
+          {phase === 'preview' && (
+            <>
+              <button className="btn btn-secondary" onClick={() => { setPreview(null); setPhase('options'); }}>Ubah opsi</button>
+              <button className="btn btn-primary" onClick={runApprove} disabled={toApprove.length === 0}>
+                Setujui {toApprove.length} pengajuan
+              </button>
+            </>
+          )}
+        </div>
+        <p style={{ fontSize: '0.72rem', color: '#99a', marginBottom: 0 }}>
+          Setiap pengajuan diproses dengan aturan yang sama seperti tombol Setujui biasa, satu transaksi per pengajuan.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const num = { textAlign: 'center', width: 90 };
 
 function DecisionModal({ action, request, onClose, onDone }) {
   const [note, setNote] = useState('');

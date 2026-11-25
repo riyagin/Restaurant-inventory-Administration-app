@@ -95,7 +95,6 @@ func (h *ShiftHandler) decideShiftChange(w http.ResponseWriter, r *http.Request,
 	var body decisionBody
 	_ = parseBody(r, &body)
 	ctx := r.Context()
-	userID := pgUUID(middleware.UserIDFromCtx(ctx))
 
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -104,43 +103,18 @@ func (h *ShiftHandler) decideShiftChange(w http.ResponseWriter, r *http.Request,
 	}
 	defer tx.Rollback(ctx)
 
-	var entry shiftAssignmentEntry
-	var status string
-	err = tx.QueryRow(ctx, `
-		SELECT employee_id::text, to_char(date, 'YYYY-MM-DD'), shift_id::text, division_id::text, status
-		FROM shift_change_requests WHERE id = $1 FOR UPDATE`, pgUUID(id)).
-		Scan(&entry.EmployeeID, &entry.Date, &entry.ShiftID, &entry.DivisionID, &status)
+	newStatus, err := h.decideShiftChangeInTx(ctx, tx, id, body.Note, "", fn)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		switch {
+		case errors.Is(err, errShiftRequestNotFound):
 			respondError(w, http.StatusNotFound, "pengajuan tidak ditemukan")
-			return
+		case errors.Is(err, errShiftRequestNotPending):
+			respondError(w, http.StatusConflict, err.Error())
+		default:
+			respondShiftErr(w, err, "gagal memproses pengajuan")
 		}
-		respondError(w, http.StatusInternalServerError, "gagal mengambil pengajuan")
 		return
 	}
-	if status != "pending" {
-		respondError(w, http.StatusConflict, "hanya pengajuan berstatus menunggu yang dapat diputuskan")
-		return
-	}
-	newStatus, desc, err := fn(ctx, tx, entry)
-	if err != nil {
-		respondShiftErr(w, err, "gagal memproses pengajuan")
-		return
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE shift_change_requests SET status = $2, decision_note = NULLIF($3, ''), decided_by = $4, decided_at = now()
-		WHERE id = $1`, pgUUID(id), newStatus, strings.TrimSpace(body.Note), userID); err != nil {
-		respondError(w, http.StatusInternalServerError, "gagal menyimpan keputusan")
-		return
-	}
-	_ = service.LogActivity(ctx, h.queries.WithTx(tx), service.LogParams{
-		UserID:      middleware.UserIDFromCtx(ctx),
-		Username:    middleware.UsernameFromCtx(ctx),
-		Action:      "UPDATE",
-		EntityType:  "shift_change_request",
-		EntityID:    id,
-		Description: desc,
-	})
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan keputusan")
 		return
@@ -148,44 +122,93 @@ func (h *ShiftHandler) decideShiftChange(w http.ResponseWriter, r *http.Request,
 	respondJSON(w, http.StatusOK, map[string]string{"status": newStatus})
 }
 
+var (
+	errShiftRequestNotFound   = errors.New("pengajuan tidak ditemukan")
+	errShiftRequestNotPending = errors.New("hanya pengajuan berstatus menunggu yang dapat diputuskan")
+)
+
+// decideShiftChangeInTx locks a pending request, hands it to fn and records the
+// decision on tx; the caller owns the transaction. logSuffix is appended to the
+// activity-log sentence.
+func (h *ShiftHandler) decideShiftChangeInTx(ctx context.Context, tx pgx.Tx, id [16]byte, note, logSuffix string,
+	fn func(ctx context.Context, tx pgx.Tx, entry shiftAssignmentEntry) (string, string, error)) (string, error) {
+	var entry shiftAssignmentEntry
+	var status string
+	err := tx.QueryRow(ctx, `
+		SELECT employee_id::text, to_char(date, 'YYYY-MM-DD'), shift_id::text, division_id::text, status
+		FROM shift_change_requests WHERE id = $1 FOR UPDATE`, pgUUID(id)).
+		Scan(&entry.EmployeeID, &entry.Date, &entry.ShiftID, &entry.DivisionID, &status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", errShiftRequestNotFound
+		}
+		return "", err
+	}
+	if status != "pending" {
+		return "", errShiftRequestNotPending
+	}
+	newStatus, desc, err := fn(ctx, tx, entry)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE shift_change_requests SET status = $2, decision_note = NULLIF($3, ''), decided_by = $4, decided_at = now()
+		WHERE id = $1`, pgUUID(id), newStatus, strings.TrimSpace(note), pgUUID(middleware.UserIDFromCtx(ctx))); err != nil {
+		return "", err
+	}
+	_ = service.LogActivity(ctx, h.queries.WithTx(tx), service.LogParams{
+		UserID:      middleware.UserIDFromCtx(ctx),
+		Username:    middleware.UsernameFromCtx(ctx),
+		Action:      "UPDATE",
+		EntityType:  "shift_change_request",
+		EntityID:    id,
+		Description: desc + logSuffix,
+	})
+	return newStatus, nil
+}
+
 // ApproveShiftChange — POST /api/hr/shift-change-requests/{id}/approve (manager; re-validated)
 func (h *ShiftHandler) ApproveShiftChange(w http.ResponseWriter, r *http.Request) {
-	h.decideShiftChange(w, r, func(ctx context.Context, tx pgx.Tx, entry shiftAssignmentEntry) (string, string, error) {
-		e, err := resolveShiftEntry(ctx, tx, entry)
-		if err != nil {
-			return "", "", err
-		}
-		if e.date.Before(today()) {
-			return "", "", shiftRule(http.StatusConflict,
-				"tanggal %s sudah lewat — pengajuan ini hanya dapat ditolak", fmtIndoDate(e.date))
-		}
-		userID := pgUUID(middleware.UserIDFromCtx(ctx))
-		// applyShiftEntry would supersede this very request; write the roster
-		// directly and let the caller mark it approved.
-		day := pgtype.Date{Time: e.date, Valid: true}
-		if e.shiftID.Valid {
-			_, err = tx.Exec(ctx, `
+	h.decideShiftChange(w, r, h.approveShiftChangeFn)
+}
+
+// approveShiftChangeFn writes the approved roster cell; used by the single and
+// the bulk approval.
+func (h *ShiftHandler) approveShiftChangeFn(ctx context.Context, tx pgx.Tx, entry shiftAssignmentEntry) (string, string, error) {
+	e, err := resolveShiftEntry(ctx, tx, entry)
+	if err != nil {
+		return "", "", err
+	}
+	if e.date.Before(today()) {
+		return "", "", shiftRule(http.StatusConflict,
+			"tanggal %s sudah lewat — pengajuan ini hanya dapat ditolak", fmtIndoDate(e.date))
+	}
+	userID := pgUUID(middleware.UserIDFromCtx(ctx))
+	// applyShiftEntry would supersede this very request; write the roster
+	// directly and let the caller mark it approved.
+	day := pgtype.Date{Time: e.date, Valid: true}
+	if e.shiftID.Valid {
+		_, err = tx.Exec(ctx, `
 				INSERT INTO shift_assignments (employee_id, date, shift_id, division_id, updated_by)
 				VALUES ($1, $2, $3, $4, $5)
 				ON CONFLICT (employee_id, date) DO UPDATE
 				SET shift_id = EXCLUDED.shift_id, division_id = EXCLUDED.division_id,
 				    updated_by = EXCLUDED.updated_by, updated_at = now()`,
-				e.employeeID, day, e.shiftID, e.divisionID, userID)
-		} else {
-			_, err = tx.Exec(ctx, `DELETE FROM shift_assignments WHERE employee_id = $1 AND date = $2`, e.employeeID, day)
-		}
-		if err != nil {
-			return "", "", err
-		}
-		if err := recomputeTodayAttendance(ctx, tx, e.employeeID, e.date); err != nil {
-			return "", "", err
-		}
-		label := e.shiftLabel
-		if label == "" {
-			label = "tanpa shift"
-		}
-		return "approved", fmt.Sprintf("Menyetujui perubahan shift %s %s → %s", e.employeeName, fmtIndoDate(e.date), label), nil
-	})
+			e.employeeID, day, e.shiftID, e.divisionID, userID)
+	} else {
+		_, err = tx.Exec(ctx, `DELETE FROM shift_assignments WHERE employee_id = $1 AND date = $2`, e.employeeID, day)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if err := recomputeTodayAttendance(ctx, tx, e.employeeID, e.date); err != nil {
+		return "", "", err
+	}
+	label := e.shiftLabel
+	if label == "" {
+		label = "tanpa shift"
+	}
+	return "approved", fmt.Sprintf("Menyetujui perubahan shift %s %s → %s", e.employeeName, fmtIndoDate(e.date), label), nil
 }
 
 // RejectShiftChange — POST /api/hr/shift-change-requests/{id}/reject (manager)

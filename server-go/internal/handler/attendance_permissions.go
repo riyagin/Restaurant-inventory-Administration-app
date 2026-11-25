@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -287,48 +288,73 @@ func (h *AttendancePermissionHandler) decide(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer tx.Rollback(ctx)
-	qtx := h.queries.WithTx(tx)
-	userID := middleware.UserIDFromCtx(ctx)
-	user := pgtype.UUID{Bytes: userID, Valid: userID != [16]byte{}}
-	pgNote := pgtype.Text{String: note, Valid: note != ""}
-
-	var p *db.AttendancePermission
-	var verb, badState string
-	switch action {
-	case "approve":
-		p, err = qtx.ApproveAttendancePermission(ctx, &db.ApproveAttendancePermissionParams{ID: pgID, DecidedBy: user, DecisionNote: pgNote})
-		verb, badState = "Menyetujui", "hanya izin berstatus menunggu yang dapat disetujui"
-	case "reject":
-		p, err = qtx.RejectAttendancePermission(ctx, &db.RejectAttendancePermissionParams{ID: pgID, DecidedBy: user, DecisionNote: pgNote})
-		verb, badState = "Menolak", "hanya izin berstatus menunggu yang dapat ditolak"
-	default:
-		p, err = qtx.CancelAttendancePermission(ctx, &db.CancelAttendancePermissionParams{ID: pgID, DecidedBy: user, DecisionNote: pgNote})
-		verb, badState = "Membatalkan", "hanya izin menunggu atau disetujui yang dapat dibatalkan"
-	}
+	p, err := decidePermissionInTx(ctx, h.queries.WithTx(tx), action, before, note, "")
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			respondError(w, http.StatusBadRequest, badState)
-			return
+		var bad errPermissionState
+		switch {
+		case errors.As(err, &bad):
+			respondError(w, http.StatusBadRequest, string(bad))
+		case errors.Is(err, errPermissionRecompute):
+			respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
+		default:
+			respondError(w, http.StatusInternalServerError, "gagal memproses izin")
 		}
-		respondError(w, http.StatusInternalServerError, "gagal memproses izin")
 		return
 	}
-	if action == "approve" || (action == "cancel" && before.Status == "approved") {
-		if err := service.RecomputeDay(ctx, qtx, p.EmployeeID, p.Date.Time); err != nil {
-			respondError(w, http.StatusInternalServerError, "gagal menghitung ulang kehadiran")
-			return
-		}
-	}
-	_ = service.LogActivity(ctx, qtx, service.LogParams{
-		UserID: userID, Username: middleware.UsernameFromCtx(ctx), Action: "UPDATE",
-		EntityType: "attendance_permission", EntityID: p.ID.Bytes,
-		Description: fmt.Sprintf("%s %s tanggal %s", verb, permissionTypes[p.Type], p.Date.Time.Format("2006-01-02")),
-	})
 	if err := tx.Commit(ctx); err != nil {
 		respondError(w, http.StatusInternalServerError, "gagal menyimpan keputusan izin")
 		return
 	}
 	respondJSON(w, http.StatusOK, p)
+}
+
+// errPermissionState is a decision the permit's current status does not allow;
+// its text is the message shown to the user.
+type errPermissionState string
+
+func (e errPermissionState) Error() string { return string(e) }
+
+var errPermissionRecompute = errors.New("recompute attendance day failed")
+
+// decidePermissionInTx applies approve / reject / cancel to a permit on qtx and
+// rebuilds the day when the permit's effect changes. The caller owns the
+// transaction. logSuffix is appended to the activity-log sentence.
+func decidePermissionInTx(ctx context.Context, qtx *db.Queries, action string, before *db.AttendancePermission, note, logSuffix string) (*db.AttendancePermission, error) {
+	userID := middleware.UserIDFromCtx(ctx)
+	user := pgtype.UUID{Bytes: userID, Valid: userID != [16]byte{}}
+	pgNote := pgtype.Text{String: note, Valid: note != ""}
+
+	var p *db.AttendancePermission
+	var err error
+	var verb, badState string
+	switch action {
+	case "approve":
+		p, err = qtx.ApproveAttendancePermission(ctx, &db.ApproveAttendancePermissionParams{ID: before.ID, DecidedBy: user, DecisionNote: pgNote})
+		verb, badState = "Menyetujui", "hanya izin berstatus menunggu yang dapat disetujui"
+	case "reject":
+		p, err = qtx.RejectAttendancePermission(ctx, &db.RejectAttendancePermissionParams{ID: before.ID, DecidedBy: user, DecisionNote: pgNote})
+		verb, badState = "Menolak", "hanya izin berstatus menunggu yang dapat ditolak"
+	default:
+		p, err = qtx.CancelAttendancePermission(ctx, &db.CancelAttendancePermissionParams{ID: before.ID, DecidedBy: user, DecisionNote: pgNote})
+		verb, badState = "Membatalkan", "hanya izin menunggu atau disetujui yang dapat dibatalkan"
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errPermissionState(badState)
+		}
+		return nil, err
+	}
+	if action == "approve" || (action == "cancel" && before.Status == "approved") {
+		if err := service.RecomputeDay(ctx, qtx, p.EmployeeID, p.Date.Time); err != nil {
+			return nil, fmt.Errorf("%w: %v", errPermissionRecompute, err)
+		}
+	}
+	_ = service.LogActivity(ctx, qtx, service.LogParams{
+		UserID: userID, Username: middleware.UsernameFromCtx(ctx), Action: "UPDATE",
+		EntityType: "attendance_permission", EntityID: p.ID.Bytes,
+		Description: fmt.Sprintf("%s %s tanggal %s%s", verb, permissionTypes[p.Type], p.Date.Time.Format("2006-01-02"), logSuffix),
+	})
+	return p, nil
 }
 
 // Approve — POST /api/hr/attendance-permissions/{id}/approve (manager)

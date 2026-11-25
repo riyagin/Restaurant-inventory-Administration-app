@@ -269,11 +269,38 @@ func (h *LeaveHandler) CreateLeaveRequest(w http.ResponseWriter, r *http.Request
 	respondJSON(w, http.StatusCreated, req)
 }
 
-// approveOne runs in its own transaction; bulk refuses backdated requests.
-func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.Text, bulk bool) (*service.ApproveResult, error) {
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
+// leaveApproveMode says who is approving: one request by hand, the leave
+// page's bulk action (never backdated), or the queue-wide bulk approval, which
+// may include backdated requests when the manager explicitly asks for it.
+type leaveApproveMode int
 
-	req, err := h.queries.GetLeaveRequestByID(ctx, pgID)
+const (
+	leaveApproveSingle leaveApproveMode = iota
+	leaveApproveBulk
+	leaveApproveBulkWithBackdated
+)
+
+// approveOne runs in its own transaction.
+func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.Text, mode leaveApproveMode) (*service.ApproveResult, error) {
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	res, err := h.approveInTx(ctx, h.queries.WithTx(tx), id, note, mode)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// approveInTx approves one request on qtx; the caller owns the transaction.
+func (h *LeaveHandler) approveInTx(ctx context.Context, qtx *db.Queries, id [16]byte, note pgtype.Text, mode leaveApproveMode) (*service.ApproveResult, error) {
+	req, err := qtx.GetLeaveRequestByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, errLeaveRequestNotFound
@@ -283,21 +310,14 @@ func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.
 	if req.Status != "pending" {
 		return nil, errLeaveRequestNotPending
 	}
-	if bulk && req.IsBackdated {
+	if mode == leaveApproveBulk && req.IsBackdated {
 		return nil, errLeaveRequestBackdatedBulk
 	}
 
-	leaveType, err := h.queries.GetLeaveTypeByID(ctx, req.LeaveTypeID)
+	leaveType, err := qtx.GetLeaveTypeByID(ctx, req.LeaveTypeID)
 	if err != nil {
 		return nil, err
 	}
-
-	tx, err := h.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	qtx := h.queries.WithTx(tx)
 
 	deciderID := middleware.UserIDFromCtx(ctx)
 	res, err := service.ApproveLeave(ctx, qtx, req, leaveType, pgtype.UUID{Bytes: deciderID, Valid: deciderID != [16]byte{}}, note)
@@ -305,18 +325,18 @@ func (h *LeaveHandler) approveOne(ctx context.Context, id [16]byte, note pgtype.
 		return nil, err
 	}
 
+	desc := approveDescription(req, res)
+	if mode == leaveApproveBulkWithBackdated {
+		desc += " — persetujuan massal"
+	}
 	_ = service.LogActivity(ctx, qtx, service.LogParams{
 		UserID:      deciderID,
 		Username:    middleware.UsernameFromCtx(ctx),
 		Action:      "UPDATE",
 		EntityType:  "leave_request",
 		EntityID:    id,
-		Description: approveDescription(req, res),
+		Description: desc,
 	})
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
 	return res, nil
 }
 
@@ -372,7 +392,7 @@ func (h *LeaveHandler) ApproveLeaveRequest(w http.ResponseWriter, r *http.Reques
 		note = pgtype.Text{String: s, Valid: true}
 	}
 
-	res, err := h.approveOne(r.Context(), id, note, false)
+	res, err := h.approveOne(r.Context(), id, note, leaveApproveSingle)
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaveRequestNotFound):
@@ -443,7 +463,7 @@ func (h *LeaveHandler) BulkApproveLeaveRequests(w http.ResponseWriter, r *http.R
 			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: "ID tidak valid"})
 			continue
 		}
-		if _, err := h.approveOne(ctx, id, note, true); err != nil {
+		if _, err := h.approveOne(ctx, id, note, leaveApproveBulk); err != nil {
 			results = append(results, bulkDecisionResult{ID: idStr, Success: false, Error: bulkErrorMessage(err)})
 			continue
 		}

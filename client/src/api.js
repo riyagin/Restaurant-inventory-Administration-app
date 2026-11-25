@@ -666,6 +666,13 @@ export const setLeaveDoctorNote   = (id, hasDoctorNote) => api.put(`/hr/leave-re
 export const bulkApproveLeaveRequests = (ids, note) => api.post('/hr/leave-requests/bulk-approve', { ids, note });
 export const bulkRejectLeaveRequests  = (ids, note) => api.post('/hr/leave-requests/bulk-reject', { ids, note });
 
+// Queue-wide bulk approval (Persetujuan page). Preview is a dry run that changes
+// nothing; approve takes up to 100 previewed { type, id } items per call.
+export const previewBulkApproval = ({ types, branch_id, include_backdated }) =>
+  api.post('/hr/approvals/bulk-preview', { types, branch_id, include_backdated }, { timeout: 70000 });
+export const runBulkApproval = (items, note, include_backdated) =>
+  api.post('/hr/approvals/bulk-approve', { items, note, include_backdated }, { timeout: 70000 });
+
 // Monthly paid-leave allowance (4/month, weekend day = 2). getLeaveBalance returns
 // { year, default_quota, weekend_cost, months: [{ month, quota_days, used_days,
 // unused_days, closed, overridden }], unused_closed_total }.
