@@ -19,15 +19,30 @@ function leaveBalanceLabel(emp) {
     .join(' · ');
 }
 
-function formatDateHeader(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  return `${DAY_NAMES[d.getDay()]}, ${d.getDate()}/${d.getMonth() + 1}`;
+// Saturday or Sunday — the outlets' busiest days, so the grid marks them.
+function isWeekend(dateStr) {
+  const dow = new Date(dateStr + 'T00:00:00').getDay();
+  return dow === 0 || dow === 6;
 }
 
-function formatDateHeaderCompact(dateStr) {
+// Grid column header: day name stacked over the date, so the day stays
+// visible even in the narrow columns of a long range.
+function DateHeader({ dateStr }) {
   const d = new Date(dateStr + 'T00:00:00');
-  return `${d.getDate()}/${d.getMonth() + 1}`;
+  return (
+    <>
+      <div style={{ fontSize: '0.9em', fontWeight: 700, color: isWeekend(dateStr) ? '#b91c1c' : 'inherit' }}>
+        {DAY_NAMES[d.getDay()]}
+      </div>
+      <div>{d.getDate()}/{d.getMonth() + 1}</div>
+    </>
+  );
 }
+
+// Weekend columns: a warm header, and a faint tint on cells with no fill of
+// their own (unrostered days, the count rows). Shift colours are left alone.
+const WEEKEND_HEADER = { background: '#fef3c7', color: '#78350f' };
+const WEEKEND_TINT = '#fffbeb';
 
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
@@ -68,7 +83,7 @@ function buildManpowerPrintHtml({ data, days }) {
   const headCols = data.dates.map(d => {
     const dd = new Date(d + 'T00:00:00');
     const weekend = dd.getDay() === 0 || dd.getDay() === 6;
-    return `<th class="day${weekend ? ' we' : ''}">${dd.getDate()}/${dd.getMonth() + 1}</th>`;
+    return `<th class="day${weekend ? ' we' : ''}"><div class="dn">${DAY_NAMES[dd.getDay()]}</div>${dd.getDate()}/${dd.getMonth() + 1}</th>`;
   }).join('');
 
   // Full month: give the name column more room; shorter ranges: keep it tight.
@@ -142,7 +157,9 @@ function buildManpowerPrintHtml({ data, days }) {
   th, td { border: 1px solid #9ca3af; padding: 3px 4px; font-size: 10px; color: #111827; background: #ffffff; }
   th { background: #e5e7eb; text-align: center; color: #111827; }
   th.day, td.c { text-align: center; width: 26px; font-weight: 600; }
-  th.we { background: #d1d5db; }
+  th.we { background: #fde68a; }
+  th .dn { font-size: 8px; font-weight: 700; }
+  th.we .dn { color: #991b1b; }
   th.emp, td.emp { text-align: left; width: ${nameWidth}px; min-width: ${nameWidth}px; }
   td.emp .en { font-weight: 600; }
   td.emp .ep { color: #4b5563; font-size: 9px; }
@@ -368,6 +385,8 @@ const headerCellStyle = {
   position: 'sticky',
   top: 0,
   zIndex: 2, // above the body cells (position: relative) and the sticky name column
+  whiteSpace: 'nowrap',
+  lineHeight: 1.25,
 };
 
 // Days already gone are history: read-only, so they read as faded.
@@ -758,11 +777,12 @@ export default function ManpowerPlanning() {
                       <tr>
                         <th style={nameHeaderStyle}>Karyawan</th>
                         {data.dates.map(d => (
-                          <th key={d} style={{
+                          <th key={d} title={formatDateLabel(d)} style={{
                             ...headerCellStyle, ...(compact ? compactHeaderCellStyle : null),
-                            ...(d === today ? { background: '#dbeafe', color: '#1e3a8a' } : null),
+                            ...(isWeekend(d) ? WEEKEND_HEADER : null),
+                            ...(d === today ? { background: '#dbeafe', color: '#1e3a8a', boxShadow: 'inset 0 -3px 0 #2563eb' } : null),
                           }}>
-                            {compact ? formatDateHeaderCompact(d) : formatDateHeader(d)}
+                            <DateHeader dateStr={d} />
                           </th>
                         ))}
                       </tr>
@@ -790,7 +810,7 @@ export default function ManpowerPlanning() {
                           </td>
                           {data.dates.map((d, i) => {
                             const n = branch.employees.filter(e => e.days[i].shift_id === s.id && e.days[i].status !== 'cuti').length;
-                            return <td key={d} style={{ ...countCellStyle, color: n ? '#111827' : '#d1d5db' }}>{n}</td>;
+                            return <td key={d} style={{ ...countCellStyle, ...(isWeekend(d) ? { background: WEEKEND_HEADER.background } : null), color: n ? '#111827' : '#d1d5db' }}>{n}</td>;
                           })}
                         </tr>
                       ))}
@@ -799,7 +819,7 @@ export default function ManpowerPlanning() {
                           <td style={{ ...nameCellStyle, ...countCellStyle, textAlign: 'left', color: '#6b7280' }}>Belum dijadwalkan</td>
                           {data.dates.map((d, i) => {
                             const n = branch.employees.filter(e => !e.days[i].shift_id && e.days[i].status !== 'cuti').length;
-                            return <td key={d} style={{ ...countCellStyle, color: n ? '#b45309' : '#d1d5db' }}>{n}</td>;
+                            return <td key={d} style={{ ...countCellStyle, ...(isWeekend(d) ? { background: WEEKEND_HEADER.background } : null), color: n ? '#b45309' : '#d1d5db' }}>{n}</td>;
                           })}
                         </tr>
                       )}
@@ -817,6 +837,7 @@ export default function ManpowerPlanning() {
             <LegendItem color="#fff" dashed label="Perubahan menunggu persetujuan" />
             <LegendItem color="#fed7aa" label="Libur menunggu persetujuan" />
             <LegendItem color="#1f2937" label="Libur (Disetujui)" />
+            <LegendItem color={WEEKEND_HEADER.background} label="Sabtu / Minggu" />
             <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#374151', opacity: 0.6 }}>
               <span style={{ width: 14, height: 14, borderRadius: 3, background: '#dbeafe', border: '1px solid rgba(0,0,0,0.1)' }} />
               Sudah lewat (pudar, tidak dapat diubah)
@@ -923,6 +944,7 @@ function SectionRows({ section, colCount, shiftsById, today, compact, rowIndex, 
             const pendingShift = day.pending_request_id ? (shiftsById[day.pending_shift_id] || null) : undefined;
             const past = day.date < today;
             const look = cellLook(day, shift);
+            if (look.background === '#fff' && isWeekend(day.date)) look.background = WEEKEND_TINT;
             const titleParts = [];
             if (day.status === 'cuti') titleParts.push(`${day.leave_type} (disetujui)`);
             if (shift) titleParts.push(`${shift.name} ${shiftTimeLabel(shift)}`);
